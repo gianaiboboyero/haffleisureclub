@@ -1,0 +1,100 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Player {
+  id                   String   @id @default(cuid())
+  displayName          String
+  fullName             String?
+  nickname             String?
+  skillLevel           String
+  rating               Float    @default(2)
+  avatarUrl            String?
+  phone                String?
+  email                String?
+  tags                 String[] @default([])
+  status               String   @default("Active")
+  totalGamesPlayed     Int      @default(0)
+  totalPointsScored    Int      @default(0)
+  totalPointsAgainst   Int      @default(0)
+  totalDaysPlayed      Int      @default(0)
+  currentPlayDayStreak Int      @default(0)
+  bestPlayDayStreak    Int      @default(0)
+  lastPlayedDate       DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}
+
+model Court {
+  id             String   @id @default(cuid())
+  name           String
+  number         Int
+  status         String   @default("Available")
+  currentMatchId String?
+  nextMatchId    String?
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Session {
+  id                 String   @id @default(cuid())
+  name               String
+  date               DateTime
+  startTime          String?
+  endTime            String?
+  location           String?
+  mode               String
+  status             String   @default("Draft")
+  courtIds           String[] @default([])
+  checkedInPlayerIds String[] @default([])
+  settings           Json
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model Match {
+  id             String   @id @default(cuid())
+  sessionId      String?
+  courtId        String?
+  mode           String
+  teamAPlayerIds String[] @default([])
+  teamBPlayerIds String[] @default([])
+  scoreA         Int      @default(0)
+  scoreB         Int      @default(0)
+  status         String   @default("Queued")
+  startedAt      DateTime?
+  endedAt        DateTime?
+  durationSeconds Int?
+  syncStatus     String   @default("PendingSync")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model SyncEvent {
+  id         String   @id @default(cuid())
+  actionType String
+  entityType String
+  entityId   String
+  payload    Json
+  status     String   @default("Pending")
+  error      String?
+  createdAt  DateTime @default(now())
+  syncedAt   DateTime?
+}
+
+model Notification {
+  id            String   @id @default(cuid())
+  type          String
+  title         String
+  message       String
+  icon          String?
+  soundKey      String?
+  displayTarget String
+  createdAt     DateTime @default(now())
+}
