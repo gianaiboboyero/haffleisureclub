@@ -42,8 +42,7 @@ export const seedPlayers: Player[] = [
   ["Bea Garcia", "Beginner", 1],
   ["Carlo Cruz", "Newbie", 0.5],
   ["Nina Yu", "Intermediate", 4],
-  ["Luis Ramos", "Low Intermediate", 3],
-  ["Mark Flores", "Pro", 6]
+  ["Luis Ramos", "Low Intermediate", 3]
 ].map(([displayName, skillLevel, rating], index) => ({
   id: `player-${index + 1}`,
   displayName: displayName as string,

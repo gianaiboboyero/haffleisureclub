@@ -124,6 +124,10 @@ export const useClubStore = create<ClubState>((set, get) => ({
       await db.players.bulkPut(seedPlayers);
       await db.courts.bulkPut(seedCourts);
     }
+    const retiredSeedPlayer = await db.players.get("player-10");
+    if (retiredSeedPlayer?.displayName === "Mark Flores") {
+      await db.players.delete(retiredSeedPlayer.id);
+    }
     const demoAccount = await db.players.get(demoPlayerAccount.id);
     if (!demoAccount) {
       await db.players.put(demoPlayerAccount);

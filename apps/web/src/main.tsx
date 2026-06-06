@@ -622,6 +622,7 @@ function PlayRotationTab() {
   } = useClubStore();
   const [sessionName, setSessionName] = React.useState("");
   const [announcementMessage, setAnnouncementMessage] = React.useState("");
+  const [loungeSearch, setLoungeSearch] = React.useState("");
   const [selectedVoiceStyle, setSelectedVoiceStyle] = React.useState<VoiceStyle>(getVoiceStyle);
   const [testAnnouncement, setTestAnnouncement] = React.useState(
     "Court 1 overtime. Court 1 players: Juan, Maria, Alex, and Kim. Please finish your game."
@@ -632,6 +633,16 @@ function PlayRotationTab() {
 
 
   const activePlayers = players.filter((p) => p.isActive !== false);
+  const loungePlayers = activePlayers.filter((player) => {
+    const query = loungeSearch.trim().toLowerCase();
+    if (!query) return true;
+    return [
+      player.displayName,
+      player.fullName,
+      player.skillLevel,
+      ...(player.tags ?? [])
+    ].some((value) => value?.toLowerCase().includes(query));
+  });
   const changeVoiceStyle = (style: VoiceStyle) => {
     setSelectedVoiceStyle(style);
     setVoiceStyle(style);
@@ -818,9 +829,38 @@ function PlayRotationTab() {
             }
           }}
         >
-          <h2 className="font-display text-3xl text-forest">Check-in lounge</h2>
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h2 className="font-display text-3xl text-forest">Check-in lounge</h2>
+              <p className="mt-1 text-xs font-semibold text-forest/60">
+                {loungePlayers.length} of {activePlayers.length} players
+              </p>
+            </div>
+          </div>
+          <div className="relative mt-4">
+            <Search aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-forest/45" size={17} />
+            <label className="sr-only" htmlFor="lounge-search">Search check-in lounge players</label>
+            <input
+              id="lounge-search"
+              className="control-field w-full rounded-xl py-3 pl-10 pr-10 text-sm text-forest placeholder:text-forest/45 focus:outline-none"
+              onChange={(event) => setLoungeSearch(event.target.value)}
+              placeholder="Search by player name, rank, or tag"
+              type="search"
+              value={loungeSearch}
+            />
+            {loungeSearch && (
+              <button
+                aria-label="Clear lounge search"
+                className="absolute right-2 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-lg text-forest/55 hover:bg-forest/10 hover:text-forest"
+                onClick={() => setLoungeSearch("")}
+                type="button"
+              >
+                <X size={16} />
+              </button>
+            )}
+          </div>
           <div className="mt-4 space-y-3 max-h-96 overflow-y-auto pr-1">
-            {activePlayers.map((player) => {
+            {loungePlayers.map((player) => {
               const activeMatchIds = new Set(
                 matches.filter((m) => m.status === "InProgress").flatMap((m) => [...m.teamAPlayerIds, ...m.teamBPlayerIds])
               );
@@ -891,6 +931,12 @@ function PlayRotationTab() {
                 </div>
               );
             })}
+            {loungePlayers.length === 0 && (
+              <div className="rounded-xl bg-white/35 px-4 py-8 text-center">
+                <p className="font-semibold text-forest">No players found</p>
+                <p className="mt-1 text-xs text-forest/60">Try another name, rank, or tag.</p>
+              </div>
+            )}
           </div>
         </Card>
         <Card className="bg-[#173f32] text-ivory">
