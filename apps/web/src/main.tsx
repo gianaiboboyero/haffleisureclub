@@ -626,6 +626,13 @@ function PlayRotationTab() {
 
 
   const activePlayers = players.filter((p) => p.isActive !== false);
+  const testOvertimeAnnouncement = () => {
+    const court = courts[0];
+    const match = matches.find((item) => item.id === court?.currentMatchId);
+    const assignedIds = match ? [...match.teamAPlayerIds, ...match.teamBPlayerIds] : [];
+    const fallbackIds = players.filter((player) => player.checkedIn && !player.parked).slice(0, 4).map((player) => player.id);
+    announceCourtOvertime(court?.name ?? "Court 1", assignedIds.length ? assignedIds : fallbackIds, players);
+  };
 
   return (
     <div className="space-y-4">
@@ -736,6 +743,12 @@ function PlayRotationTab() {
               <p className="mt-1 text-sm text-forest/75">Timer goes negative when a court is in overtime.</p>
             </div>
             <div className="flex gap-2">
+              <Button
+                onClick={testOvertimeAnnouncement}
+                className="min-h-11 bg-brass px-4 text-forest hover:bg-[#d7bd82]"
+              >
+                <Volume2 size={16} /> Test Voice
+              </Button>
               <Button onClick={() => setMatchDurationMinutes(matchDurationMinutes - 1)} className="min-h-11 bg-forest px-4 text-ivory hover:bg-forest/90">-</Button>
               <Button onClick={() => setMatchDurationMinutes(matchDurationMinutes + 1)} className="min-h-11 bg-forest px-4 text-ivory hover:bg-forest/90">+</Button>
             </div>
@@ -2567,16 +2580,7 @@ function DisplayView() {
 
       const match = matches.find((item) => item.id === court.currentMatchId);
       if (!match) return;
-      const names = [...match.teamAPlayerIds, ...match.teamBPlayerIds]
-        .map((playerId) => players.find((player) => player.id === playerId)?.displayName)
-        .filter((name): name is string => Boolean(name));
-      const playerList = formatSpokenNames(names);
-      const courtLabel = court.name.replace(/^Court\s*/i, "Court ");
-      const message = playerList
-        ? `${courtLabel} overtime. ${courtLabel} players: ${playerList}. Please finish your game.`
-        : `${courtLabel} overtime. Please finish your game.`;
-
-      if (speakAnnouncement(message)) {
+      if (announceCourtOvertime(court.name, [...match.teamAPlayerIds, ...match.teamBPlayerIds], players)) {
         announcedOvertimeRef.current[court.id] = repeatWindow;
       }
     });
@@ -2692,6 +2696,18 @@ function DisplayView() {
       </div>
     </section>
   );
+}
+
+function announceCourtOvertime(courtName: string, playerIds: string[], players: Array<{ id: string; displayName: string }>) {
+  const names = playerIds
+    .map((playerId) => players.find((player) => player.id === playerId)?.displayName)
+    .filter((name): name is string => Boolean(name));
+  const playerList = formatSpokenNames(names);
+  const courtLabel = courtName.replace(/^Court\s*/i, "Court ");
+  const message = playerList
+    ? `${courtLabel} overtime. ${courtLabel} players: ${playerList}. Please finish your game.`
+    : `${courtLabel} overtime. Please finish your game.`;
+  return speakAnnouncement(message);
 }
 
 function formatSpokenNames(names: string[]) {
