@@ -33,8 +33,10 @@ import {
   Calendar, 
   MapPin, 
   Database,
+  Menu,
   Volume2,
-  VolumeX
+  VolumeX,
+  ChevronDown
 } from "lucide-react";
 import { Button, Card, Badge } from "./components/ui";
 import { Chip } from "./components/ui/heroui-chip";
@@ -265,6 +267,7 @@ function TopBar({
   socketConnected: boolean;
 }) {
   const [soundOn, setSoundOn] = React.useState(isSoundEnabled);
+  const [adminMenuOpen, setAdminMenuOpen] = React.useState(false);
 
   React.useEffect(() => {
     const unlock = () => void unlockAudio();
@@ -282,13 +285,53 @@ function TopBar({
   return (
     <header className="sticky top-0 z-40 bg-forest/88 px-4 py-3 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
-        <button className="flex items-center gap-3 text-left" onClick={() => setView("admin")}>
-          <LogoMark />
-          <span className="hidden sm:block">
-            <span className="block font-display text-xl leading-none text-ivory">HAFF Leisure Club</span>
-            <span className="text-xs uppercase tracking-[0.28em] text-brass">PicklePulse</span>
-          </span>
-        </button>
+        <div className="relative flex items-center gap-1">
+          <button className="flex items-center gap-3 text-left" onClick={() => setView("admin")}>
+            <LogoMark />
+            <span className="hidden sm:block">
+              <span className="block font-display text-xl leading-none text-ivory">HAFF Leisure Club</span>
+              <span className="text-xs uppercase tracking-[0.28em] text-brass">PicklePulse</span>
+            </span>
+          </button>
+          {view === "admin" && (
+            <>
+              <button
+                aria-expanded={adminMenuOpen}
+                aria-haspopup="menu"
+                aria-label="Open admin navigation"
+                className="grid h-11 w-11 place-items-center rounded-xl text-ivory/80 hover:bg-ivory/10 hover:text-ivory"
+                onClick={() => setAdminMenuOpen((open) => !open)}
+                type="button"
+              >
+                <Menu size={21} />
+              </button>
+              {adminMenuOpen && (
+                <div className="absolute left-0 top-[calc(100%+0.75rem)] z-50 w-64 rounded-xl bg-ivory p-2 text-forest shadow-[0_22px_60px_rgba(0,0,0,0.32)]" role="menu">
+                  {[
+                    ["control", "Play Rotation"],
+                    ["players", "Manage Players"],
+                    ["courts", "Manage Courts"],
+                    ["sessions", "Sessions"],
+                    ["settings", "Backup & Settings"]
+                  ].map(([tab, label]) => (
+                    <button
+                      className="flex min-h-11 w-full items-center rounded-lg px-3 text-left text-sm font-bold hover:bg-forest/10"
+                      key={tab}
+                      onClick={() => {
+                        window.dispatchEvent(new CustomEvent("haff-admin-tab", { detail: tab }));
+                        setAdminMenuOpen(false);
+                      }}
+                      role="menuitem"
+                      type="button"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
         <nav className="hidden rounded-full bg-ivory/10 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] sm:flex">
           {[
             ["admin", Smartphone],
@@ -392,6 +435,18 @@ function AdminView() {
   const { players, courts, matches, sessions, currentSessionId, clubStatus } = useClubStore();
   const [activeTab, setActiveTab] = React.useState<AdminTab>("control");
   const [isQrOpen, setIsQrOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    const openAdminTab = (event: Event) => {
+      const tab = (event as CustomEvent<AdminTab>).detail;
+      if (["control", "players", "courts", "sessions", "settings"].includes(tab)) {
+        setActiveTab(tab);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    };
+    window.addEventListener("haff-admin-tab", openAdminTab);
+    return () => window.removeEventListener("haff-admin-tab", openAdminTab);
+  }, []);
 
   // Admin Portal Authentication
   const [isAuthenticated, setIsAuthenticated] = React.useState(() => {
@@ -3262,16 +3317,29 @@ function StackBuilder({
   const movePlayerToStack = useClubStore((state) => state.movePlayerToStack);
   const waitingGroups = getWaitingGroups(players, courts, matches, stackOrder);
   const [draggingPlayerId, setDraggingPlayerId] = React.useState<string | null>(null);
+  const [canDrag, setCanDrag] = React.useState(() => window.matchMedia("(min-width: 1024px)").matches);
   const stacks = waitingGroups;
+
+  React.useEffect(() => {
+    const media = window.matchMedia("(min-width: 1024px)");
+    const update = () => setCanDrag(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   return (
     <Card className="bg-[#173f32] text-ivory">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.24em] text-brass">Stack builder</p>
-          <h2 className="font-display text-4xl leading-none">Drag players into play order</h2>
+          <h2 className="font-display text-4xl leading-none">
+            <span className="lg:hidden">Set the play order</span>
+            <span className="hidden lg:inline">Drag players into play order</span>
+          </h2>
         </div>
-        <p className="hidden max-w-xs text-right text-xs leading-5 text-linen/65 sm:block">Drop a player onto Stack 1, Stack 2, or Stack 3. Each stack is a group of four for court assignment.</p>
+        <p className="hidden max-w-xs text-right text-xs leading-5 text-linen/65 sm:block">
+          On mobile, choose a stack from each player's menu. On larger screens, drag names between stacks.
+        </p>
       </div>
       <div className="mt-5 grid gap-3 lg:grid-cols-3">
         {stacks.map((group, stackIndex) => (
@@ -3308,20 +3376,37 @@ function StackBuilder({
                 return (
                   <div
                     key={player.id}
-                    draggable
+                    draggable={canDrag}
                     onDragStart={(event) => {
                       event.dataTransfer.setData("text/player-id", player.id);
                       setDraggingPlayerId(player.id);
                     }}
                     onDragEnd={() => setDraggingPlayerId(null)}
-                    className="flex cursor-grab items-center gap-2 rounded-xl bg-ivory px-2.5 py-2 text-forest shadow-[0_10px_26px_rgba(0,0,0,0.14)] ring-1 ring-forest/10 active:cursor-grabbing hover:bg-white transition"
-                    title="Drag player to another stack"
+                    className="flex items-center gap-2 rounded-xl bg-ivory px-2.5 py-2 text-forest shadow-[0_10px_26px_rgba(0,0,0,0.14)] ring-1 ring-forest/10 lg:cursor-grab lg:active:cursor-grabbing hover:bg-white transition"
+                    title={canDrag ? "Drag player to another stack" : "Choose a stack from the menu"}
                   >
-                    <GripVertical size={16} className="shrink-0 text-forest/55" />
+                    <GripVertical size={16} className="hidden shrink-0 text-forest/55 lg:block" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-semibold">{player.displayName}</p>
                       <RankBadge skillLevel={player.skillLevel} compact />
                     </div>
+                    <label className="relative shrink-0 lg:hidden">
+                      <span className="sr-only">Move {player.displayName} to another stack</span>
+                      <select
+                        aria-label={`Move ${player.displayName} to another stack`}
+                        className="min-h-10 appearance-none rounded-lg bg-forest py-2 pl-3 pr-8 text-xs font-bold text-ivory outline-none focus:ring-2 focus:ring-brass"
+                        onChange={(event) => {
+                          const nextStack = Number(event.target.value);
+                          if (Number.isFinite(nextStack)) movePlayerToStack(player.id, nextStack);
+                        }}
+                        value={stackIndex}
+                      >
+                        {stacks.map((_, optionIndex) => (
+                          <option key={optionIndex} value={optionIndex}>Stack {optionIndex + 1}</option>
+                        ))}
+                      </select>
+                      <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-ivory/75" size={14} />
+                    </label>
                   </div>
                 );
               })}
