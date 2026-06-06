@@ -907,6 +907,31 @@ function PlayRotationTab() {
 // ----------------------------------------------------
 // PLAYERS CRUD TAB
 // ----------------------------------------------------
+function normalizePhoneNumber(value: string) {
+  return value.replace(/\D/g, "");
+}
+
+function validatePlayerRegistration(
+  players: ReturnType<typeof useClubStore.getState>["players"],
+  displayName: string,
+  phoneNumber: string,
+  accessCode: string,
+  editingPlayerId?: string
+) {
+  const name = displayName.trim();
+  const phone = normalizePhoneNumber(phoneNumber);
+  if (name.length < 2) return "Enter the player's name.";
+  if (phone.length < 10 || phone.length > 15) return "Enter a valid phone number with 10 to 15 digits.";
+  if (!/^\d{4}$/.test(accessCode.trim())) return "Create a 4-digit player login code.";
+
+  const duplicatePhone = players.find(
+    (player) => player.id !== editingPlayerId && normalizePhoneNumber(player.phoneNumber ?? "") === phone
+  );
+  if (duplicatePhone) return `That phone number already belongs to ${duplicatePhone.displayName}.`;
+
+  return "";
+}
+
 function PlayersCrudTab() {
   const { players, addPlayer, updatePlayer, deletePlayer } = useClubStore();
   const [search, setSearch] = React.useState("");
@@ -920,10 +945,13 @@ function PlayersCrudTab() {
   const [rating, setRating] = React.useState("2.0");
   const [tags, setTags] = React.useState("");
   const [phoneNumber, setPhoneNumber] = React.useState("");
+  const [accessCode, setAccessCode] = React.useState("");
   const [emergencyNote, setEmergencyNote] = React.useState("");
   const [preferredPlayStyle, setPreferredPlayStyle] = React.useState("");
   const [notes, setNotes] = React.useState("");
   const [avatarUrl, setAvatarUrl] = React.useState("");
+  const [formError, setFormError] = React.useState("");
+  const [isSaving, setIsSaving] = React.useState(false);
 
   const filtered = players.filter((p) => {
     const matchesSearch = p.displayName.toLowerCase().includes(search.toLowerCase());
@@ -937,49 +965,78 @@ function PlayersCrudTab() {
     setRating("2.0");
     setTags("");
     setPhoneNumber("");
+    setAccessCode("");
     setEmergencyNote("");
     setPreferredPlayStyle("");
     setNotes("");
     setAvatarUrl("");
+    setFormError("");
+    setIsSaving(false);
     setEditingPlayer(null);
     setIsAdding(false);
   };
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!displayName.trim()) return;
-    await addPlayer({
-      displayName: displayName.trim(),
-      skillLevel,
-      rating: parseFloat(rating) || 2.0,
-      tags: tags.split(",").map(t => t.trim()).filter(Boolean),
-      checkedIn: false,
-      isActive: true,
-      phoneNumber: phoneNumber.trim() || undefined,
-      emergencyNote: emergencyNote.trim() || undefined,
-      preferredPlayStyle: preferredPlayStyle.trim() || undefined,
-      notes: notes.trim() || undefined,
-      avatarUrl: avatarUrl.trim() || undefined
-    });
-    resetForm();
+    const error = validatePlayerRegistration(players, displayName, phoneNumber, accessCode);
+    if (error) {
+      setFormError(error);
+      return;
+    }
+    setIsSaving(true);
+    setFormError("");
+    try {
+      await addPlayer({
+        displayName: displayName.trim(),
+        skillLevel,
+        rating: parseFloat(rating) || 2.0,
+        tags: tags.split(",").map(t => t.trim()).filter(Boolean),
+        checkedIn: false,
+        isActive: true,
+        phoneNumber: normalizePhoneNumber(phoneNumber),
+        accessCode: accessCode.trim(),
+        emergencyNote: emergencyNote.trim() || undefined,
+        preferredPlayStyle: preferredPlayStyle.trim() || undefined,
+        notes: notes.trim() || undefined,
+        avatarUrl: avatarUrl.trim() || undefined
+      });
+      playSound("checkin");
+      resetForm();
+    } catch {
+      setFormError("The player could not be saved. Please try again.");
+      setIsSaving(false);
+    }
   };
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingPlayer || !displayName.trim()) return;
-    await updatePlayer({
-      ...editingPlayer,
-      displayName: displayName.trim(),
-      skillLevel,
-      rating: parseFloat(rating) || 2.0,
-      tags: tags.split(",").map(t => t.trim()).filter(Boolean),
-      phoneNumber: phoneNumber.trim() || undefined,
-      emergencyNote: emergencyNote.trim() || undefined,
-      preferredPlayStyle: preferredPlayStyle.trim() || undefined,
-      notes: notes.trim() || undefined,
-      avatarUrl: avatarUrl.trim() || undefined
-    });
-    resetForm();
+    if (!editingPlayer) return;
+    const error = validatePlayerRegistration(players, displayName, phoneNumber, accessCode, editingPlayer.id);
+    if (error) {
+      setFormError(error);
+      return;
+    }
+    setIsSaving(true);
+    setFormError("");
+    try {
+      await updatePlayer({
+        ...editingPlayer,
+        displayName: displayName.trim(),
+        skillLevel,
+        rating: parseFloat(rating) || 2.0,
+        tags: tags.split(",").map(t => t.trim()).filter(Boolean),
+        phoneNumber: normalizePhoneNumber(phoneNumber),
+        accessCode: accessCode.trim(),
+        emergencyNote: emergencyNote.trim() || undefined,
+        preferredPlayStyle: preferredPlayStyle.trim() || undefined,
+        notes: notes.trim() || undefined,
+        avatarUrl: avatarUrl.trim() || undefined
+      });
+      resetForm();
+    } catch {
+      setFormError("The player changes could not be saved. Please try again.");
+      setIsSaving(false);
+    }
   };
 
   const startEdit = (player: any) => {
@@ -989,6 +1046,7 @@ function PlayersCrudTab() {
     setRating(player.rating.toString());
     setTags(player.tags.join(", "));
     setPhoneNumber(player.phoneNumber ?? "");
+    setAccessCode(player.accessCode ?? "1234");
     setEmergencyNote(player.emergencyNote ?? "");
     setPreferredPlayStyle(player.preferredPlayStyle ?? "");
     setNotes(player.notes ?? "");
@@ -1151,22 +1209,39 @@ function PlayersCrudTab() {
                 <label className="text-xs font-bold uppercase tracking-wider text-brass">Phone Number</label>
                 <input
                   type="tel"
+                  required
+                  inputMode="tel"
                   value={phoneNumber}
                   onChange={(e) => setPhoneNumber(e.target.value)}
-                  placeholder="e.g. 555-0199"
+                  placeholder="e.g. 0917 123 4567"
                   className="w-full rounded-2xl bg-white/10 text-ivory border-none px-4 py-3 placeholder:text-ivory/30 focus:outline-none focus:ring-2 focus:ring-brass text-sm shadow-inner"
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-xs font-bold uppercase tracking-wider text-brass">Preferred Style</label>
+                <label className="text-xs font-bold uppercase tracking-wider text-brass">Player Login Code</label>
                 <input
-                  type="text"
-                  value={preferredPlayStyle}
-                  onChange={(e) => setPreferredPlayStyle(e.target.value)}
-                  placeholder="e.g. Competitive, Drills"
+                  type="password"
+                  required
+                  inputMode="numeric"
+                  pattern="[0-9]{4}"
+                  maxLength={4}
+                  value={accessCode}
+                  onChange={(e) => setAccessCode(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                  placeholder="4 digits"
                   className="w-full rounded-2xl bg-white/10 text-ivory border-none px-4 py-3 placeholder:text-ivory/30 focus:outline-none focus:ring-2 focus:ring-brass text-sm shadow-inner"
                 />
               </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-bold uppercase tracking-wider text-brass">Preferred Style</label>
+              <input
+                type="text"
+                value={preferredPlayStyle}
+                onChange={(e) => setPreferredPlayStyle(e.target.value)}
+                placeholder="e.g. Competitive, Drills"
+                className="w-full rounded-2xl bg-white/10 text-ivory border-none px-4 py-3 placeholder:text-ivory/30 focus:outline-none focus:ring-2 focus:ring-brass text-sm shadow-inner"
+              />
             </div>
 
             <div className="space-y-1">
@@ -1202,9 +1277,15 @@ function PlayersCrudTab() {
               />
             </div>
 
+            {formError && (
+              <p role="alert" className="rounded-xl bg-red-950/35 px-3 py-2 text-sm font-semibold text-red-100">
+                {formError}
+              </p>
+            )}
+
             <div className="pt-2 flex gap-2">
-              <Button type="submit" className="w-full bg-brass text-forest min-h-11">
-                <Save size={16} /> Save Player
+              <Button disabled={isSaving} type="submit" className="w-full bg-brass text-forest min-h-11 disabled:cursor-wait disabled:opacity-60">
+                <Save size={16} /> {isSaving ? "Saving..." : "Save Player"}
               </Button>
               <Button type="button" onClick={resetForm} className="bg-white/10 text-ivory min-h-11 px-4">
                 Cancel
