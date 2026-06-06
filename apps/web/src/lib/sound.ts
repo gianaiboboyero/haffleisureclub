@@ -34,6 +34,27 @@ export async function unlockAudio() {
   }
 }
 
+export function speakAnnouncement(message: string) {
+  if (!soundEnabled || !("speechSynthesis" in window)) return false;
+
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(message);
+  const voices = window.speechSynthesis.getVoices();
+  const englishVoices = voices.filter((voice) => /^en[-_]/i.test(voice.lang));
+  const preferredVoice =
+    englishVoices.find((voice) => /microsoft|google|samantha|daniel|alex/i.test(voice.name)) ??
+    englishVoices[0] ??
+    voices[0];
+
+  if (preferredVoice) utterance.voice = preferredVoice;
+  utterance.lang = preferredVoice?.lang ?? "en-US";
+  utterance.rate = 0.88;
+  utterance.pitch = 0.72;
+  utterance.volume = 1;
+  window.speechSynthesis.speak(utterance);
+  return true;
+}
+
 export function playSound(key: SoundKey) {
   if (!soundEnabled) return;
 

@@ -41,7 +41,7 @@ import { Chip } from "./components/ui/heroui-chip";
 import { Component as PlayerHero } from "./components/ui/hero";
 import { useClubStore } from "./store/useClubStore";
 import { db } from "./lib/db";
-import { isSoundEnabled, playSound, setSoundEnabled, unlockAudio } from "./lib/sound";
+import { isSoundEnabled, playSound, setSoundEnabled, speakAnnouncement, unlockAudio } from "./lib/sound";
 import { io } from "socket.io-client";
 import "./styles/globals.css";
 
@@ -2543,6 +2543,7 @@ function DisplayView() {
   const { courts, matches, players, stackOrder } = useClubStore();
   const now = useNow();
   const matchDurationMinutes = useClubStore((state) => state.matchDurationMinutes);
+  const announcedOvertimeRef = React.useRef<Record<string, number>>({});
   const queueGroups = getWaitingGroups(players, courts, matches, stackOrder).filter(
     (group) => group.some((player) => !player.isVacant)
   );
@@ -2554,6 +2555,37 @@ function DisplayView() {
       return remaining < 0 ? { court, milliseconds: Math.abs(remaining) } : null;
     })
     .filter((item): item is { court: typeof courts[number]; milliseconds: number } => Boolean(item));
+
+  const overtimeAnnouncementKey = overtimeCourts
+    .map(({ court, milliseconds }) => `${court.id}:${Math.floor(milliseconds / 120_000)}`)
+    .join("|");
+
+  React.useEffect(() => {
+    overtimeCourts.forEach(({ court, milliseconds }) => {
+      const repeatWindow = Math.floor(milliseconds / 120_000);
+      if (announcedOvertimeRef.current[court.id] === repeatWindow) return;
+
+      const match = matches.find((item) => item.id === court.currentMatchId);
+      if (!match) return;
+      const names = [...match.teamAPlayerIds, ...match.teamBPlayerIds]
+        .map((playerId) => players.find((player) => player.id === playerId)?.displayName)
+        .filter((name): name is string => Boolean(name));
+      const playerList = formatSpokenNames(names);
+      const courtLabel = court.name.replace(/^Court\s*/i, "Court ");
+      const message = playerList
+        ? `${courtLabel} overtime. ${courtLabel} players: ${playerList}. Please finish your game.`
+        : `${courtLabel} overtime. Please finish your game.`;
+
+      if (speakAnnouncement(message)) {
+        announcedOvertimeRef.current[court.id] = repeatWindow;
+      }
+    });
+
+    const activeCourtIds = new Set(overtimeCourts.map(({ court }) => court.id));
+    Object.keys(announcedOvertimeRef.current).forEach((courtId) => {
+      if (!activeCourtIds.has(courtId)) delete announcedOvertimeRef.current[courtId];
+    });
+  }, [overtimeAnnouncementKey, courts, matches, players]);
   const visibleQueueGroups = queueGroups.length ? queueGroups.slice(0, 5) : Array.from({ length: 3 }, (_, index) => [
     { id: `vacant-tv-empty-${index}-1`, displayName: "Waiting", skillLevel: "Newbie" as const, rating: 0, tags: [], checkedIn: false, parked: false, totalGamesPlayed: 0, totalDaysPlayed: 0, isVacant: true },
     { id: `vacant-tv-empty-${index}-2`, displayName: "Waiting", skillLevel: "Newbie" as const, rating: 0, tags: [], checkedIn: false, parked: false, totalGamesPlayed: 0, totalDaysPlayed: 0, isVacant: true },
@@ -2660,6 +2692,13 @@ function DisplayView() {
       </div>
     </section>
   );
+}
+
+function formatSpokenNames(names: string[]) {
+  if (names.length === 0) return "";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
 }
 
 function getRemainingSeconds(startedAt: string, durationMinutes: number, now: number) {
