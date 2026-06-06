@@ -3,13 +3,32 @@ import { Howl, Howler } from "howler";
 const sounds: Record<string, Howl | undefined> = {};
 let announcementChime: Howl | undefined;
 const SOUND_SETTING_KEY = "haff-sound-enabled";
+const VOICE_STYLE_KEY = "haff-announcement-voice-style";
 let soundEnabled = localStorage.getItem(SOUND_SETTING_KEY) !== "false";
+let voiceStyle = (localStorage.getItem(VOICE_STYLE_KEY) ?? "warm") as VoiceStyle;
 let unlocked = false;
 
 export type SoundKey = "score" | "complete" | "checkin";
+export type VoiceStyle = "warm" | "clear" | "bright" | "formal";
+
+const voiceProfiles: Record<VoiceStyle, { rate: number; pitch: number; preferred: RegExp }> = {
+  warm: { rate: 0.89, pitch: 0.9, preferred: /daniel|aaron|jamie|guy natural|ryan|oliver/ },
+  clear: { rate: 0.94, pitch: 1, preferred: /samantha|ava|allison|serena|karen|zoe/ },
+  bright: { rate: 0.98, pitch: 1.08, preferred: /google.*us|victoria|susan|zira|aria/ },
+  formal: { rate: 0.84, pitch: 0.86, preferred: /alex|tom|fred|david|george|mark/ }
+};
 
 export function isSoundEnabled() {
   return soundEnabled;
+}
+
+export function getVoiceStyle() {
+  return voiceStyle;
+}
+
+export function setVoiceStyle(style: VoiceStyle) {
+  voiceStyle = style;
+  localStorage.setItem(VOICE_STYLE_KEY, style);
 }
 
 export async function setSoundEnabled(enabled: boolean) {
@@ -51,11 +70,12 @@ export function speakAnnouncement(message: string) {
   const speak = () => {
     window.setTimeout(() => {
       const utterance = new SpeechSynthesisUtterance(message);
-      const preferredVoice = chooseNaturalVoice(window.speechSynthesis.getVoices());
+      const profile = voiceProfiles[voiceStyle];
+      const preferredVoice = chooseNaturalVoice(window.speechSynthesis.getVoices(), profile.preferred);
       if (preferredVoice) utterance.voice = preferredVoice;
       utterance.lang = preferredVoice?.lang ?? "en-US";
-      utterance.rate = 0.89;
-      utterance.pitch = 0.9;
+      utterance.rate = profile.rate;
+      utterance.pitch = profile.pitch;
       utterance.volume = 1;
       window.speechSynthesis.speak(utterance);
     }, 420);
@@ -67,13 +87,13 @@ export function speakAnnouncement(message: string) {
   return true;
 }
 
-function chooseNaturalVoice(voices: SpeechSynthesisVoice[]) {
+function chooseNaturalVoice(voices: SpeechSynthesisVoice[], preferredPattern: RegExp) {
   const englishVoices = voices.filter((voice) => /^en[-_]/i.test(voice.lang));
   const candidates = englishVoices.length ? englishVoices : voices;
   const score = (voice: SpeechSynthesisVoice) => {
     const name = voice.name.toLowerCase();
     let value = 0;
-    if (/daniel|aaron|jamie|guy natural|ryan|oliver/.test(name)) value += 180;
+    if (preferredPattern.test(name)) value += 180;
     if (/natural|neural|premium|enhanced/.test(name)) value += 100;
     if (/alex|tom|fred/.test(name)) value += 35;
     if (/microsoft|apple|google/.test(name)) value += 30;

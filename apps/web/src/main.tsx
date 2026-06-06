@@ -41,7 +41,8 @@ import { Chip } from "./components/ui/heroui-chip";
 import { Component as PlayerHero } from "./components/ui/hero";
 import { useClubStore } from "./store/useClubStore";
 import { db } from "./lib/db";
-import { isSoundEnabled, playSound, setSoundEnabled, speakAnnouncement, unlockAudio } from "./lib/sound";
+import { getVoiceStyle, isSoundEnabled, playSound, setSoundEnabled, setVoiceStyle, speakAnnouncement, unlockAudio } from "./lib/sound";
+import type { VoiceStyle } from "./lib/sound";
 import { io } from "socket.io-client";
 import "./styles/globals.css";
 
@@ -621,18 +622,19 @@ function PlayRotationTab() {
   } = useClubStore();
   const [sessionName, setSessionName] = React.useState("");
   const [announcementMessage, setAnnouncementMessage] = React.useState("");
+  const [selectedVoiceStyle, setSelectedVoiceStyle] = React.useState<VoiceStyle>(getVoiceStyle);
+  const [testAnnouncement, setTestAnnouncement] = React.useState(
+    "Court 1 overtime. Court 1 players: Juan, Maria, Alex, and Kim. Please finish your game."
+  );
 
   const mostActive = [...players].sort((a, b) => b.totalGamesPlayed - a.totalGamesPlayed)[0];
 
 
 
   const activePlayers = players.filter((p) => p.isActive !== false);
-  const testOvertimeAnnouncement = () => {
-    const court = courts[0];
-    const match = matches.find((item) => item.id === court?.currentMatchId);
-    const assignedIds = match ? [...match.teamAPlayerIds, ...match.teamBPlayerIds] : [];
-    const fallbackIds = players.filter((player) => player.checkedIn && !player.parked).slice(0, 4).map((player) => player.id);
-    announceCourtOvertime(court?.name ?? "Court 1", assignedIds.length ? assignedIds : fallbackIds, players);
+  const changeVoiceStyle = (style: VoiceStyle) => {
+    setSelectedVoiceStyle(style);
+    setVoiceStyle(style);
   };
 
   return (
@@ -744,15 +746,48 @@ function PlayRotationTab() {
               <p className="mt-1 text-sm text-forest/75">Timer goes negative when a court is in overtime.</p>
             </div>
             <div className="flex gap-2">
-              <Button
-                onClick={testOvertimeAnnouncement}
-                className="min-h-11 bg-brass px-4 text-forest hover:bg-[#d7bd82]"
-              >
-                <Volume2 size={16} /> Test Announcement
-              </Button>
               <Button onClick={() => setMatchDurationMinutes(matchDurationMinutes - 1)} className="min-h-11 bg-forest px-4 text-ivory hover:bg-forest/90">-</Button>
               <Button onClick={() => setMatchDurationMinutes(matchDurationMinutes + 1)} className="min-h-11 bg-forest px-4 text-ivory hover:bg-forest/90">+</Button>
             </div>
+          </div>
+          <div className="mt-4 border-t border-forest/10 pt-4">
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-clay">Voice style</p>
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {[
+                ["warm", "Warm"],
+                ["clear", "Clear"],
+                ["bright", "Bright"],
+                ["formal", "Formal"]
+              ].map(([style, label]) => (
+                <button
+                  key={style}
+                  type="button"
+                  aria-pressed={selectedVoiceStyle === style}
+                  onClick={() => changeVoiceStyle(style as VoiceStyle)}
+                  className={`min-h-10 rounded-lg px-3 text-sm font-bold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brass ${
+                    selectedVoiceStyle === style ? "bg-forest text-ivory" : "bg-linen text-forest hover:bg-forest/10"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <label className="mt-4 block text-xs font-bold uppercase tracking-[0.16em] text-clay" htmlFor="test-announcement">
+              Test script
+            </label>
+            <textarea
+              id="test-announcement"
+              className="mt-2 min-h-24 w-full resize-y rounded-lg bg-linen px-4 py-3 text-sm leading-6 text-forest outline-none ring-1 ring-forest/10 placeholder:text-forest/45 focus:ring-2 focus:ring-brass"
+              onChange={(event) => setTestAnnouncement(event.target.value)}
+              value={testAnnouncement}
+            />
+            <Button
+              disabled={!testAnnouncement.trim()}
+              onClick={() => speakAnnouncement(testAnnouncement.trim())}
+              className="mt-2 min-h-11 bg-brass px-4 text-forest hover:bg-[#d7bd82] disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <Volume2 size={16} /> Test Voice
+            </Button>
           </div>
           <div className="mt-4 flex flex-col gap-2 border-t border-forest/10 pt-4 sm:flex-row">
             <label className="sr-only" htmlFor="club-announcement">Club announcement</label>
