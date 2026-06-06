@@ -474,13 +474,13 @@ function AdminView() {
   return (
     <section className="mx-auto max-w-7xl px-4 py-4">
       {/* Header Panel */}
-      <section className="relative overflow-hidden rounded-[1.5rem] bg-[#29483d] p-5 text-ivory shadow-[0_22px_70px_rgba(0,0,0,0.18)]">
+      <section className="relative overflow-hidden rounded-2xl bg-[#173f32] p-5 text-ivory shadow-[0_18px_46px_rgba(0,0,0,0.2)] sm:p-6">
         <div className="absolute -right-8 -top-12 opacity-[0.06]"><LogoMark size="large" /></div>
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-linen/80">
           {activeSession ? `${activeSession.name} (${activeSession.location || "HAFF Leisure Club"})` : "No active session"}
         </p>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-1">
-          <h1 className="font-display text-4xl font-semibold leading-tight tracking-normal sm:text-6xl">
+          <h1 className="font-display text-4xl font-semibold leading-tight tracking-normal sm:text-5xl">
             Open Play Control
           </h1>
           <div className="flex gap-2">
@@ -520,7 +520,7 @@ function AdminView() {
         <p className="mt-2 max-w-2xl text-sm leading-6 text-linen/85">
           Check players in, park players who are taking a break, drag names into stacks, then assign the next stack to an available court.
         </p>
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-ivory/12 sm:grid-cols-4">
           <Metric label="Checked in" value={checkedIn.length} />
           <Metric label="Courts" value={courts.length} />
           <Metric label="Completed" value={matches.filter((match) => match.status === "Completed").length} />
@@ -529,8 +529,8 @@ function AdminView() {
       </section>
 
       {/* Tab Navigation */}
-      <div className="my-3 border-b border-ivory/10 pb-px">
-        <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none">
+      <div className="my-4">
+        <div className="flex gap-1 overflow-x-auto rounded-xl bg-black/10 p-1 scrollbar-none">
           {[
             { id: "control", label: "Play Rotation" },
             { id: "players", label: "Manage Players" },
@@ -541,10 +541,10 @@ function AdminView() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as AdminTab)}
-              className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold transition-all ${
+              className={`min-h-11 whitespace-nowrap rounded-lg px-4 py-2 text-sm font-bold transition-colors ${
                 activeTab === tab.id 
-                  ? "bg-ivory text-forest shadow-[0_4px_12px_rgba(0,0,0,0.15)]" 
-                  : "bg-ivory/5 text-ivory/70 hover:bg-ivory/10 hover:text-ivory"
+                  ? "bg-ivory text-forest shadow-sm"
+                  : "text-ivory/75 hover:bg-ivory/10 hover:text-ivory"
               }`}
             >
               {tab.label}
@@ -729,7 +729,7 @@ function PlayRotationTab() {
         </div>
       </div>
       <aside className="space-y-5">
-        <Card className="bg-white border border-forest/10 shadow-lg text-forest">
+        <Card className="work-surface">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-clay">Quick action</p>
@@ -738,7 +738,7 @@ function PlayRotationTab() {
             <Button onClick={() => { playSound("complete"); generateMatches(); }} className="bg-forest text-ivory hover:bg-forest/90">Assign Courts</Button>
           </div>
         </Card>
-        <Card className="bg-white border border-forest/10 shadow-lg text-forest">
+        <Card className="work-surface">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-clay">Default open play time</p>
@@ -808,7 +808,7 @@ function PlayRotationTab() {
           </div>
         </Card>
         <Card 
-          className="bg-white border border-forest/10 shadow-lg text-forest transition"
+          className="work-surface transition"
           onDragOver={(event) => event.preventDefault()}
           onDrop={async (event) => {
             event.preventDefault();
@@ -834,7 +834,7 @@ function PlayRotationTab() {
                   onDragStart={(event) => {
                     event.dataTransfer.setData("text/player-id", player.id);
                   }}
-                  className={`flex min-h-16 items-center justify-between gap-3 rounded-2xl bg-white px-3.5 shadow-sm border border-forest/5 ${
+                  className={`flex min-h-16 items-center justify-between gap-3 rounded-xl bg-white/55 px-3.5 border border-forest/5 ${
                     isDraggable ? "cursor-grab active:cursor-grabbing hover:bg-forest/5 transition" : ""
                   }`}
                   title={isDraggable ? "Drag player into a stack or court" : undefined}
@@ -893,7 +893,7 @@ function PlayRotationTab() {
             })}
           </div>
         </Card>
-        <Card className="bg-[#29483d] text-ivory">
+        <Card className="bg-[#173f32] text-ivory">
           <Activity className="mb-3 text-brass" />
           <p className="font-display text-4xl">{mostActive?.displayName}</p>
           <p className="text-sm text-linen/80">Most active player with {mostActive?.totalGamesPlayed} games logged.</p>
@@ -1057,7 +1057,7 @@ function PlayersCrudTab() {
   return (
     <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
       {/* Player List */}
-      <Card className="bg-white border border-forest/10 shadow-lg text-forest">
+      <Card className="work-surface">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="font-display text-3xl">Player Roster ({filtered.length})</h2>
           <div className="flex items-center gap-4">
@@ -1084,7 +1084,7 @@ function PlayersCrudTab() {
             placeholder="Search players..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-2xl bg-white/60 text-forest border-none pl-11 pr-4 py-3 placeholder:text-forest/40 focus:outline-none focus:ring-2 focus:ring-forest shadow-inner text-sm"
+            className="control-field w-full rounded-xl pl-11 pr-4 py-3 text-sm text-forest placeholder:text-forest/45 focus:outline-none"
           />
         </div>
 
@@ -1093,8 +1093,8 @@ function PlayersCrudTab() {
           {filtered.map((player) => (
             <div 
               key={player.id} 
-              className={`flex items-center justify-between gap-3 rounded-2xl p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] hover:bg-white/80 transition ${
-                player.isActive === false ? "bg-white/30 opacity-70" : "bg-white/55"
+              className={`flex items-center justify-between gap-3 rounded-xl border border-forest/5 p-3.5 transition-colors hover:bg-white/55 ${
+                player.isActive === false ? "bg-white/20 opacity-70" : "bg-white/35"
               }`}
             >
               <div>
@@ -1156,7 +1156,7 @@ function PlayersCrudTab() {
       </Card>
 
       {/* Editor Panel */}
-      <Card className="bg-[#29483d] text-ivory h-fit">
+      <Card className="bg-[#173f32] text-ivory h-fit">
         {isAdding || editingPlayer ? (
           <form onSubmit={isAdding ? handleAdd : handleUpdate} className="space-y-4">
             <div className="flex items-center justify-between">
@@ -1362,7 +1362,7 @@ function CourtsCrudTab() {
   return (
     <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
       {/* Court List */}
-      <Card className="bg-white border border-forest/10 shadow-lg text-forest">
+      <Card className="work-surface">
         <div className="flex items-center justify-between">
           <h2 className="font-display text-3xl">Court Configurations ({courts.length})</h2>
           <Button onClick={() => { resetForm(); setIsAdding(true); }} className="min-h-10 bg-forest text-ivory text-xs px-4">
@@ -1431,7 +1431,7 @@ function CourtsCrudTab() {
       </Card>
 
       {/* Editor Panel */}
-      <Card className="bg-[#29483d] text-ivory h-fit">
+      <Card className="bg-[#173f32] text-ivory h-fit">
         {isAdding || editingCourt ? (
           <form onSubmit={isAdding ? handleAdd : handleUpdate} className="space-y-4">
             <div className="flex items-center justify-between">
@@ -1576,7 +1576,7 @@ function SessionsCrudTab() {
   return (
     <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
       {/* Session List */}
-      <Card className="bg-white border border-forest/10 shadow-lg text-forest">
+      <Card className="work-surface">
         <div className="flex items-center justify-between">
           <h2 className="font-display text-3xl">Open Play Sessions ({sessions.length})</h2>
           <Button onClick={() => { resetForm(); setIsAdding(true); }} className="min-h-10 bg-forest text-ivory text-xs px-4">
@@ -1662,7 +1662,7 @@ function SessionsCrudTab() {
       </Card>
 
       {/* Editor Panel */}
-      <Card className="bg-[#29483d] text-ivory h-fit">
+      <Card className="bg-[#173f32] text-ivory h-fit">
         {isAdding || editingSession ? (
           <form onSubmit={isAdding ? handleAdd : handleUpdate} className="space-y-4">
             <div className="flex items-center justify-between">
@@ -1854,7 +1854,7 @@ function SettingsTab() {
 
   return (
     <div className="grid gap-5 md:grid-cols-2">
-      <Card className="bg-white border border-forest/10 shadow-lg text-forest">
+      <Card className="work-surface">
         <h2 className="font-display text-3xl">System Configurations</h2>
         <p className="text-sm text-forest/75 mt-1">Global timers and rotation settings for court assignments.</p>
 
@@ -1871,7 +1871,7 @@ function SettingsTab() {
         </div>
       </Card>
 
-      <Card className="bg-[#29483d] text-ivory">
+      <Card className="bg-[#173f32] text-ivory">
         <h2 className="font-display text-3xl">Offline Safety & Backup</h2>
         <p className="text-sm text-linen/75 mt-1">Export local IndexedDB content to a file, or restore from a previous backup.</p>
 
@@ -2147,7 +2147,7 @@ function PlayerView() {
 
       {/* ROSTER PICKER LOGIN */}
       {loginMethod === "list" && (
-        <Card className="bg-white border border-forest/10 shadow-lg text-forest mt-4 max-w-xl mx-auto p-5">
+        <Card className="work-surface mt-4 max-w-xl mx-auto p-5">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="font-display text-2xl font-semibold">Select Your Roster Name</h2>
             <button onClick={() => setLoginMethod(null)} className="p-1 rounded-full hover:bg-forest/5"><X size={18} /></button>
@@ -2179,9 +2179,9 @@ function PlayerView() {
       {/* LOGGED IN PLAYER BOARD */}
       {selectedPlayerId && player && status && (
         <div className="mt-4 max-w-xl mx-auto">
-          <Card className="bg-[#073427] border border-[#2f7b61] text-ivory p-4 sm:p-5 rounded-[1.5rem] sm:rounded-[2rem] shadow-[0_28px_90px_rgba(6,36,27,0.42)] relative">
+          <Card className="bg-[#0b3a2c] text-ivory p-4 sm:p-5 rounded-2xl shadow-[0_18px_46px_rgba(2,20,15,0.28)] relative">
             {/* Top Row: Brand & Logout */}
-            <div className="flex items-center justify-between border-b border-[#2f7b61] pb-3">
+            <div className="flex items-center justify-between border-b border-ivory/10 pb-3">
               <div>
                 <span className="text-[10px] font-black uppercase tracking-[0.24em] text-brass">Player Dashboard</span>
                 <p className="mt-1 text-sm font-semibold text-linen/80">Queue, park mode, and monitor preview</p>
@@ -2215,7 +2215,7 @@ function PlayerView() {
             </div>
 
             {/* 1. Status Section */}
-            <div className="mt-4 rounded-[1.35rem] sm:rounded-[1.6rem] bg-[#0b4635] p-4 shadow-[inset_0_1px_0_rgba(255,248,234,0.06)]">
+            <div className="mt-4 rounded-xl bg-[#124a39] p-4">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brass">Rotation Status</p>
@@ -2270,7 +2270,7 @@ function PlayerView() {
 
               {/* Queue Wait Time Box */}
               {player.checkedIn && !player.parked && (
-                <div className="mt-3 rounded-[1.35rem] sm:rounded-[1.5rem] bg-[#FFF8EA] p-4 text-ink shadow-[0_18px_40px_rgba(6,36,27,0.2),inset_0_1px_2px_rgba(255,255,255,0.5)]">
+                <div className="mt-3 rounded-xl bg-[#edf2ed] p-4 text-ink shadow-[0_12px_28px_rgba(6,36,27,0.18)]">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-1.5 text-clay">
                       <Clock size={18} />
@@ -2321,7 +2321,7 @@ function PlayerView() {
             <PlayerTvPreview />
 
             {/* 2. Profile Card */}
-            <div className="mt-4 rounded-[1.35rem] sm:rounded-[1.6rem] bg-[#0b4635] p-4">
+            <div className="mt-4 rounded-xl bg-[#124a39] p-4">
               <div className="mb-3 flex items-center justify-between border-b border-[#2f7b61] pb-2.5">
                 <div className="flex items-center gap-1.5 text-brass">
                   <UserRound size={16} />
@@ -2490,7 +2490,7 @@ function PlayerView() {
             </div>
 
             {/* 3. Statistics Card */}
-            <div className="mt-4 rounded-[1.35rem] sm:rounded-[1.6rem] bg-[#0b4635] p-4">
+            <div className="mt-4 rounded-xl bg-[#124a39] p-4">
               <div className="mb-3 flex items-center gap-1.5 border-b border-[#2f7b61] pb-2.5 text-brass">
                 <Activity size={16} />
                 <span className="text-[10px] font-bold uppercase tracking-[0.20em]">Player Statistics</span>
@@ -2536,7 +2536,7 @@ function PlayerTvPreview() {
   const visibleCourts = courts.slice(0, 4);
 
   return (
-    <div className="mt-4 overflow-hidden rounded-[1.35rem] sm:rounded-[1.6rem] bg-[#0b4635]">
+    <div className="mt-4 overflow-hidden rounded-xl bg-[#124a39]">
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2 text-brass">
           <Monitor size={16} />
@@ -2786,7 +2786,7 @@ function DisplayView() {
             {courts.map((court) => {
               const match = matches.find((item) => item.id === court.currentMatchId);
               return (
-                <div key={court.id} className="display-court min-h-72 rounded-[1.6rem] p-5 text-ivory">
+                <div key={court.id} className="display-court min-h-72 rounded-2xl p-5 text-ivory">
                   <div className="flex items-center justify-between">
                     <h2 className="text-5xl font-black tracking-normal text-ivory">{court.name}</h2>
                     <span className={`rounded-full px-4 py-2 text-lg font-black uppercase ${
@@ -2830,7 +2830,7 @@ function DisplayView() {
               );
             })}
           </div>
-          <div className="rounded-[1.6rem] bg-[#FFF8EA] p-5 text-ink shadow-[0_28px_90px_rgba(0,0,0,0.28)]">
+          <div className="rounded-2xl bg-[#edf2ed] p-5 text-ink shadow-[0_18px_46px_rgba(0,0,0,0.24)]">
             <div className="flex items-center gap-2 text-clay"><ListChecks size={26} /><span className="text-xl font-black uppercase tracking-[0.16em]">Next Up</span></div>
             <div className="mt-5 space-y-4">
               {visibleQueueGroups.map((group, index) => (
@@ -3157,7 +3157,7 @@ function StackBuilder({
   const stacks = waitingGroups;
 
   return (
-    <Card className="bg-[#29483d] text-ivory">
+    <Card className="bg-[#173f32] text-ivory">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.24em] text-brass">Stack builder</p>
@@ -3227,7 +3227,7 @@ function StackBuilder({
 
 function AdminDetails() {
   return (
-    <Card className="bg-[#29483d] text-ivory">
+    <Card className="bg-[#173f32] text-ivory">
       <div className="flex items-center gap-2 text-brass">
         <ShieldCheck size={19} />
         <span className="text-xs font-bold uppercase tracking-[0.24em]">Admin details</span>
