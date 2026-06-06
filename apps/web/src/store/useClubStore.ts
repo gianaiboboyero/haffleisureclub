@@ -19,8 +19,10 @@ type ClubState = {
   pendingSyncCount: number;
   hydrated: boolean;
   matchDurationMinutes: number;
+  clubStatus: string;
   setView: (view: ViewMode) => void;
   setMatchDurationMinutes: (minutes: number) => void;
+  setClubStatus: (status: string) => void;
   hydrate: () => Promise<void>;
   setOnline: (online: boolean) => void;
   refreshPendingSyncCount: () => Promise<void>;
@@ -79,6 +81,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
   pendingSyncCount: 0,
   hydrated: false,
   matchDurationMinutes: Number(localStorage.getItem("haff-match-duration-minutes") ?? 12),
+  clubStatus: localStorage.getItem("haff-club-status") ?? "",
   setView: (view) => {
     window.history.pushState(null, "", `/${view}`);
     set({ view });
@@ -87,6 +90,13 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const next = Math.max(5, Math.min(45, Math.round(minutes)));
     localStorage.setItem("haff-match-duration-minutes", String(next));
     set({ matchDurationMinutes: next });
+  },
+  setClubStatus: (status) => {
+    const next = status.trim().slice(0, 120);
+    if (next) localStorage.setItem("haff-club-status", next);
+    else localStorage.removeItem("haff-club-status");
+    set({ clubStatus: next });
+    window.dispatchEvent(new CustomEvent("haff-club-status", { detail: next }));
   },
   hydrate: async () => {
     // 1. Determine online status and check for pending unsynced changes
@@ -174,7 +184,17 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const stackOrder = reconcileStackOrder(storedOrder, players, matches, courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
 
-    set({ players, courts, matches, sessions, currentSessionId, stackOrder, pendingSyncCount, hydrated: true });
+    set({
+      players,
+      courts,
+      matches,
+      sessions,
+      currentSessionId,
+      stackOrder,
+      pendingSyncCount,
+      clubStatus: localStorage.getItem("haff-club-status") ?? "",
+      hydrated: true
+    });
   },
   setOnline: (online) => set({ online }),
   refreshPendingSyncCount: async () => {

@@ -66,6 +66,21 @@ function App() {
     hydrate();
   }, [hydrate]);
 
+  React.useEffect(() => {
+    const syncClubStatus = (event: Event) => {
+      const next = event instanceof CustomEvent
+        ? String(event.detail ?? "")
+        : localStorage.getItem("haff-club-status") ?? "";
+      useClubStore.setState({ clubStatus: next });
+    };
+    window.addEventListener("storage", syncClubStatus);
+    window.addEventListener("haff-club-status", syncClubStatus);
+    return () => {
+      window.removeEventListener("storage", syncClubStatus);
+      window.removeEventListener("haff-club-status", syncClubStatus);
+    };
+  }, []);
+
   // Synchronize router via pathname / history API and hashes
   React.useEffect(() => {
     const handleOnline = () => setOnline(true);
@@ -374,7 +389,7 @@ function LogoMark({ size = "small" }: { size?: "small" | "large" }) {
 type AdminTab = "control" | "players" | "courts" | "sessions" | "settings";
 
 function AdminView() {
-  const { players, courts, matches, sessions, currentSessionId } = useClubStore();
+  const { players, courts, matches, sessions, currentSessionId, clubStatus } = useClubStore();
   const [activeTab, setActiveTab] = React.useState<AdminTab>("control");
   const [isQrOpen, setIsQrOpen] = React.useState(false);
 
@@ -520,6 +535,15 @@ function AdminView() {
         <p className="mt-2 max-w-2xl text-sm leading-6 text-linen/85">
           Check players in, park players who are taking a break, drag names into stacks, then assign the next stack to an available court.
         </p>
+        {clubStatus && (
+          <div className="mt-4 flex items-start gap-3 rounded-xl bg-brass px-4 py-3 text-forest">
+            <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-clay" />
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.16em]">Live club status</p>
+              <p className="mt-0.5 font-bold leading-snug">{clubStatus}</p>
+            </div>
+          </div>
+        )}
         <div className="mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-ivory/12 sm:grid-cols-4">
           <Metric label="Checked in" value={checkedIn.length} />
           <Metric label="Courts" value={courts.length} />
@@ -623,14 +647,13 @@ function PlayRotationTab() {
   const [sessionName, setSessionName] = React.useState("");
   const [announcementMessage, setAnnouncementMessage] = React.useState("");
   const [loungeSearch, setLoungeSearch] = React.useState("");
+  const clubStatus = useClubStore((state) => state.clubStatus);
+  const setClubStatus = useClubStore((state) => state.setClubStatus);
+  const [clubStatusDraft, setClubStatusDraft] = React.useState(clubStatus);
   const [selectedVoiceStyle, setSelectedVoiceStyle] = React.useState<VoiceStyle>(getVoiceStyle);
   const [testAnnouncement, setTestAnnouncement] = React.useState(
     "Court 1 overtime. Court 1 players: Juan, Maria, Alex, and Kim. Please finish your game."
   );
-
-  const mostActive = [...players].sort((a, b) => b.totalGamesPlayed - a.totalGamesPlayed)[0];
-
-
 
   const activePlayers = players.filter((p) => p.isActive !== false);
   const loungePlayers = activePlayers.filter((player) => {
@@ -940,9 +963,42 @@ function PlayRotationTab() {
           </div>
         </Card>
         <Card className="bg-[#173f32] text-ivory">
-          <Activity className="mb-3 text-brass" />
-          <p className="font-display text-4xl">{mostActive?.displayName}</p>
-          <p className="text-sm text-linen/80">Most active player with {mostActive?.totalGamesPlayed} games logged.</p>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.16em] text-brass">Live club status</p>
+              <h2 className="mt-1 font-display text-3xl">Publish to the venue</h2>
+              <p className="mt-1 text-sm text-linen/75">Shown in the admin header and on the TV display until cleared.</p>
+            </div>
+            {clubStatus && <span className="rounded-full bg-brass px-3 py-1 text-xs font-black text-forest">LIVE</span>}
+          </div>
+          <label className="sr-only" htmlFor="club-status">Club status</label>
+          <textarea
+            id="club-status"
+            className="mt-4 min-h-24 w-full resize-y rounded-xl bg-ivory/10 px-4 py-3 text-sm leading-6 text-ivory outline-none placeholder:text-ivory/45 focus:ring-2 focus:ring-brass"
+            maxLength={120}
+            onChange={(event) => setClubStatusDraft(event.target.value)}
+            placeholder="Example: Hydration break until 7:30 PM"
+            value={clubStatusDraft}
+          />
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              disabled={!clubStatusDraft.trim()}
+              onClick={() => setClubStatus(clubStatusDraft)}
+              className="bg-brass text-forest hover:bg-linen"
+            >
+              Publish Status
+            </Button>
+            <Button
+              disabled={!clubStatus}
+              onClick={() => {
+                setClubStatus("");
+                setClubStatusDraft("");
+              }}
+              className="bg-ivory/10 text-ivory hover:bg-ivory/20"
+            >
+              Clear
+            </Button>
+          </div>
         </Card>
       </aside>
     </div>
@@ -2733,7 +2789,7 @@ function RankBadge({ skillLevel, compact = false }: { skillLevel: ReturnType<typ
 }
 
 function DisplayView() {
-  const { courts, matches, players, stackOrder } = useClubStore();
+  const { courts, matches, players, stackOrder, clubStatus } = useClubStore();
   const now = useNow();
   const matchDurationMinutes = useClubStore((state) => state.matchDurationMinutes);
   const announcedOvertimeRef = React.useRef<Record<string, number>>({});
@@ -2820,6 +2876,12 @@ function DisplayView() {
           </div>
           <p className="hidden text-4xl font-black tracking-normal sm:block">OPEN PLAY</p>
         </div>
+        {clubStatus && (
+          <div className="mt-5 flex items-center gap-4 rounded-2xl bg-brass px-6 py-4 text-forest shadow-[0_18px_46px_rgba(0,0,0,0.22)]">
+            <span className="h-4 w-4 shrink-0 rounded-full bg-clay" />
+            <p className="text-3xl font-black leading-tight tracking-normal">{clubStatus}</p>
+          </div>
+        )}
         {overtimeCourts.length > 0 && (
           <div className="mt-5 rounded-[1.4rem] bg-clay px-5 py-4 text-ivory shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
             <p className="text-3xl font-black uppercase tracking-normal">
