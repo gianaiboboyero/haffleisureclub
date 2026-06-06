@@ -108,7 +108,7 @@ button:disabled {
   transition: border-color 180ms ease, box-shadow 180ms ease;
 }
 
-.club-panel:not([class*="bg-"]) {
+.club-panel:not([class*="bg-"]):not(.work-surface):not(.work-surface-soft) {
   background: rgba(15, 65, 50, 0.96);
 }
 
@@ -134,6 +134,7 @@ button:disabled {
   box-shadow: 0 18px 46px rgba(0, 0, 0, 0.24);
 }
 
+.club-panel.work-surface,
 .work-surface {
   background: var(--club-surface-strong);
   border: 1px solid rgba(18, 55, 44, 0.08);
@@ -141,6 +142,7 @@ button:disabled {
   color: var(--club-ink);
 }
 
+.club-panel.work-surface-soft,
 .work-surface-soft {
   background: var(--club-surface);
   border: 1px solid rgba(18, 55, 44, 0.08);
