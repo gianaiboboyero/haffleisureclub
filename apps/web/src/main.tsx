@@ -32,14 +32,16 @@ import {
   X, 
   Calendar, 
   MapPin, 
-  Database 
+  Database,
+  Volume2,
+  VolumeX
 } from "lucide-react";
 import { Button, Card, Badge } from "./components/ui";
 import { Chip } from "./components/ui/heroui-chip";
 import { Component as PlayerHero } from "./components/ui/hero";
 import { useClubStore } from "./store/useClubStore";
 import { db } from "./lib/db";
-import { playSound } from "./lib/sound";
+import { isSoundEnabled, playSound, setSoundEnabled, unlockAudio } from "./lib/sound";
 import { io } from "socket.io-client";
 import "./styles/globals.css";
 
@@ -246,6 +248,21 @@ function TopBar({
   pendingSyncCount: number;
   socketConnected: boolean;
 }) {
+  const [soundOn, setSoundOn] = React.useState(isSoundEnabled);
+
+  React.useEffect(() => {
+    const unlock = () => void unlockAudio();
+    const syncSound = (event: Event) => setSoundOn((event as CustomEvent<boolean>).detail);
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    window.addEventListener("haff-sound-change", syncSound);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+      window.removeEventListener("haff-sound-change", syncSound);
+    };
+  }, []);
+
   return (
     <header className="sticky top-0 z-40 bg-forest/88 px-4 py-3 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
@@ -273,6 +290,18 @@ function TopBar({
           ))}
         </nav>
         <div className="flex items-center gap-2">
+          <button
+            aria-label={soundOn ? "Mute sound effects" : "Enable sound effects"}
+            aria-pressed={soundOn}
+            className={`grid h-10 w-10 shrink-0 place-items-center rounded-full transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brass ${
+              soundOn ? "bg-brass text-forest hover:bg-[#d7bd82]" : "bg-ivory/10 text-ivory/70 hover:bg-ivory/18"
+            }`}
+            onClick={() => void setSoundEnabled(!soundOn)}
+            title={soundOn ? "Sound effects on. Tap to mute." : "Sound effects muted. Tap to enable and test."}
+            type="button"
+          >
+            {soundOn ? <Volume2 size={17} /> : <VolumeX size={17} />}
+          </button>
           {/* TV Display Sync Indicator */}
           {view === "tv" && (
             <div 
