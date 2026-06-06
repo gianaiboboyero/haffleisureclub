@@ -28,6 +28,7 @@ import {
   Settings, 
   Download, 
   Upload, 
+  ImagePlus,
   QrCode, 
   X, 
   Calendar, 
@@ -1068,6 +1069,35 @@ function normalizePhoneNumber(value: string) {
   return value.replace(/\D/g, "");
 }
 
+async function prepareProfileImage(file: File) {
+  if (!file.type.startsWith("image/")) throw new Error("Choose a JPG, PNG, or WebP image.");
+  if (file.size > 8 * 1024 * 1024) throw new Error("Choose an image smaller than 8 MB.");
+
+  const source = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("The image could not be read."));
+    reader.readAsDataURL(file);
+  });
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const next = new Image();
+    next.onload = () => resolve(next);
+    next.onerror = () => reject(new Error("The image could not be opened."));
+    next.src = source;
+  });
+  const size = Math.min(640, Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Photo processing is unavailable.");
+  const crop = Math.min(image.naturalWidth, image.naturalHeight);
+  const sourceX = (image.naturalWidth - crop) / 2;
+  const sourceY = (image.naturalHeight - crop) / 2;
+  context.drawImage(image, sourceX, sourceY, crop, crop, 0, 0, size, size);
+  return canvas.toDataURL("image/jpeg", 0.82);
+}
+
 function validatePlayerRegistration(
   players: ReturnType<typeof useClubStore.getState>["players"],
   displayName: string,
@@ -1109,6 +1139,7 @@ function PlayersCrudTab() {
   const [avatarUrl, setAvatarUrl] = React.useState("");
   const [formError, setFormError] = React.useState("");
   const [isSaving, setIsSaving] = React.useState(false);
+  const [isProcessingPhoto, setIsProcessingPhoto] = React.useState(false);
 
   const filtered = players.filter((p) => {
     const matchesSearch = p.displayName.toLowerCase().includes(search.toLowerCase());
@@ -1211,6 +1242,19 @@ function PlayersCrudTab() {
     setIsAdding(false);
   };
 
+  const handleAdminPhoto = async (file?: File) => {
+    if (!file) return;
+    setIsProcessingPhoto(true);
+    setFormError("");
+    try {
+      setAvatarUrl(await prepareProfileImage(file));
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "The photo could not be added.");
+    } finally {
+      setIsProcessingPhoto(false);
+    }
+  };
+
   return (
     <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
       {/* Player List */}
@@ -1254,7 +1298,13 @@ function PlayersCrudTab() {
                 player.isActive === false ? "bg-white/20 opacity-70" : "bg-white/35"
               }`}
             >
-              <div>
+              <div className="flex min-w-0 items-center gap-3">
+                <img
+                  alt=""
+                  className="h-11 w-11 shrink-0 rounded-full bg-forest/10 object-cover"
+                  src={getPlayerAvatar(player)}
+                />
+                <div className="min-w-0">
                 <p className="font-semibold text-forest text-lg leading-tight flex items-center gap-2">
                   {player.displayName}
                   {player.isActive === false && (
@@ -1270,6 +1320,7 @@ function PlayersCrudTab() {
                   {player.tags.map((tag) => (
                     <span key={tag} className="text-[10px] bg-forest/5 text-forest/70 border border-forest/10 px-1.5 py-0.2 rounded font-medium">{tag}</span>
                   ))}
+                </div>
                 </div>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
@@ -1319,6 +1370,36 @@ function PlayersCrudTab() {
             <div className="flex items-center justify-between">
               <h3 className="font-display text-2xl">{isAdding ? "Create Player" : "Edit Player"}</h3>
               <button type="button" onClick={resetForm} className="p-1 rounded-full hover:bg-white/10 text-ivory/80"><X size={18} /></button>
+            </div>
+
+            <div className="rounded-xl bg-ivory/10 p-3">
+              <div className="flex items-center gap-3">
+                <img
+                  alt="Player photo preview"
+                  className="h-20 w-20 shrink-0 rounded-full bg-ivory object-cover"
+                  src={avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName || "Player")}`}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-bold uppercase tracking-wider text-brass">Profile photo</p>
+                  <p className="mt-1 text-xs leading-5 text-linen/65">Choose a clear square or portrait photo. It will appear in the lounge, player page, and TV queue.</p>
+                  <label className="mt-2 inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full bg-ivory px-4 text-xs font-bold text-forest hover:bg-linen">
+                    <ImagePlus size={16} />
+                    {isProcessingPhoto ? "Preparing..." : "Upload Photo"}
+                    <input
+                      accept="image/jpeg,image/png,image/webp"
+                      className="sr-only"
+                      disabled={isProcessingPhoto}
+                      onChange={(event) => void handleAdminPhoto(event.target.files?.[0])}
+                      type="file"
+                    />
+                  </label>
+                </div>
+              </div>
+              {avatarUrl && (
+                <button className="mt-2 text-xs font-bold text-linen/70 hover:text-ivory" onClick={() => setAvatarUrl("")} type="button">
+                  Remove photo
+                </button>
+              )}
             </div>
 
             <div className="space-y-1">
@@ -2102,6 +2183,8 @@ function PlayerView() {
   const [editPlayStyle, setEditPlayStyle] = React.useState("");
   const [editSkillLevel, setEditSkillLevel] = React.useState("Beginner");
   const [editAvatarUrl, setEditAvatarUrl] = React.useState("");
+  const [profilePhotoError, setProfilePhotoError] = React.useState("");
+  const [isProcessingProfilePhoto, setIsProcessingProfilePhoto] = React.useState(false);
 
   const startEditing = () => {
     if (!player) return;
@@ -2129,6 +2212,19 @@ function PlayerView() {
     };
     await updatePlayer(updated);
     setIsEditingProfile(false);
+  };
+
+  const handlePlayerPhoto = async (file?: File) => {
+    if (!file) return;
+    setIsProcessingProfilePhoto(true);
+    setProfilePhotoError("");
+    try {
+      setEditAvatarUrl(await prepareProfileImage(file));
+    } catch (error) {
+      setProfilePhotoError(error instanceof Error ? error.message : "The photo could not be added.");
+    } finally {
+      setIsProcessingProfilePhoto(false);
+    }
   };
 
   const formatDate = (dateStr?: string) => {
@@ -2510,7 +2606,31 @@ function PlayerView() {
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] uppercase font-bold text-brass block mb-1">Select Avatar / GIF</label>
+                    <label className="text-[10px] uppercase font-bold text-brass block mb-2">Profile Photo</label>
+                    <div className="mb-3 flex items-center gap-3 rounded-xl bg-white/5 p-3">
+                      <img
+                        alt="Profile photo preview"
+                        className="h-20 w-20 shrink-0 rounded-full bg-ivory object-cover"
+                        src={editAvatarUrl || getPlayerAvatar(player)}
+                      />
+                      <div className="flex-1">
+                        <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full bg-brass px-4 text-xs font-black text-forest hover:bg-ivory">
+                          <ImagePlus size={16} />
+                          {isProcessingProfilePhoto ? "Preparing..." : "Choose Photo"}
+                          <input
+                            accept="image/jpeg,image/png,image/webp"
+                            capture="user"
+                            className="sr-only"
+                            disabled={isProcessingProfilePhoto}
+                            onChange={(event) => void handlePlayerPhoto(event.target.files?.[0])}
+                            type="file"
+                          />
+                        </label>
+                        <p className="mt-1.5 text-[10px] leading-4 text-linen/60">Take a photo or select one from your phone.</p>
+                      </div>
+                    </div>
+                    {profilePhotoError && <p className="mb-2 text-xs font-semibold text-red-200">{profilePhotoError}</p>}
+                    <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Or select an avatar</label>
                     <div className="grid grid-cols-5 gap-2 mb-2">
                       {AVATAR_OPTIONS.map((opt) => (
                         <button
@@ -2525,7 +2645,7 @@ function PlayerView() {
                         </button>
                       ))}
                     </div>
-                    <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Custom Image / GIF URL</label>
+                    <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Custom image URL</label>
                     <input 
                       type="text" 
                       value={editAvatarUrl} 
