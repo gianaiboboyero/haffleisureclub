@@ -620,6 +620,7 @@ function PlayRotationTab() {
     removePlayerFromCourt
   } = useClubStore();
   const [sessionName, setSessionName] = React.useState("");
+  const [announcementMessage, setAnnouncementMessage] = React.useState("");
 
   const mostActive = [...players].sort((a, b) => b.totalGamesPlayed - a.totalGamesPlayed)[0];
 
@@ -736,7 +737,7 @@ function PlayRotationTab() {
           </div>
         </Card>
         <Card className="bg-white border border-forest/10 shadow-lg text-forest">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-clay">Default open play time</p>
               <h2 className="font-display text-3xl text-forest">{matchDurationMinutes} minutes</h2>
@@ -747,11 +748,28 @@ function PlayRotationTab() {
                 onClick={testOvertimeAnnouncement}
                 className="min-h-11 bg-brass px-4 text-forest hover:bg-[#d7bd82]"
               >
-                <Volume2 size={16} /> Test Voice
+                <Volume2 size={16} /> Test Announcement
               </Button>
               <Button onClick={() => setMatchDurationMinutes(matchDurationMinutes - 1)} className="min-h-11 bg-forest px-4 text-ivory hover:bg-forest/90">-</Button>
               <Button onClick={() => setMatchDurationMinutes(matchDurationMinutes + 1)} className="min-h-11 bg-forest px-4 text-ivory hover:bg-forest/90">+</Button>
             </div>
+          </div>
+          <div className="mt-4 flex flex-col gap-2 border-t border-forest/10 pt-4 sm:flex-row">
+            <label className="sr-only" htmlFor="club-announcement">Club announcement</label>
+            <input
+              id="club-announcement"
+              className="min-h-11 flex-1 rounded-lg bg-linen px-4 text-sm text-forest outline-none ring-1 ring-forest/10 placeholder:text-forest/45 focus:ring-2 focus:ring-brass"
+              onChange={(event) => setAnnouncementMessage(event.target.value)}
+              placeholder="Type an announcement for the club"
+              value={announcementMessage}
+            />
+            <Button
+              disabled={!announcementMessage.trim()}
+              onClick={() => speakAnnouncement(announcementMessage.trim())}
+              className="min-h-11 bg-forest px-5 text-ivory hover:bg-forest/90 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <Volume2 size={16} /> Announce
+            </Button>
           </div>
         </Card>
         <Card 
@@ -2557,6 +2575,7 @@ function DisplayView() {
   const now = useNow();
   const matchDurationMinutes = useClubStore((state) => state.matchDurationMinutes);
   const announcedOvertimeRef = React.useRef<Record<string, number>>({});
+  const announcedReservationsRef = React.useRef<Record<string, string>>({});
   const queueGroups = getWaitingGroups(players, courts, matches, stackOrder).filter(
     (group) => group.some((player) => !player.isVacant)
   );
@@ -2590,6 +2609,25 @@ function DisplayView() {
       if (!activeCourtIds.has(courtId)) delete announcedOvertimeRef.current[courtId];
     });
   }, [overtimeAnnouncementKey, courts, matches, players]);
+
+  const reservationAnnouncementKey = courts
+    .filter((court) => court.status === "Reserved" && court.reservedPlayerIds?.length)
+    .map((court) => `${court.id}:${court.reservedPlayerIds?.join(",")}`)
+    .join("|");
+
+  React.useEffect(() => {
+    courts.forEach((court) => {
+      if (court.status !== "Reserved" || !court.reservedPlayerIds?.length) {
+        delete announcedReservationsRef.current[court.id];
+        return;
+      }
+      const reservationKey = court.reservedPlayerIds.join(",");
+      if (announcedReservationsRef.current[court.id] === reservationKey) return;
+      if (announceNextPlayers(court.name, court.reservedPlayerIds, players)) {
+        announcedReservationsRef.current[court.id] = reservationKey;
+      }
+    });
+  }, [reservationAnnouncementKey, courts, players]);
   const visibleQueueGroups = queueGroups.length ? queueGroups.slice(0, 5) : Array.from({ length: 3 }, (_, index) => [
     { id: `vacant-tv-empty-${index}-1`, displayName: "Waiting", skillLevel: "Newbie" as const, rating: 0, tags: [], checkedIn: false, parked: false, totalGamesPlayed: 0, totalDaysPlayed: 0, isVacant: true },
     { id: `vacant-tv-empty-${index}-2`, displayName: "Waiting", skillLevel: "Newbie" as const, rating: 0, tags: [], checkedIn: false, parked: false, totalGamesPlayed: 0, totalDaysPlayed: 0, isVacant: true },
@@ -2708,6 +2746,19 @@ function announceCourtOvertime(courtName: string, playerIds: string[], players: 
     ? `${courtLabel} overtime. ${courtLabel} players: ${playerList}. Please finish your game.`
     : `${courtLabel} overtime. Please finish your game.`;
   return speakAnnouncement(message);
+}
+
+function announceNextPlayers(courtName: string, playerIds: string[], players: Array<{ id: string; displayName: string }>) {
+  const names = playerIds
+    .map((playerId) => players.find((player) => player.id === playerId)?.displayName)
+    .filter((name): name is string => Boolean(name));
+  const playerList = formatSpokenNames(names);
+  const courtLabel = courtName.replace(/^Court\s*/i, "Court ");
+  return speakAnnouncement(
+    playerList
+      ? `Next players for ${courtLabel}: ${playerList}. Please proceed to your court.`
+      : `${courtLabel} is ready for the next players.`
+  );
 }
 
 function formatSpokenNames(names: string[]) {
