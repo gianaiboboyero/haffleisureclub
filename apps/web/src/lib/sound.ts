@@ -54,8 +54,8 @@ export function speakAnnouncement(message: string) {
       const preferredVoice = chooseNaturalVoice(window.speechSynthesis.getVoices());
       if (preferredVoice) utterance.voice = preferredVoice;
       utterance.lang = preferredVoice?.lang ?? "en-US";
-      utterance.rate = 0.92;
-      utterance.pitch = 0.98;
+      utterance.rate = 0.89;
+      utterance.pitch = 0.9;
       utterance.volume = 1;
       window.speechSynthesis.speak(utterance);
     }, 420);
@@ -73,8 +73,9 @@ function chooseNaturalVoice(voices: SpeechSynthesisVoice[]) {
   const score = (voice: SpeechSynthesisVoice) => {
     const name = voice.name.toLowerCase();
     let value = 0;
+    if (/daniel|aaron|jamie|guy natural|ryan|oliver/.test(name)) value += 180;
     if (/natural|neural|premium|enhanced/.test(name)) value += 100;
-    if (/samantha|ava|zoe|allison|serena|karen|daniel|alex/.test(name)) value += 45;
+    if (/alex|tom|fred/.test(name)) value += 35;
     if (/microsoft|apple|google/.test(name)) value += 30;
     if (/en-ph|filipino/.test(`${voice.lang} ${name}`)) value += 18;
     if (/en-us|en-gb|en-au/.test(voice.lang.toLowerCase())) value += 12;
