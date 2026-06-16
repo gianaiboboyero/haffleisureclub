@@ -4661,15 +4661,27 @@ function DisplayView({ setView }: { setView: (view: ViewMode) => void }) {
   ]);
   return (
     <section className="tv-display relative z-10 bg-forest text-ivory">
+      <style dangerouslySetInnerHTML={{ __html: `
+        @keyframes gradientShift {
+          0% { background-position: 0% 50%; }
+          50% { background-position: 100% 50%; }
+          100% { background-position: 0% 50%; }
+        }
+        .animate-billboard-bg {
+          background: linear-gradient(-45deg, #05241c, #0a3d30, #041f17, #0b4536);
+          background-size: 400% 400%;
+          animation: gradientShift 8s ease infinite;
+        }
+      `}} />
       <AnimatePresence>
         {activeBillboard && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[150] flex flex-col items-center justify-center bg-[#05241c] text-ivory p-6"
+            className="fixed inset-0 z-[150] flex flex-col items-center justify-center animate-billboard-bg text-ivory p-6"
           >
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(203,239,67,0.15),transparent_60%)] pointer-events-none" />
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(203,239,67,0.22),transparent_50%)] animate-pulse pointer-events-none" />
             <div className="absolute top-10 left-10 opacity-[0.03] pointer-events-none">
               <LogoMark size="large" />
             </div>
