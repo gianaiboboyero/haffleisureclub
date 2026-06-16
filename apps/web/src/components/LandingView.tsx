@@ -41,11 +41,12 @@ const ArrowBrassRight = () => (
   </svg>
 );
 
-const CircularBadge = () => (
+const CircularBadge = ({ onClick }: { onClick: () => void }) => (
   <motion.div 
+    onClick={onClick}
     animate={{ rotate: 360 }}
     transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
-    className="relative flex h-24 w-24 items-center justify-center rounded-full bg-brass text-ink shadow-2xl md:h-28 md:w-28"
+    className="relative flex h-24 w-24 items-center justify-center rounded-full bg-brass text-ink shadow-2xl md:h-28 md:w-28 cursor-pointer active:scale-95 transition-transform"
   >
     <div className="absolute inset-1">
       <svg viewBox="0 0 100 100" className="h-full w-full">
@@ -283,7 +284,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
 
             {/* Floating Circular QR badge */}
             <div className="absolute right-[8%] top-[2%] z-20 hover:scale-105 transition-transform">
-              <CircularBadge />
+              <CircularBadge onClick={() => setShowSocialsModal(true)} />
             </div>
           </div>
 
@@ -552,6 +553,73 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
           </div>
         </section>
 
+        {/* HLC MEMBERSHIP BENEFITS SECTION */}
+        <section className="mt-20 rounded-3xl bg-ivory p-8 text-forest relative overflow-hidden border border-brass/25 shadow-xl">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-brass/10 rounded-full blur-3xl pointer-events-none" />
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-center">
+            
+            {/* Left Column: Title & Fee */}
+            <div className="md:col-span-5 space-y-4">
+              <div className="inline-flex items-center gap-2 rounded-full bg-forest/10 px-3 py-1 text-xs font-bold text-forest border border-forest/15 w-fit">
+                <span>Join the Club</span>
+              </div>
+              <h3 className="font-display text-3xl md:text-4xl font-black leading-tight text-forest">HLC Membership</h3>
+              
+              <div className="pt-2">
+                <span className="text-[10px] font-black uppercase tracking-wider text-forest/50">Membership Fee</span>
+                <div className="flex items-baseline gap-1 mt-0.5">
+                  <span className="text-3xl font-black text-forest">₱2,500.00</span>
+                  <span className="text-xs font-bold text-forest/70">/ one-time fee</span>
+                </div>
+              </div>
+              
+              <p className="text-xs text-forest/70 leading-relaxed font-semibold">
+                Visit on site or message us through our social media for more inquiries. Ready to join? Click the button below to apply online.
+              </p>
+
+              <div className="pt-2">
+                <a 
+                  href="https://docs.google.com/forms/d/e/1FAIpQLSe0ueRCiKdg669mkG79Z3JQMLWwR9ObHHqZDxmbhH0cYBiVNw/viewform?usp=send_form" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-full bg-forest text-ivory px-6 py-3 text-xs font-black transition hover:scale-[1.02] hover:bg-forest/90 active:scale-[0.98] shadow-md shadow-forest/10"
+                >
+                  Apply for Membership
+                  <ArrowRight className="h-4 w-4" />
+                </a>
+              </div>
+            </div>
+
+            {/* Right Column: Benefits list */}
+            <div className="md:col-span-7 bg-[#FFF8EA]/60 rounded-2xl p-6 border border-forest/10">
+              <h4 className="font-display text-base font-bold text-forest mb-4 uppercase tracking-wider text-clay">HLC Membership Benefits:</h4>
+              <ul className="space-y-3.5 text-xs text-forest/90 leading-relaxed font-semibold">
+                <li className="flex items-center gap-3">
+                  <span className="text-brass font-black">✦</span>
+                  <span>1 month free open play</span>
+                </li>
+                <li className="flex items-center gap-3">
+                  <span className="text-brass font-black">✦</span>
+                  <span>8 hours court rental (up to 4 players)</span>
+                </li>
+                <li className="flex items-center gap-3">
+                  <span className="text-brass font-black">✦</span>
+                  <span>Official Membership card</span>
+                </li>
+                <li className="flex items-center gap-3">
+                  <span className="text-brass font-black">✦</span>
+                  <span>1 exclusive HLC t-shirt</span>
+                </li>
+                <li className="flex items-center gap-3">
+                  <span className="text-brass font-black">✦</span>
+                  <span>Free game balls during matches</span>
+                </li>
+              </ul>
+            </div>
+
+          </div>
+        </section>
+
       </main>
 
       {/* FOOTER */}
@@ -565,6 +633,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
             <span className="hover:text-ivory/70 transition cursor-pointer">Privacy Policy</span>
             <span className="hover:text-ivory/70 transition cursor-pointer">Terms of Play</span>
             <span className="hover:text-ivory/70 transition cursor-pointer">Contact Desk</span>
+            <button className="transition hover:text-brass text-brass font-bold flex items-center gap-1" onClick={() => setShowSocialsModal(true)}>Social Media</button>
             <button className="transition hover:text-ivory/70" onClick={() => setView("admin")}>Staff access</button>
           </div>
         </div>
