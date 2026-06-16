@@ -480,70 +480,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
 
         </section>
 
-        {/* DETAILS: HOW IT WORKS & VENUE INFO */}
-        <section className="mt-24 border-t border-ivory/10 pt-16">
-          <div className="grid grid-cols-1 gap-12 lg:grid-cols-12">
-            
-            {/* Left Column: Venue highlights */}
-            <div className="lg:col-span-5 space-y-6">
-              <span className="text-xs font-black uppercase tracking-wider text-brass">Club Lifestyle</span>
-              <h3 className="font-display text-3xl font-bold text-ivory">The Leisure Experience</h3>
-              <p className="text-sm text-ivory/80 leading-relaxed">
-                HAFF Leisure Club isn't just about matches; it's a social hub designed for premium recreation. Rest, connect, and re-energize in our beautiful modern spaces.
-              </p>
-              
-              <div className="space-y-4 pt-2">
-                <div className="flex items-start gap-4">
-                  <div className="h-9 w-9 rounded-full bg-brass/10 flex items-center justify-center text-brass shrink-0">
-                    <Coffee className="h-4.5 w-4.5" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-ivory">The Cafe & Kitchen</h4>
-                    <p className="text-xs text-ivory/60 mt-1">Specialty coffee, iced matchas, fresh visual plates, and cold craft pints on draft.</p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-4">
-                  <div className="h-9 w-9 rounded-full bg-brass/10 flex items-center justify-center text-brass shrink-0">
-                    <MapPin className="h-4.5 w-4.5" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-ivory">Premium Spaces</h4>
-                    <p className="text-xs text-ivory/60 mt-1">Climate-controlled indoor court lounges, acoustic panels, and premium leather seating.</p>
-                  </div>
-                </div>
-              </div>
-            </div>
 
-            {/* Right Column: Steps explanation */}
-            <div className="lg:col-span-7 bg-ivory/5 border border-ivory/10 p-8 rounded-3xl space-y-6">
-              <h4 className="font-display text-2xl font-bold text-brass">How Open Play Works</h4>
-              
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2">
-                <div className="space-y-2">
-                  <div className="h-8 w-8 rounded-full bg-brass text-ink font-black text-sm flex items-center justify-center">1</div>
-                  <h5 className="text-xs font-bold uppercase tracking-wider text-ivory">Check In</h5>
-                  <p className="text-xs text-ivory/70">Sign in or check in via your mobile portal to join the queue pool.</p>
-                </div>
-                <div className="space-y-2">
-                  <div className="h-8 w-8 rounded-full bg-brass text-ink font-black text-sm flex items-center justify-center">2</div>
-                  <h5 className="text-xs font-bold uppercase tracking-wider text-ivory">Form Stacks</h5>
-                  <p className="text-xs text-ivory/70">The coordinator aggregates players into stacks of four based on matching skill levels.</p>
-                </div>
-                <div className="space-y-2">
-                  <div className="h-8 w-8 rounded-full bg-brass text-ink font-black text-sm flex items-center justify-center">3</div>
-                  <h5 className="text-xs font-bold uppercase tracking-wider text-ivory">Play Rotation</h5>
-                  <p className="text-xs text-ivory/70">When a court clears, the next stack is assigned instantly and starts their game timer.</p>
-                </div>
-              </div>
-
-              <div className="border-t border-ivory/10 pt-4 text-xs text-ivory/55 flex items-center justify-between">
-                <span>* Play timer defaults to 12 minutes per rotation</span>
-                <span>* Keep track of live alerts on the TV monitor</span>
-              </div>
-            </div>
-
-          </div>
-        </section>
 
         <section className="mt-24 grid gap-6 border-t border-ivory/10 pt-16 lg:grid-cols-2">
           <div className="rounded-3xl bg-ivory p-7 text-forest">
