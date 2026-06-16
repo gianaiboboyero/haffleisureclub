@@ -556,16 +556,16 @@ function FloatingDock({ view, setView }: { view: string; setView: (view: ViewMod
   }, []);
   const publicItems = [
     { key: "landing", label: "Home", icon: Home },
+    { key: "calendar", label: "Reserve", icon: CalendarDays },
     { key: "player", label: "Players", icon: UserRound },
     { key: "parking", label: "Parking", icon: Coffee },
-    { key: "calendar", label: "Reserve", icon: CalendarDays },
   ];
   const adminItems = [
     { key: "landing", label: "Home", icon: Home },
+    { key: "calendar", label: "Reserve", icon: CalendarDays },
     { key: "admin", label: "Admin", icon: Sliders },
     { key: "player", label: "Players", icon: UserRound },
     { key: "parking", label: "Parking", icon: Coffee },
-    { key: "calendar", label: "Reserve", icon: CalendarDays },
     { key: "finance", label: "Finance", icon: DollarSign },
     { key: "tv", label: "TV Display", icon: Monitor },
   ];
@@ -1577,6 +1577,7 @@ function PlayersCrudTab() {
   const [skillLevel, setSkillLevel] = React.useState<any>("Beginner");
   const [rating, setRating] = React.useState("2.0");
   const [tags, setTags] = React.useState("");
+  const [membership, setMembership] = React.useState<"MEMBER" | "NON-MEMBER">("NON-MEMBER");
   const [phoneNumber, setPhoneNumber] = React.useState("");
   const [accessCode, setAccessCode] = React.useState("");
   const [emergencyNote, setEmergencyNote] = React.useState("");
@@ -1598,6 +1599,7 @@ function PlayersCrudTab() {
     setSkillLevel("Beginner");
     setRating("2.0");
     setTags("");
+    setMembership("NON-MEMBER");
     setPhoneNumber("");
     setAccessCode("");
     setEmergencyNote("");
@@ -1620,11 +1622,13 @@ function PlayersCrudTab() {
     setIsSaving(true);
     setFormError("");
     try {
+      const finalTags = tags.split(",").map(t => t.trim()).filter(Boolean);
+      finalTags.push(membership === "MEMBER" ? "Member" : "Non-Member");
       await addPlayer({
         displayName: displayName.trim(),
         skillLevel,
         rating: parseFloat(rating) || 2.0,
-        tags: tags.split(",").map(t => t.trim()).filter(Boolean),
+        tags: finalTags,
         checkedIn: false,
         isActive: true,
         phoneNumber: normalizePhoneNumber(phoneNumber),
@@ -1653,12 +1657,14 @@ function PlayersCrudTab() {
     setIsSaving(true);
     setFormError("");
     try {
+      const finalTags = tags.split(",").map(t => t.trim()).filter(Boolean);
+      finalTags.push(membership === "MEMBER" ? "Member" : "Non-Member");
       await updatePlayer({
         ...editingPlayer,
         displayName: displayName.trim(),
         skillLevel,
         rating: parseFloat(rating) || 2.0,
-        tags: tags.split(",").map(t => t.trim()).filter(Boolean),
+        tags: finalTags,
         phoneNumber: normalizePhoneNumber(phoneNumber),
         accessCode: accessCode.trim(),
         emergencyNote: emergencyNote.trim() || undefined,
@@ -1678,7 +1684,10 @@ function PlayersCrudTab() {
     setDisplayName(player.displayName);
     setSkillLevel(player.skillLevel);
     setRating(player.rating.toString());
-    setTags(player.tags.join(", "));
+    const isMember = player.tags?.includes("Member") ?? false;
+    setMembership(isMember ? "MEMBER" : "NON-MEMBER");
+    const cleanTags = (player.tags ?? []).filter((t: string) => t !== "Member" && t !== "Non-Member").join(", ");
+    setTags(cleanTags);
     setPhoneNumber(player.phoneNumber ?? "");
     setAccessCode(player.accessCode ?? "1234");
     setEmergencyNote(player.emergencyNote ?? "");
@@ -1751,19 +1760,25 @@ function PlayersCrudTab() {
                   src={getPlayerAvatar(player)}
                 />
                 <div className="min-w-0">
-                <p className="font-semibold text-forest text-lg leading-tight flex items-center gap-2">
-                  {player.displayName}
-                  {player.isActive === false && (
-                    <span className="text-[10px] bg-clay/10 text-clay border border-clay/20 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Archived</span>
-                  )}
-                </p>
+                 <p className="font-semibold text-forest text-lg leading-tight flex items-center gap-2 flex-wrap">
+                   {player.displayName}
+                   {player.tags?.includes("Member") && (
+                     <span className="text-[9px] bg-brass/25 text-[#6b5a24] border border-brass/35 px-1.5 py-0.5 rounded-full font-black uppercase tracking-wider">Member</span>
+                   )}
+                   {player.tags?.includes("Non-Member") && (
+                     <span className="text-[9px] bg-forest/10 text-forest/70 border border-forest/20 px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider">Non-Member</span>
+                   )}
+                   {player.isActive === false && (
+                     <span className="text-[10px] bg-clay/10 text-clay border border-clay/20 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Archived</span>
+                   )}
+                 </p>
                 <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                   <RankBadge skillLevel={player.skillLevel} compact />
                   <span className="text-xs text-forest/50">· Rating: {player.rating} · {player.totalGamesPlayed} games</span>
                   {player.preferredPlayStyle && (
                     <span className="text-xs text-forest/60">· Style: {player.preferredPlayStyle}</span>
                   )}
-                  {player.tags.map((tag) => (
+                  {player.tags.filter((tag) => tag !== "Member" && tag !== "Non-Member").map((tag) => (
                     <span key={tag} className="text-[10px] bg-forest/5 text-forest/70 border border-forest/10 px-1.5 py-0.2 rounded font-medium">{tag}</span>
                   ))}
                 </div>
@@ -1877,7 +1892,7 @@ function PlayersCrudTab() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1">
                 <label className="text-xs font-bold uppercase tracking-wider text-brass">Skill Level</label>
                 <select
@@ -1888,6 +1903,17 @@ function PlayersCrudTab() {
                   {["Newbie", "Beginner", "Novice", "Low Intermediate", "Intermediate", "Pro"].map((level) => (
                     <option key={level} value={level} className="bg-forest text-ivory">{level}</option>
                   ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-wider text-brass">Membership</label>
+                <select
+                  value={membership}
+                  onChange={(e) => setMembership(e.target.value as any)}
+                  className="w-full rounded-2xl bg-white/10 text-ivory border-none px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brass text-sm shadow-inner appearance-none"
+                >
+                  <option value="MEMBER" className="bg-forest text-ivory">Member</option>
+                  <option value="NON-MEMBER" className="bg-forest text-ivory">Non-Member</option>
                 </select>
               </div>
               <div className="space-y-1">
