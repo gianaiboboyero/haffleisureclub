@@ -212,8 +212,8 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
             </div>
             
             <h1 className="font-display text-5xl font-black leading-[1.08] text-ivory md:text-7xl">
-              Sanctuary of <br/>
-              <span className="text-brass">Sport & Leisure.</span>
+              Where the <br/>
+              <span className="text-brass">City Plays.</span>
             </h1>
             
             <p className="text-base text-ivory/75 max-w-xl leading-relaxed">
