@@ -395,107 +395,86 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
           </div>
         </section>
 
-        {/* CORE PORTAL ROUTING LINKS */}
-        <section className="mt-16 grid grid-cols-1 gap-8 md:grid-cols-3">
+        {/* CLUB POLICIES, FAQs & LOCATION DETAILS */}
+        <section className="mt-16 grid grid-cols-1 gap-8 md:grid-cols-3 text-forest">
           
-          {/* Card 1: Player POV */}
-          <div 
-            onClick={() => setView("player")}
-            className="group cursor-pointer relative overflow-hidden rounded-3xl bg-[#FFF8EA] border border-ivory/10 p-6 hover:shadow-2xl hover:shadow-brass/5 transition duration-300 flex flex-col justify-between min-h-[300px]"
-          >
-            <div className="absolute inset-0 opacity-[0.03] bg-cover bg-center group-hover:scale-105 transition-transform duration-500" style={{ backgroundImage: `url(${playerImage})` }} />
-            <div className="relative z-10 flex items-center justify-between">
-              <div className="h-12 w-12 rounded-2xl bg-forest/10 flex items-center justify-center text-forest">
-                <Users className="h-6 w-6" />
-              </div>
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-forest text-ivory opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition duration-300">
-                <ChevronRight className="h-4.5 w-4.5" />
-              </div>
-            </div>
-            <div className="relative z-10 mt-8">
-              <span className="text-[10px] font-bold text-clay uppercase tracking-[0.2em]">Player Space</span>
-              <h3 className="font-display text-2xl font-bold text-ink mt-1">Player Portal</h3>
-              <p className="text-xs text-ink/70 mt-2 leading-relaxed">
-                Log in with your phone or select your profile. Check in, park mode, and view estimated waiting minutes.
-              </p>
-            </div>
-            <div className="relative z-10 border-t border-ink/10 pt-4 mt-4 flex items-center justify-between text-xs text-forest font-bold">
-              <span>Go to Player page</span>
-              <ArrowRight className="h-4 w-4" />
-            </div>
-          </div>
-
-          {/* Card 2: TV scoreboard */}
-          <div 
-            onClick={() => setView("tv")}
-            className="group cursor-pointer relative overflow-hidden rounded-3xl bg-[#FFF8EA] border border-ivory/10 p-6 hover:shadow-2xl hover:shadow-brass/5 transition duration-300 flex flex-col justify-between min-h-[300px]"
-          >
-            <div className="absolute inset-0 opacity-[0.03] bg-cover bg-center group-hover:scale-105 transition-transform duration-500" style={{ backgroundImage: `url(${courtImage})` }} />
-            <div className="relative z-10 flex items-center justify-between">
-              <div className="h-12 w-12 rounded-2xl bg-forest/10 flex items-center justify-center text-forest">
-                <Tv className="h-6 w-6" />
-              </div>
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-forest text-ivory opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition duration-300">
-                <ChevronRight className="h-4.5 w-4.5" />
-              </div>
-            </div>
-            <div className="relative z-10 mt-8">
-              <span className="text-[10px] font-bold text-clay uppercase tracking-[0.2em]">Venue Display</span>
-              <h3 className="font-display text-2xl font-bold text-ink mt-1">Court TV Display</h3>
-              <p className="text-xs text-ink/70 mt-2 leading-relaxed">
-                Launch the official landscape monitor. Perfect for screens at the club showing court occupancy, game countdowns, and next stacks.
-              </p>
-            </div>
-            <div className="relative z-10 border-t border-ink/10 pt-4 mt-4 flex items-center justify-between text-xs text-forest font-bold">
-              <span>Launch Scoreboard</span>
-              <ArrowRight className="h-4 w-4" />
-            </div>
-          </div>
-
-          {/* Card 3: Club Achievements (Configurable) */}
+          {/* Card 1: Booking Policy */}
           <div className="group relative overflow-hidden rounded-3xl bg-[#FFF8EA] border border-ivory/10 p-6 shadow-md transition duration-300 flex flex-col justify-between min-h-[300px]">
-            <div className="relative z-10 flex items-center justify-between border-b border-ink/10 pb-3">
-              <div className="h-12 w-12 rounded-2xl bg-forest/10 flex items-center justify-center text-forest">
+            <div>
+              <div className="h-12 w-12 rounded-2xl bg-forest/10 flex items-center justify-center text-forest mb-4">
                 <Sparkles className="h-6 w-6" />
               </div>
-              {isAdmin && (
-                <button 
-                  onClick={() => setShowAddAchievement(true)}
-                  className="rounded-full bg-forest text-ivory px-3 py-1 text-[10px] font-black uppercase hover:bg-forest/90 transition"
-                >
-                  + Add Record
-                </button>
-              )}
+              <span className="text-[10px] font-bold text-clay uppercase tracking-[0.2em]">Guidelines</span>
+              <h3 className="font-display text-2xl font-bold text-ink mt-1">Our Booking Policy</h3>
+              <ul className="mt-4 space-y-2.5 text-xs text-ink/80 leading-relaxed font-semibold">
+                <li className="flex items-start gap-2">
+                  <span className="text-forest">🎾</span>
+                  <span>Each slot is reserved for the specified game duration</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-forest">👥</span>
+                  <span>Maximum players per game apply</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-forest">🏓</span>
+                  <span>Equipment is provided (Additional paddles available for rent)</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-forest">🚫</span>
+                  <span>No cancellations</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-forest">⛅</span>
+                  <span>Reschedule allowed only for bad weather, subject to availability</span>
+                </li>
+              </ul>
             </div>
-            <div className="relative z-10 mt-4 flex-1 flex flex-col justify-start space-y-3">
-              <span className="text-[10px] font-bold text-clay uppercase tracking-[0.2em]">Live Accomplishments</span>
-              <h3 className="font-display text-2xl font-bold text-ink leading-tight font-bold">Club Milestones</h3>
-              
-              <div className="space-y-2.5 overflow-y-auto max-h-40 pr-1 scrollbar-none">
-                {achievements.map((ac) => (
-                  <div key={ac.id} className="bg-forest/5 border border-forest/10 p-2 rounded-2xl relative group">
-                    <div className="flex justify-between items-baseline">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-forest truncate max-w-[70%]">{ac.title}</span>
-                      <span className="font-mono text-xs font-black text-clay">{ac.value}</span>
-                    </div>
-                    <p className="text-[11px] text-ink/75 mt-0.5">{ac.desc}</p>
-                    {isAdmin && (
-                      <button 
-                        onClick={() => deleteAchievement(ac.id)}
-                        className="absolute top-1.5 right-1.5 text-red-600 hover:text-red-800 font-bold text-[9px] opacity-0 group-hover:opacity-100 transition"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                ))}
-                {achievements.length === 0 && (
-                  <p className="text-xs text-ink/50 italic text-center py-4">No records logged.</p>
-                )}
+          </div>
+
+          {/* Card 2: How to Book / FAQs */}
+          <div className="group relative overflow-hidden rounded-3xl bg-[#FFF8EA] border border-ivory/10 p-6 shadow-md transition duration-300 flex flex-col justify-between min-h-[300px]">
+            <div>
+              <div className="h-12 w-12 rounded-2xl bg-forest/10 flex items-center justify-center text-forest mb-4">
+                <Users className="h-6 w-6" />
+              </div>
+              <span className="text-[10px] font-bold text-clay uppercase tracking-[0.2em]">Support</span>
+              <h3 className="font-display text-2xl font-bold text-ink mt-1">How-To & FAQs</h3>
+              <div className="mt-4 space-y-3.5 text-xs text-ink/80 leading-relaxed">
+                <div>
+                  <h4 className="font-bold text-forest">Q: How do I book a court?</h4>
+                  <p className="text-[11px] text-ink/70 mt-0.5">Click "Reserve a Court" at the top of this page, select an empty time slot, sign in or register, and submit your request for approval.</p>
+                </div>
+                <div>
+                  <h4 className="font-bold text-forest">Q: Can we walk in for open play?</h4>
+                  <p className="text-[11px] text-ink/70 mt-0.5">Yes! Click "Go Open Play" to register/login and check in at the desk to join the queue rotation stack.</p>
+                </div>
+                <div>
+                  <h4 className="font-bold text-forest">Q: Do we need to bring paddles?</h4>
+                  <p className="text-[11px] text-ink/70 mt-0.5">We provide basic paddles and balls, but premium custom paddles are also available for rent at the counter.</p>
+                </div>
               </div>
             </div>
-            <div className="relative z-10 border-t border-ink/10 pt-4 mt-4 text-[10px] text-ink/65 italic flex justify-between">
-              <span>* Records are updated live by club desk</span>
+          </div>
+
+          {/* Card 3: Location and Details */}
+          <div className="group relative overflow-hidden rounded-3xl bg-[#FFF8EA] border border-ivory/10 p-6 shadow-md transition duration-300 flex flex-col justify-between min-h-[300px]">
+            <div>
+              <div className="h-12 w-12 rounded-2xl bg-forest/10 flex items-center justify-center text-forest mb-4">
+                <MapPin className="h-6 w-6" />
+              </div>
+              <span className="text-[10px] font-bold text-clay uppercase tracking-[0.2em]">Our Club</span>
+              <h3 className="font-display text-2xl font-bold text-ink mt-1">Negros Occidental</h3>
+              <div className="mt-4 space-y-2 text-xs text-ink/80 leading-relaxed font-semibold">
+                <p className="text-forest font-bold">✧ The city’s premier leisure club.</p>
+                <p className="text-[11px] text-ink/75">Cafe • Pickleball • Billiards • Table Tennis • Darts</p>
+                <div className="pt-2 border-t border-forest/10 mt-2">
+                  <p className="font-bold text-forest">📍 Cadiz City, Negros Occidental</p>
+                  <p className="text-[11px] text-ink/65 mt-0.5">Sta. Cruz Heights, Barangay Banquerohan 6121 Cadiz City, Philippines</p>
+                </div>
+              </div>
+            </div>
+            <div className="text-[10px] text-ink/50 italic pt-4 mt-2">
+              * Records and bookings are updated live by the club desk.
             </div>
           </div>
 
