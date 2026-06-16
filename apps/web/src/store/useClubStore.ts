@@ -51,7 +51,7 @@ type ClubState = {
   voidTransaction: (id: string, reason: string) => Promise<void>;
 
   // Player Actions
-  checkIn: (playerId: string, autoLog?: boolean) => Promise<void>;
+  checkIn: (playerId: string, autoLog?: boolean, byAdmin?: boolean) => Promise<void>;
   checkOut: (playerId: string) => Promise<void>;
   checkOutAll: () => Promise<void>;
   setPlayerParked: (playerId: string, parked: boolean) => Promise<void>;
@@ -445,11 +445,14 @@ export const useClubStore = create<ClubState>((set, get) => ({
   },
 
   // Player Actions
-  checkIn: async (playerId, autoLog = true) => {
+  checkIn: async (playerId, autoLog = true, byAdmin = false) => {
     const existingPlayer = get().players.find((player) => player.id === playerId);
     if (!existingPlayer || existingPlayer.checkedIn) return;
+    const newTags = byAdmin 
+      ? [...(existingPlayer.tags ?? []).filter(t => t !== "AdminCheckedIn"), "AdminCheckedIn"]
+      : (existingPlayer.tags ?? []).filter(t => t !== "AdminCheckedIn");
     const players = get().players.map((player) =>
-      player.id === playerId ? { ...player, checkedIn: true, parked: true } : player
+      player.id === playerId ? { ...player, checkedIn: true, parked: true, tags: newTags } : player
     );
     const player = players.find((item) => item.id === playerId);
     if (!player) return;
@@ -491,7 +494,14 @@ export const useClubStore = create<ClubState>((set, get) => ({
   },
   checkOut: async (playerId) => {
     const players = get().players.map((player) =>
-      player.id === playerId ? { ...player, checkedIn: false, parked: false } : player
+      player.id === playerId 
+        ? { 
+            ...player, 
+            checkedIn: false, 
+            parked: false, 
+            tags: (player.tags ?? []).filter(t => t !== "AdminCheckedIn") 
+          } 
+        : player
     );
     const player = players.find((item) => item.id === playerId);
     if (!player) return;
@@ -527,7 +537,14 @@ export const useClubStore = create<ClubState>((set, get) => ({
     if (checkedInPlayers.length === 0) return;
 
     const players = state.players.map(player => 
-      player.checkedIn ? { ...player, checkedIn: false, parked: false } : player
+      player.checkedIn 
+        ? { 
+            ...player, 
+            checkedIn: false, 
+            parked: false, 
+            tags: (player.tags ?? []).filter(t => t !== "AdminCheckedIn") 
+          } 
+        : player
     );
 
     const updatedPlayers = players.filter(p => checkedInPlayers.some(cip => cip.id === p.id));

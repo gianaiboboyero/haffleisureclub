@@ -50,7 +50,8 @@ import {
   LogIn,
   Bell,
   Zap,
-  BarChart2
+  BarChart2,
+  ArrowLeft
 } from "lucide-react";
 import { Button, Card, Badge } from "./components/ui";
 import { Chip } from "./components/ui/heroui-chip";
@@ -280,7 +281,7 @@ function App() {
   return (
     <main className="min-h-screen bg-forest text-ivory">
       <div className="fixed inset-0 z-0 texture pointer-events-none" />
-      {(view === "landing" || view === "tv") && (
+      {view === "landing" && (
         <AccountMenu member={sessionMember} setView={setView} onSignedOut={() => setSessionMember(null)} />
       )}
       {view !== "landing" && view !== "tv" && (
@@ -304,12 +305,12 @@ function App() {
           {view === "admin" && <AdminView key="admin" />}
           {view === "player" && <PlayerView key="player" />}
           {view === "parking" && <ParkingView key="parking" />}
-          {view === "tv" && <DisplayView key="tv" />}
+          {view === "tv" && <DisplayView key="tv" setView={setView} />}
           {view === "calendar" && <React.Suspense fallback={<LoadingScreen />}><ReservationCalendar key="calendar" /></React.Suspense>}
           {view === "finance" && <FinanceView key="finance" />}
         </AnimatePresence>
       </div>
-      <FloatingDock view={view} setView={setView} />
+      {view !== "tv" && <FloatingDock view={view} setView={setView} />}
       <Toasts />
     </main>
   );
@@ -1093,7 +1094,7 @@ function PlayRotationTab() {
                 p.displayName.toLowerCase().includes(name.toLowerCase())
               );
               if (match) {
-                checkIn(match.id, autoLogPayment);
+                checkIn(match.id, autoLogPayment, true);
               } else {
                 alert(`No unchecked player found matching "${name}". Try a different name.`);
               }
@@ -1423,7 +1424,7 @@ function PlayRotationTab() {
                   <div className="flex gap-1.5">
                     {!player.checkedIn ? (
                       <Button
-                        onClick={() => checkIn(player.id, autoLogPayment)}
+                        onClick={() => checkIn(player.id, autoLogPayment, true)}
                         className="min-h-10 px-4 text-xs font-black bg-brass text-forest hover:bg-brass/90 shadow-sm"
                       >
                         Check In
@@ -1796,7 +1797,7 @@ function PlayersCrudTab() {
                   <>
                     {!player.checkedIn ? (
                       <button
-                        onClick={() => checkIn(player.id, autoLogPayment)}
+                        onClick={() => checkIn(player.id, autoLogPayment, true)}
                         className="px-3 py-1.5 rounded-lg bg-brass text-forest font-black text-xs hover:bg-brass/90 transition shadow-sm mr-1"
                         title="Check In Player"
                       >
@@ -4533,9 +4534,17 @@ function RankBadge({ skillLevel, compact = false }: { skillLevel: ReturnType<typ
   );
 }
 
-function DisplayView() {
-  const { courts, matches, players, stackOrder, clubStatus } = useClubStore();
+function DisplayView({ setView }: { setView: (view: ViewMode) => void }) {
+  const { courts, matches, players: allPlayers, stackOrder, clubStatus } = useClubStore();
   const now = useNow();
+
+  const players = React.useMemo(() => {
+    return allPlayers.filter(p => 
+      p.tags?.includes("AdminCheckedIn") || 
+      courts.some(c => c.reservedPlayerIds?.includes(p.id)) ||
+      matches.some(m => m.status === "InProgress" && (m.teamAPlayerIds.includes(p.id) || m.teamBPlayerIds.includes(p.id)))
+    );
+  }, [allPlayers, courts, matches]);
   const matchDurationMinutes = useClubStore((state) => state.matchDurationMinutes);
   const announcedOvertimeRef = React.useRef<Record<string, number>>({});
   const announcedReservationsRef = React.useRef<Record<string, string>>({});
@@ -4714,13 +4723,14 @@ function DisplayView() {
         )}
       </AnimatePresence>
       <div className="mx-auto flex h-full max-w-[1920px] flex-col">
-        <div className="tv-display-actions fixed right-7 top-7 z-50 flex gap-2 opacity-20 transition hover:opacity-100 focus-within:opacity-100">
-          <a
-            href="/player"
-            className="rounded-full border border-ivory/30 bg-ivory/12 px-4 py-2 text-sm font-black uppercase tracking-wider text-ivory backdrop-blur hover:bg-ivory hover:text-forest"
+        <div className="fixed left-7 top-7 z-50">
+          <button
+            onClick={() => setView("landing")}
+            className="rounded-full border border-ivory/30 bg-ivory/12 px-4 py-2 text-sm font-black uppercase tracking-wider text-ivory backdrop-blur hover:bg-ivory hover:text-forest transition flex items-center gap-1.5 shadow-lg"
           >
-            Players
-          </a>
+            <ArrowLeft className="h-4.5 w-4.5" />
+            <span>Go Back</span>
+          </button>
         </div>
         <div className="tv-display-header flex shrink-0 items-end justify-between border-b border-ivory/10 pb-4 pr-52">
           <div>
