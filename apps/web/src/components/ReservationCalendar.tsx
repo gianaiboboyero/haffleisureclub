@@ -9,6 +9,10 @@ import {
   ChevronRight,
   Clock,
   CreditCard,
+  Eye,
+  EyeOff,
+  LogIn,
+  UserPlus,
   List,
   Lock,
   Settings,
@@ -416,6 +420,7 @@ export function ReservationCalendar() {
           courts={data.courts}
           close={() => setDrawer(null)}
           reload={load}
+          onMemberUpdate={setMember}
         />
       )}
     </section>
@@ -429,12 +434,13 @@ function Legend({ className, label }: { className: string; label: string }) {
   return hour * 60 + minute;
 };
 
-function ReservationDrawer({ member, selection, courts, close, reload }: {
+function ReservationDrawer({ member, selection, courts, close, reload, onMemberUpdate }: {
   member: Member;
   selection: { courtId: string; date: Date; startMinutes: number; reservation?: Reservation };
   courts: Court[];
   close: () => void;
   reload: () => Promise<void>;
+  onMemberUpdate: (m: Member) => void;
 }) {
   const reservation = selection.reservation;
   const court = courts.find((item) => item.id === selection.courtId);
@@ -442,19 +448,55 @@ function ReservationDrawer({ member, selection, courts, close, reload }: {
   const [extendHours, setExtendHours] = React.useState(0); // 0 = 1 hour default, 1 = +1 hr, etc.
   const [notes, setNotes] = React.useState("");
   const [error, setError] = React.useState("");
+  const [submitting, setSubmitting] = React.useState(false);
   const isAdmin = member?.role === "ADMIN" || localStorage.getItem("haff_admin_authenticated") === "true";
   const [publicLabel, setPublicLabel] = React.useState(reservation?.publicLabel || reservation?.title || "");
   const requesterName = reservation?.requester?.player?.displayName || reservation?.requester?.email?.split("@")[0] || "Player";
   const requestTimeStr = reservation?.createdAt ? new Date(reservation.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "N/A";
   const isOwner = isAdmin || (member && reservation?.requesterUserId === member.id);
 
+  // Inline Auth states and handlers
+  const [authMode, setAuthMode] = React.useState<"login" | "register">("login");
+  const [authForm, setAuthForm] = React.useState({ displayName: "", email: "", password: "", skillLevel: "Beginner" });
+  const [authError, setAuthError] = React.useState("");
+  const [authLoading, setAuthLoading] = React.useState(false);
+  const [authShowPassword, setAuthShowPassword] = React.useState(false);
+  const [authSuccessMsg, setAuthSuccessMsg] = React.useState("");
+
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError("");
+    setAuthLoading(true);
+    try {
+      const res = await fetch(`/api/auth?action=${authMode}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(authForm)
+      });
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!res.ok) throw new Error(data.error ?? "Unable to continue");
+      if (authMode === "register") {
+        setAuthSuccessMsg("Account created successfully!");
+      }
+      window.dispatchEvent(new Event("haff-auth-change"));
+      onMemberUpdate(data.user);
+      await reload();
+    } catch (reason) {
+      setAuthError(reason instanceof Error ? reason.message : "Unable to continue");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   const submit = async () => {
     if (!member) return setError("Sign in before requesting a reservation.");
+    setSubmitting(true);
+    setError("");
     const totalDurationMinutes = (1 + extendHours) * 60;
     try {
       const start = new Date(`${dateKey(selection.date)}T${String(Math.floor(selection.startMinutes / 60)).padStart(2, "0")}:${String(selection.startMinutes % 60).padStart(2, "0")}:00+08:00`);
-      
-      close(); // Instant close for speed!
       
       await api("/api/reservations?action=request", {
         method: "POST",
@@ -471,8 +513,11 @@ function ReservationDrawer({ member, selection, courts, close, reload }: {
         })
       });
       await reload();
+      close();
     } catch (reason) {
-      alert(reason instanceof Error ? reason.message : "Request failed.");
+      setError(reason instanceof Error ? reason.message : "Request failed.");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -566,10 +611,107 @@ function ReservationDrawer({ member, selection, courts, close, reload }: {
             </div>
           </div>
         ) : !member ? (
-          <div className="mt-6 rounded-2xl bg-forest/5 p-5">
-            <ShieldCheck className="text-clay" />
-            <p className="mt-3 font-black">Sign in to request this court.</p>
-            <a className="mt-4 block rounded-xl bg-forest px-4 py-3 text-center font-black text-ivory" href="/community">Sign in or register</a>
+          <div className="mt-6 rounded-2xl bg-forest/5 border border-forest/10 p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <ShieldCheck className="text-clay" size={20} />
+              <p className="font-black text-sm uppercase tracking-wider text-forest">Sign in to request this court</p>
+            </div>
+            
+            {/* Mode switch */}
+            <div className="flex rounded-xl bg-forest/10 p-1 mb-4">
+              <button
+                type="button"
+                onClick={() => setAuthMode("login")}
+                className={`flex-1 py-2 text-xs font-black rounded-lg transition ${authMode === "login" ? "bg-forest text-ivory" : "text-forest/70 hover:text-forest"}`}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuthMode("register")}
+                className={`flex-1 py-2 text-xs font-black rounded-lg transition ${authMode === "register" ? "bg-forest text-ivory" : "text-forest/70 hover:text-forest"}`}
+              >
+                Register
+              </button>
+            </div>
+
+            {authSuccessMsg && (
+              <div className="mb-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-3 py-2 text-xs font-bold text-emerald-800">
+                {authSuccessMsg}
+              </div>
+            )}
+            {authError && (
+              <div className="mb-4 rounded-xl bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs font-bold text-red-800">
+                {authError}
+              </div>
+            )}
+
+            <form onSubmit={handleAuthSubmit} className="space-y-3">
+              {authMode === "register" && (
+                <>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-wider text-forest/70 mb-1">Display Name</label>
+                    <input
+                      className="w-full rounded-xl border border-forest/15 bg-white px-3 py-2 text-sm text-forest placeholder:text-forest/40 focus:outline-none focus:ring-1 focus:ring-forest"
+                      placeholder="e.g. Alex"
+                      required
+                      value={authForm.displayName}
+                      onChange={(e) => setAuthForm({ ...authForm, displayName: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-wider text-forest/70 mb-1">Skill Level</label>
+                    <select
+                      className="w-full rounded-xl border border-forest/15 bg-white px-3 py-2 text-sm text-forest focus:outline-none focus:ring-1 focus:ring-forest appearance-none"
+                      value={authForm.skillLevel}
+                      onChange={(e) => setAuthForm({ ...authForm, skillLevel: e.target.value })}
+                    >
+                      {["Newbie", "Beginner", "Novice", "Low Intermediate", "Intermediate", "Pro"].map((lvl) => (
+                        <option key={lvl} value={lvl}>{lvl}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-wider text-forest/70 mb-1">Email</label>
+                <input
+                  type="email"
+                  className="w-full rounded-xl border border-forest/15 bg-white px-3 py-2 text-sm text-forest placeholder:text-forest/40 focus:outline-none focus:ring-1 focus:ring-forest"
+                  placeholder="your@email.com"
+                  required
+                  value={authForm.email}
+                  onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-wider text-forest/70 mb-1">Password</label>
+                <div className="relative">
+                  <input
+                    type={authShowPassword ? "text" : "password"}
+                    className="w-full rounded-xl border border-forest/15 bg-white px-3 py-2 pr-10 text-sm text-forest placeholder:text-forest/40 focus:outline-none focus:ring-1 focus:ring-forest"
+                    placeholder="••••••••"
+                    required
+                    value={authForm.password}
+                    onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                  />
+                  <button
+                    type="button"
+                    className="absolute inset-y-0 right-0 grid w-10 place-items-center text-forest/40 hover:text-forest"
+                    onClick={() => setAuthShowPassword((v) => !v)}
+                  >
+                    {authShowPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+              </div>
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full rounded-xl bg-forest py-2.5 font-black text-ivory text-xs transition active:scale-[0.98] disabled:opacity-60"
+              >
+                {authLoading ? "Please wait…" : authMode === "register" ? "Register" : "Sign In"}
+              </button>
+            </form>
           </div>
         ) : isAdmin ? (
           <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -599,8 +741,12 @@ function ReservationDrawer({ member, selection, courts, close, reload }: {
                   <p className="mt-1 text-xl font-black">PHP {350 * (1 + extendHours)}</p>
                 </div>
               </div>
-              <button className="w-full rounded-xl bg-forest px-5 py-4 font-black text-ivory text-base shadow-lg transition active:scale-[0.98]" onClick={() => void submit()}>
-                ⚡ Book Instantly (Approved)
+              <button 
+                className="w-full rounded-xl bg-forest px-5 py-4 font-black text-ivory text-base shadow-lg transition active:scale-[0.98] disabled:opacity-60" 
+                onClick={() => void submit()}
+                disabled={submitting}
+              >
+                {submitting ? "Booking..." : "⚡ Book Instantly (Approved)"}
               </button>
             </div>
 
@@ -635,12 +781,16 @@ function ReservationDrawer({ member, selection, courts, close, reload }: {
               <p className="mt-1 text-3xl font-black">PHP {350 * (1 + extendHours)}</p>
             </div>
 
-            <button className="w-full rounded-xl bg-forest px-5 py-4 font-black text-ivory text-base shadow-lg transition active:scale-[0.98]" onClick={() => void submit()}>
-              👍 Book Court
+            <button 
+              className="w-full rounded-xl bg-forest px-5 py-4 font-black text-ivory text-base shadow-lg transition active:scale-[0.98] disabled:opacity-60" 
+              onClick={() => void submit()}
+              disabled={submitting}
+            >
+              {submitting ? "Booking..." : "👍 Book Court"}
             </button>
           </div>
         )}
-        {error && reservation && <p className="mt-4 rounded-xl bg-red-100 p-3 text-sm font-bold text-red-800">{error}</p>}
+        {error && <p className="mt-4 rounded-xl bg-red-100 p-3 text-sm font-bold text-red-800">{error}</p>}
       </aside>
     </div>,
     document.body
