@@ -413,7 +413,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="text-forest">👥</span>
-                  <span>Maximum players per game apply</span>
+                  <span>Maximum of 4 players per court booking (Extra ₱100/hr per additional player)</span>
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="text-forest">🏓</span>
@@ -469,7 +469,8 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
                 <p className="text-[11px] text-ink/75">Cafe • Pickleball • Billiards • Table Tennis • Darts</p>
                 <div className="pt-2 border-t border-forest/10 mt-2">
                   <p className="font-bold text-forest">📍 Cadiz City, Negros Occidental</p>
-                  <p className="text-[11px] text-ink/65 mt-0.5">Sta. Cruz Heights, Barangay Banquerohan 6121 Cadiz City, Philippines</p>
+                  <p className="text-[11px] text-ink/65 mt-0.5">Sta. Cruz Heights Subd., Barangay Banquerohan (Near Banquerohan Covered Court), 6121 Cadiz City, Philippines</p>
+                  <p className="text-[11px] text-ink/75 mt-1">📞 Phone: <span className="font-bold text-forest">099423574222</span></p>
                 </div>
               </div>
             </div>
