@@ -43,6 +43,7 @@ async function notify(
 
 function publicReservation(reservation: any, user: any) {
   const canSeePrivate = user?.role === "ADMIN" || user?.id === reservation.requesterUserId;
+  const requesterName = reservation.requester?.player?.displayName || reservation.requester?.email?.split("@")[0] || "Player";
   return canSeePrivate
     ? reservation
     : {
@@ -51,7 +52,12 @@ function publicReservation(reservation: any, user: any) {
         startTime: reservation.startTime,
         endTime: reservation.endTime,
         approvalStatus: reservation.approvalStatus,
-        publicLabel: reservation.approvalStatus === "CONFIRMED" ? "Reserved" : "Requested"
+        createdAt: reservation.createdAt,
+        publicLabel: reservation.publicLabel || (reservation.approvalStatus === "CONFIRMED" ? `Reserved (${requesterName})` : `Requested (${requesterName})`),
+        requester: {
+          email: reservation.requester?.email,
+          player: { displayName: requesterName }
+        }
       };
 }
 
@@ -196,7 +202,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         seriesId: typeof req.body?.seriesId === "string" ? req.body.seriesId : null,
         recurrenceRule: typeof req.body?.recurrenceRule === "string" ? req.body.recurrenceRule : null,
         approvalStatus: isInstant ? "CONFIRMED" : "REQUESTED",
-        paymentStatus: isInstant ? "PAID" : "UNPAID",
+        paymentStatus: isInstant ? "PAID" : "PENDING",
         approvedByUserId: isInstant ? member.id : null,
         approvedAt: isInstant ? new Date() : null
       },

@@ -43,10 +43,14 @@ import {
   Home,
   Sliders,
   DollarSign,
-  MessageCircle,
   LogOut,
   Eye,
-  EyeOff
+  EyeOff,
+  UserPlus,
+  LogIn,
+  Bell,
+  Zap,
+  BarChart2
 } from "lucide-react";
 import { Button, Card, Badge } from "./components/ui";
 import { Chip } from "./components/ui/heroui-chip";
@@ -58,9 +62,6 @@ import type { VoiceStyle } from "./lib/sound";
 import "./styles/globals.css";
 import { Analytics } from "@vercel/analytics/react";
 
-const CommunityView = React.lazy(() =>
-  import("./components/CommunityView").then((module) => ({ default: module.CommunityView }))
-);
 const LandingView = React.lazy(() =>
   import("./components/LandingView").then((module) => ({ default: module.LandingView }))
 );
@@ -160,9 +161,9 @@ function App() {
       } else if (path === "landing" || hash === "landing") {
         window.history.replaceState(null, "", "/home");
         targetView = "landing";
-      } else if (["admin", "player", "parking", "tv", "calendar", "finance", "community"].includes(path)) {
+      } else if (["admin", "player", "parking", "tv", "calendar", "finance"].includes(path)) {
         targetView = path as ViewMode;
-      } else if (["admin", "player", "parking", "tv", "calendar", "finance", "community"].includes(hash)) {
+      } else if (["admin", "player", "parking", "tv", "calendar", "finance"].includes(hash)) {
         targetView = hash as ViewMode;
       } else if (path === "display" || hash === "display") {
         targetView = "tv";
@@ -306,7 +307,6 @@ function App() {
           {view === "tv" && <DisplayView key="tv" />}
           {view === "calendar" && <React.Suspense fallback={<LoadingScreen />}><ReservationCalendar key="calendar" /></React.Suspense>}
           {view === "finance" && <FinanceView key="finance" />}
-          {view === "community" && <React.Suspense fallback={<LoadingScreen />}><CommunityView /></React.Suspense>}
         </AnimatePresence>
       </div>
       <FloatingDock view={view} setView={setView} />
@@ -406,7 +406,7 @@ function useNow() {
   return now;
 }
 
-type ViewMode = "landing" | "admin" | "player" | "parking" | "tv" | "calendar" | "finance" | "community";
+type ViewMode = "landing" | "admin" | "player" | "parking" | "tv" | "calendar" | "finance";
 
 function TopBar({ 
   view, 
@@ -558,17 +558,14 @@ function FloatingDock({ view, setView }: { view: string; setView: (view: ViewMod
     { key: "landing", label: "Home", icon: Home },
     { key: "player", label: "Players", icon: UserRound },
     { key: "parking", label: "Parking", icon: Coffee },
-    { key: "community", label: "Community", icon: MessageCircle },
-    { key: "calendar", label: "Calendar", icon: Calendar },
-    { key: "tv", label: "TV Display", icon: Monitor },
+    { key: "calendar", label: "Reserve", icon: CalendarDays },
   ];
   const adminItems = [
     { key: "landing", label: "Home", icon: Home },
     { key: "admin", label: "Admin", icon: Sliders },
     { key: "player", label: "Players", icon: UserRound },
     { key: "parking", label: "Parking", icon: Coffee },
-    { key: "community", label: "Community", icon: MessageCircle },
-    { key: "calendar", label: "Calendar", icon: Calendar },
+    { key: "calendar", label: "Reserve", icon: CalendarDays },
     { key: "finance", label: "Finance", icon: DollarSign },
     { key: "tv", label: "TV Display", icon: Monitor },
   ];
@@ -647,7 +644,7 @@ function ParkingView() {
           <Coffee className="mx-auto text-brass" size={34} />
           <h1 className="mt-4 font-display text-4xl font-black">Parking Area</h1>
           <p className="mt-2 text-sm leading-6 text-ivory/65">Sign in to see your paid check-in status and control your rotation availability.</p>
-          <button className="mt-6 min-h-12 w-full rounded-full bg-brass px-6 font-black text-forest" onClick={() => setView("community")}>Sign in</button>
+          <button className="mt-6 min-h-12 w-full rounded-full bg-brass px-6 font-black text-forest" onClick={() => setView("player")}>Sign in</button>
         </div>
       </section>
     );
@@ -984,18 +981,38 @@ function AdminView() {
               <div className="flex justify-center bg-white p-4 rounded-2xl shadow-inner border border-forest/5 mb-6">
                 <img
                   alt="Player Portal QR Code"
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(window.location.origin + "/community")}`}
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(window.location.origin + "/player")}`}
                   className="w-48 h-48"
                 />
               </div>
               <p className="text-xs font-mono select-all text-forest/60 break-all bg-forest/5 p-2 rounded-lg">
-                {window.location.origin + "/community"}
+                {window.location.origin + "/player"}
               </p>
             </div>
           </div>
         </div>
       )}
     </section>
+  );
+}
+
+// Court elapsed-time timer badge (live)
+function CourtElapsedTimer({ startedAt, matchDurationMinutes }: { startedAt: string; matchDurationMinutes: number }) {
+  const now = useNow();
+  const elapsedSeconds = Math.floor((now.getTime() - new Date(startedAt).getTime()) / 1000);
+  const elapsedMin = Math.floor(elapsedSeconds / 60);
+  const elapsedSec = elapsedSeconds % 60;
+  const isOver = elapsedMin >= matchDurationMinutes;
+  const isNearing = elapsedMin >= matchDurationMinutes - 2;
+  return (
+    <span className={`ml-1 inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-black tabular-nums ${
+      isOver ? "bg-red-500/20 text-red-300 animate-pulse" :
+      isNearing ? "bg-amber-500/20 text-amber-300" :
+      "bg-ivory/10 text-ivory/70"
+    }`}>
+      <Clock size={10} />
+      {elapsedMin}:{String(elapsedSec).padStart(2, "0")}
+    </span>
   );
 }
 
@@ -1057,6 +1074,49 @@ function PlayRotationTab() {
 
   return (
     <div className="space-y-4">
+      {/* Quick-action sticky bar */}
+      <div className="sticky top-16 z-30 -mx-1 rounded-2xl border border-white/10 bg-[#0a1f18]/95 px-4 py-3 backdrop-blur-xl shadow-[0_8px_32px_rgba(0,0,0,0.3)]">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="mr-2 text-[10px] font-black uppercase tracking-[0.2em] text-brass">Quick Actions</span>
+          <Button
+            onClick={() => generateMatches()}
+            className="min-h-10 gap-2 bg-brass px-4 text-xs font-black text-forest hover:bg-linen"
+          >
+            <Zap size={14} /> Assign Courts
+          </Button>
+          <Button
+            onClick={() => {
+              const name = window.prompt("Check in player by name (partial match):");
+              if (!name) return;
+              const match = players.find(p =>
+                p.isActive !== false && !p.checkedIn &&
+                p.displayName.toLowerCase().includes(name.toLowerCase())
+              );
+              if (match) {
+                checkIn(match.id, autoLogPayment);
+              } else {
+                alert(`No unchecked player found matching "${name}". Try a different name.`);
+              }
+            }}
+            className="min-h-10 gap-2 bg-ivory/15 px-4 text-xs font-bold text-ivory hover:bg-ivory/25"
+          >
+            <Plus size={14} /> Quick Check-In
+          </Button>
+          <Button
+            onClick={() => {
+              const msg = window.prompt("Broadcast a live club status message:", clubStatusDraft || "");
+              if (msg !== null) {
+                setClubStatusDraft(msg);
+                setClubStatus(msg);
+              }
+            }}
+            className="min-h-10 gap-2 bg-ivory/15 px-4 text-xs font-bold text-ivory hover:bg-ivory/25"
+          >
+            <Bell size={14} /> Broadcast
+          </Button>
+        </div>
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-4">
           <StackBuilder players={players} courts={courts} matches={matches} stackOrder={stackOrder} />
@@ -1106,6 +1166,9 @@ function PlayRotationTab() {
                   >
                     {court.status === "InUse" ? "IN USE" : court.status}
                   </Chip>
+                  {court.status === "InUse" && match?.startedAt && (
+                    <CourtElapsedTimer startedAt={match.startedAt} matchDurationMinutes={matchDurationMinutes} />
+                  )}
                 </div>
                 {match ? (
                   <MatchLine matchId={match.id} />
@@ -2156,6 +2219,27 @@ function HistoryTab() {
     }
   };
 
+  const handleExportCSV = () => {
+    const rows = [
+      ["Match", "Court", "Team A", "Team B", "Duration (min)", "Logged At"],
+      ...completedMatches.map((match, i) => {
+        const court = courts.find(c => c.id === match.courtId);
+        const teamA = match.teamAPlayerIds.map(id => players.find(p => p.id === id)?.displayName ?? "").filter(Boolean).join(" & ");
+        const teamB = match.teamBPlayerIds.map(id => players.find(p => p.id === id)?.displayName ?? "").filter(Boolean).join(" & ");
+        const dur = match.startedAt && match.endedAt
+          ? Math.round((new Date(match.endedAt).getTime() - new Date(match.startedAt).getTime()) / 60000)
+          : "";
+        const time = match.endedAt ? new Date(match.endedAt).toLocaleString() : "";
+        return [i + 1, court?.name ?? "", teamA, teamB, dur, time];
+      })
+    ];
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.download = `haff-history-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+  };
+
   return (
     <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
       <Card className="work-surface">
@@ -2164,11 +2248,18 @@ function HistoryTab() {
             <h2 className="font-display text-3xl text-forest">Play History Log</h2>
             <p className="text-xs text-forest/70 mt-1">Showing all completed games from active courts</p>
           </div>
-          {completedMatches.length > 0 && (
-            <Button onClick={handleClearHistory} className="min-h-10 bg-red-700 hover:bg-red-800 text-ivory text-xs px-4">
-              <Trash2 size={14} className="mr-1.5" /> Clear History
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            {completedMatches.length > 0 && (
+              <Button onClick={handleExportCSV} className="min-h-10 bg-forest hover:bg-forest/90 text-ivory text-xs px-4">
+                <Download size={14} className="mr-1.5" /> Export CSV
+              </Button>
+            )}
+            {completedMatches.length > 0 && (
+              <Button onClick={handleClearHistory} className="min-h-10 bg-red-700 hover:bg-red-800 text-ivory text-xs px-4">
+                <Trash2 size={14} className="mr-1.5" /> Clear
+              </Button>
+            )}
+          </div>
         </div>
 
         <div className="mt-6 space-y-4 max-h-[550px] overflow-y-auto pr-1">
@@ -2979,6 +3070,152 @@ const getPlayerAvatar = (player: any) => {
 };
 
 // ----------------------------------------------------
+// INLINE AUTH MODAL (replaces community redirect)
+// ----------------------------------------------------
+type AuthMember = { playerId?: string; displayName: string; role: string };
+
+function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void }) {
+  const [mode, setMode] = React.useState<"login" | "register">("login");
+  const [form, setForm] = React.useState({ displayName: "", email: "", password: "", skillLevel: "Beginner" });
+  const [error, setError] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [showPassword, setShowPassword] = React.useState(false);
+  const [successMsg, setSuccessMsg] = React.useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/auth?action=${mode}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form)
+      });
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!res.ok) throw new Error(data.error ?? "Unable to continue");
+      if (mode === "register") {
+        setSuccessMsg("Welcome to HAFF Leisure Club! Your account has been created.");
+      }
+      window.dispatchEvent(new Event("haff-auth-change"));
+      onSuccess(data.user);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to continue");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mx-auto mt-6 max-w-lg"
+    >
+      <div className="overflow-hidden rounded-3xl border border-ivory/10 bg-[#0b3a2c] shadow-[0_24px_60px_rgba(0,0,0,0.4)] backdrop-blur-xl">
+        {/* Header */}
+        <div className="flex border-b border-ivory/10">
+          <button
+            onClick={() => setMode("login")}
+            className={`flex flex-1 items-center justify-center gap-2 py-4 text-sm font-black transition ${mode === "login" ? "bg-brass text-forest" : "text-ivory/60 hover:text-ivory"}`}
+          >
+            <LogIn size={16} /> Sign In
+          </button>
+          <button
+            onClick={() => setMode("register")}
+            className={`flex flex-1 items-center justify-center gap-2 py-4 text-sm font-black transition ${mode === "register" ? "bg-brass text-forest" : "text-ivory/60 hover:text-ivory"}`}
+          >
+            <UserPlus size={16} /> Register
+          </button>
+        </div>
+
+        <div className="p-6 text-ivory">
+          <h2 className="font-display text-2xl font-black">
+            {mode === "register" ? "Create your HAFF account" : "Welcome back"}
+          </h2>
+          <p className="mt-1 text-sm text-ivory/60">
+            {mode === "register"
+              ? "Register to track your queue position, check in, and manage your profile."
+              : "Sign in to access your player dashboard and queue status."}
+          </p>
+
+          {successMsg && (
+            <div className="mt-4 flex items-center gap-3 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 px-4 py-3 text-sm font-semibold text-emerald-300">
+              <CheckCircle2 size={18} /> {successMsg}
+            </div>
+          )}
+          {error && (
+            <div className="mt-4 rounded-2xl bg-red-500/15 border border-red-500/30 px-4 py-3 text-sm font-semibold text-red-300">
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={submit} className="mt-5 space-y-3">
+            {mode === "register" && (
+              <>
+                <input
+                  className="w-full rounded-2xl border-none bg-white/10 px-4 py-3 text-sm text-ivory placeholder:text-ivory/40 focus:outline-none focus:ring-2 focus:ring-brass"
+                  placeholder="Display name"
+                  required
+                  value={form.displayName}
+                  onChange={(e) => setForm({ ...form, displayName: e.target.value })}
+                />
+                <select
+                  className="w-full rounded-2xl border-none bg-white/10 px-4 py-3 text-sm text-ivory focus:outline-none focus:ring-2 focus:ring-brass appearance-none"
+                  value={form.skillLevel}
+                  onChange={(e) => setForm({ ...form, skillLevel: e.target.value })}
+                >
+                  {["Newbie", "Beginner", "Novice", "Low Intermediate", "Intermediate", "Pro"].map((lvl) => (
+                    <option key={lvl} value={lvl} className="bg-[#0b3a2c]">{lvl}</option>
+                  ))}
+                </select>
+              </>
+            )}
+            <input
+              type="email"
+              autoComplete="email"
+              className="w-full rounded-2xl border-none bg-white/10 px-4 py-3 text-sm text-ivory placeholder:text-ivory/40 focus:outline-none focus:ring-2 focus:ring-brass"
+              placeholder="Email address"
+              required
+              value={form.email}
+              onChange={(e) => setForm({ ...form, email: e.target.value })}
+            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                autoComplete={mode === "register" ? "new-password" : "current-password"}
+                className="w-full rounded-2xl border-none bg-white/10 px-4 py-3 pr-12 text-sm text-ivory placeholder:text-ivory/40 focus:outline-none focus:ring-2 focus:ring-brass"
+                placeholder="Password"
+                required
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+              />
+              <button
+                type="button"
+                aria-label={showPassword ? "Hide" : "Show"}
+                className="absolute inset-y-0 right-0 grid w-12 place-items-center text-ivory/40 hover:text-ivory"
+                onClick={() => setShowPassword((v) => !v)}
+              >
+                {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="mt-1 w-full min-h-12 rounded-2xl bg-brass px-6 font-black text-forest transition hover:bg-linen active:scale-95 disabled:opacity-60"
+            >
+              {loading ? "Please wait…" : mode === "register" ? "Create Account" : "Sign In"}
+            </button>
+          </form>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+// ----------------------------------------------------
 // PLAYER VIEW SCREEN (QR/PHONE LOGIN INCLUDED)
 // ----------------------------------------------------
 function PlayerView() {
@@ -3184,17 +3421,49 @@ function PlayerView() {
         <p className="text-xs font-bold uppercase tracking-wider text-brass">Private player page</p>
         <h1 className="font-display text-4xl leading-tight text-ivory sm:text-5xl">Know when you play.</h1>
       </div>
+
+      {/* Queue alert banner — visible without scrolling */}
+      {player && status && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className={`mt-3 flex items-center gap-3 rounded-2xl px-4 py-3 font-bold ${
+            assignedMatch
+              ? "bg-brass text-forest"
+              : player.parked
+              ? "bg-amber-500/20 border border-amber-500/30 text-amber-200"
+              : player.checkedIn
+              ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-200"
+              : "bg-ivory/10 border border-ivory/10 text-ivory/60"
+          }`}
+        >
+          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+            assignedMatch ? "bg-forest animate-pulse" :
+            player.parked ? "bg-amber-400" :
+            player.checkedIn ? "bg-emerald-400 animate-pulse" :
+            "bg-ivory/30"
+          }`} />
+          <span className="flex-1 text-sm">
+            {assignedMatch
+              ? `🎾 It's your turn! Head to ${assignedCourt?.name ?? "the court"} now.`
+              : player.parked
+              ? "⏸ You are parked — rejoin rotation when ready."
+              : player.checkedIn
+              ? `📍 ${status.label} — ${status.stackDetail}`
+              : "You are not checked in yet. Check in at the desk."}
+          </span>
+        </motion.div>
+      )}
       
-      {!checkingSession && !sessionMember ? (
-        <Card className="mx-auto mt-6 max-w-lg border border-ivory/10 bg-[#0b3a2c] p-7 text-center text-ivory shadow-2xl">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-brass/15 text-brass"><Lock size={24} /></div>
-          <p className="mt-5 text-xs font-black uppercase tracking-wider text-brass">Member access</p>
-          <h2 className="mt-2 font-display text-3xl font-black">Sign in to view your player dashboard</h2>
-          <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-ivory/65">Your HAFF account connects your queue status, check-in controls, profile, and play recap.</p>
-          <button className="mt-6 min-h-12 w-full rounded-full bg-brass px-6 font-black text-forest transition hover:bg-linen" onClick={() => setView("community")}>Sign in or register</button>
-          <button className="mt-2 min-h-11 w-full text-sm font-bold text-ivory/55 hover:text-ivory" onClick={() => setView("landing")}>Return home</button>
-        </Card>
-      ) : null}
+      {!checkingSession && !sessionMember && (
+        <AuthModal onSuccess={(member) => {
+          setSessionMember(member);
+          if (member?.playerId) {
+            localStorage.setItem("haff-player-account-id", member.playerId);
+            setSelectedPlayerId(member.playerId);
+          }
+        }} />
+      )}
 
       {/* PHONE LOGIN MODAL/PANEL */}
       {false && loginMethod === "phone" && (

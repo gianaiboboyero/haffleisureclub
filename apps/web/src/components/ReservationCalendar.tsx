@@ -340,9 +340,10 @@ export function ReservationCalendar() {
                   });
 
                   if (reservation) {
-                    const isClickable = member?.role === "ADMIN" || localStorage.getItem("haff_admin_authenticated") === "true" || (member && reservation.requesterUserId === member.id);
+                    const isOwner = member?.role === "ADMIN" || localStorage.getItem("haff_admin_authenticated") === "true" || (member && reservation.requesterUserId === member.id);
                     const isConfirmed = reservation.approvalStatus === "CONFIRMED";
-                    const label = reservation.publicLabel || reservation.title || (isConfirmed ? "Reserved" : "Requested");
+                    const requesterName = reservation.requester?.player?.displayName || reservation.requester?.email?.split("@")[0] || "Player";
+                    const label = reservation.publicLabel || (isConfirmed ? `Reserved (${requesterName})` : `Requested (${requesterName})`);
                     
                     return (
                       <button
@@ -350,14 +351,13 @@ export function ReservationCalendar() {
                           isConfirmed 
                             ? "border-brass/30 bg-brass/10 text-brass" 
                             : "calendar-requested border-amber-300/30 text-amber-100"
-                        } ${isClickable ? "hover:bg-red-950/20 hover:border-red-500/40" : "cursor-not-allowed"}`}
+                        } hover:opacity-95 hover:border-brass/50`}
                         key={hourStart}
-                        disabled={!isClickable}
                         onClick={() => setDrawer({ courtId: court.id, date: selectedDay, startMinutes: hourStart, reservation })}
                       >
                         <span className="block text-xs font-black">{clockLabel(hourStart)}</span>
                         <span className="mt-0.5 block truncate text-[9px] font-bold opacity-80" title={label}>
-                          {isClickable ? "Cancel / Edit" : label}
+                          {label}
                         </span>
                       </button>
                     );
@@ -444,6 +444,9 @@ function ReservationDrawer({ member, selection, courts, close, reload }: {
   const [error, setError] = React.useState("");
   const isAdmin = member?.role === "ADMIN" || localStorage.getItem("haff_admin_authenticated") === "true";
   const [publicLabel, setPublicLabel] = React.useState(reservation?.publicLabel || reservation?.title || "");
+  const requesterName = reservation?.requester?.player?.displayName || reservation?.requester?.email?.split("@")[0] || "Player";
+  const requestTimeStr = reservation?.createdAt ? new Date(reservation.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "N/A";
+  const isOwner = isAdmin || (member && reservation?.requesterUserId === member.id);
 
   const submit = async () => {
     if (!member) return setError("Sign in before requesting a reservation.");
@@ -512,16 +515,29 @@ function ReservationDrawer({ member, selection, courts, close, reload }: {
         
         {reservation ? (
           <div className="mt-6 grid gap-4 md:grid-cols-2">
-            {/* Card 1: Private details */}
+            {/* Card 1: Reservation Info */}
             <div className="rounded-2xl bg-forest/5 p-4 space-y-3 flex flex-col justify-between">
               <div>
-                <p className="text-[10px] font-black uppercase tracking-wider text-clay mb-2">Private Renter Info (Staff view)</p>
-                <Detail label="Status" value={reservation.approvalStatus.replaceAll("_", " ")} />
-                {reservation.paymentStatus && <Detail label="Payment" value={reservation.paymentStatus} />}
-                {reservation.notes && <Detail label="Private Notes" value={reservation.notes} />}
-                {reservation.rejectionReason && <Detail label="Staff response" value={reservation.rejectionReason} />}
+                {isOwner ? (
+                  <>
+                    <p className="text-[10px] font-black uppercase tracking-wider text-clay mb-2">Private Renter Info (Staff view)</p>
+                    <Detail label="Status" value={reservation.approvalStatus.replaceAll("_", " ")} />
+                    {reservation.paymentStatus && <Detail label="Payment" value={reservation.paymentStatus} />}
+                    <Detail label="Player / Renter" value={requesterName} />
+                    <Detail label="Submitted At" value={requestTimeStr} />
+                    {reservation.notes && <Detail label="Private Notes" value={reservation.notes} />}
+                    {reservation.rejectionReason && <Detail label="Staff response" value={reservation.rejectionReason} />}
+                  </>
+                ) : (
+                  <>
+                    <p className="text-[10px] font-black uppercase tracking-wider text-clay mb-2">Reservation Info</p>
+                    <Detail label="Status" value={reservation.approvalStatus === "CONFIRMED" ? "Confirmed (Approved)" : "Requested (Pending Approval)"} />
+                    <Detail label="Player / Renter" value={requesterName} />
+                    <Detail label="Submitted At" value={requestTimeStr} />
+                  </>
+                )}
               </div>
-              {member && (isAdmin || member.id === reservation.requesterUserId) && !["CANCELLED", "REJECTED"].includes(reservation.approvalStatus) && (
+              {member && isOwner && !["CANCELLED", "REJECTED"].includes(reservation.approvalStatus) && (
                 <button className="mt-3 w-full rounded-xl bg-red-100 px-4 py-3 font-black text-red-800 text-xs" onClick={() => void cancel("occurrence")}>Cancel booking</button>
               )}
             </div>
@@ -538,7 +554,7 @@ function ReservationDrawer({ member, selection, courts, close, reload }: {
                 ) : (
                   <div className="mt-3">
                     <p className="text-xs font-black uppercase tracking-wider text-forest/55">Display Label</p>
-                    <p className="font-bold text-lg">{reservation.publicLabel || reservation.title || "Reserved"}</p>
+                    <p className="font-bold text-lg">{reservation.publicLabel || (reservation.approvalStatus === "CONFIRMED" ? "Reserved" : "Requested")}</p>
                   </div>
                 )}
               </div>

@@ -213,6 +213,7 @@ model CourtReservation {
   hostPlayerId          String?
   title                 String
   notes                 String?
+  publicLabel           String?
   participantPlayerIds  String[]                  @default([])
   startTime             DateTime
   endTime               DateTime
