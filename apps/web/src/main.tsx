@@ -4813,14 +4813,22 @@ function DisplayView({ setView }: { setView: (view: ViewMode) => void }) {
                     <h2 className="tv-court-title text-[clamp(2rem,2.5vw,3.5rem)] font-black tracking-normal text-ivory">{court.name}</h2>
                     <span className={`tv-court-status rounded-full px-4 py-1.5 text-base font-black uppercase ${
                       court.status === "InUse"
-                        ? "bg-amber-400 text-forest"
+                        ? (match?.mode === "Reserved" ? "bg-amber-500 text-forest border border-brass/50" : "bg-amber-400 text-forest")
                         : court.status === "Maintenance"
                         ? "bg-clay text-ivory"
                         : court.status === "Paused"
                         ? "bg-ivory text-forest"
-                        : "bg-brass text-forest"
+                        : "bg-brass text-forest animate-pulse"
                     }`}>
-                      {court.status === "InUse" ? "IN USE" : court.status === "Maintenance" ? "MAINTENANCE" : court.status === "Paused" ? "PAUSED" : court.status}
+                      {court.status === "InUse" 
+                        ? (match?.mode === "Reserved" ? "RESERVED USE" : "IN USE") 
+                        : court.status === "Maintenance" 
+                        ? "MAINTENANCE" 
+                        : court.status === "Paused" 
+                        ? "PAUSED" 
+                        : court.status === "Reserved" 
+                        ? "RESERVED" 
+                        : court.status.toUpperCase()}
                     </span>
                   </div>
                   {match ? (

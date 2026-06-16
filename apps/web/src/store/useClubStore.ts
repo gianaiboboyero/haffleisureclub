@@ -1064,6 +1064,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const match: Match = {
       id: crypto.randomUUID(),
       courtId: court.id,
+      mode: "Reserved",
       teamAPlayerIds: teams.a.map((player) => player.id),
       teamBPlayerIds: teams.b.map((player) => player.id),
       scoreA: 0,
