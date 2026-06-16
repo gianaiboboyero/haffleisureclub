@@ -164,7 +164,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
               <button
                 onClick={() => {
                   sessionStorage.setItem("haff-auth-mode", "login");
-                  setView("community");
+                  setView("player");
                 }}
                 className="hidden min-h-10 items-center gap-2 rounded-full bg-ivory/10 px-4 text-xs font-black text-ivory transition hover:bg-ivory/15 sm:flex"
               >
@@ -173,7 +173,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
               <button
                 onClick={() => {
                   sessionStorage.setItem("haff-auth-mode", "register");
-                  setView("community");
+                  setView("player");
                 }}
                 className="flex min-h-10 items-center gap-2 rounded-full bg-brass px-4 text-xs font-black text-forest transition hover:bg-linen"
               >
@@ -222,18 +222,18 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
 
             <div className="flex flex-wrap gap-3 pt-2">
               <button 
-                onClick={() => setView("player")} 
+                onClick={() => setView("calendar")} 
                 className="flex items-center gap-2 rounded-full bg-brass px-6 py-3.5 text-sm font-black text-ink shadow-lg shadow-brass/15 transition hover:scale-[1.02] hover:bg-brass/90 active:scale-[0.98]"
               >
-                <span>Enter Player Portal</span>
+                <span>Reserve a Court</span>
                 <ArrowRight className="h-4 w-4" />
               </button>
               <button 
-                onClick={() => setShowSocialsModal(true)} 
+                onClick={() => setView("player")} 
                 className="flex items-center gap-2 rounded-full border border-ivory/20 bg-ivory/6 px-5 py-3.5 text-sm font-bold text-ivory backdrop-blur-sm transition hover:bg-ivory/12"
               >
                 <Users className="h-4.5 w-4.5" />
-                <span>Follow Our Club</span>
+                <span>Go Open Play</span>
               </button>
             </div>
           </div>
@@ -254,8 +254,8 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
               <div className="mx-auto mb-3 h-14 w-14 overflow-hidden rounded-full bg-brass p-1 shadow-inner md:h-18 md:w-18">
                 <img src={playerImage} alt="Player" className="h-full w-full object-cover rounded-full" />
               </div>
-              <h3 className="text-sm font-black md:text-base">Player Queue</h3>
-              <p className="mt-1 text-[10px] md:text-xs font-semibold text-ink/60">Check in & view waiting times</p>
+              <h3 className="text-sm font-black md:text-base">Rent a Court</h3>
+              <p className="mt-1 text-[10px] md:text-xs font-semibold text-ink/60">₱300 per hour</p>
             </motion.div>
 
             {/* Glass Court Card Right */}
@@ -269,8 +269,8 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
               <div className="mx-auto mb-3 h-14 w-14 overflow-hidden rounded-full bg-brass p-1 shadow-inner md:h-18 md:w-18">
                 <img src={courtImage} alt="Court" className="h-full w-full object-cover rounded-full" />
               </div>
-              <h3 className="text-sm font-black md:text-base">Smart Courts</h3>
-              <p className="mt-1 text-[10px] md:text-xs font-semibold text-ink/60">Auto assignment & duration timers</p>
+              <h3 className="text-sm font-black md:text-base">₱150 per player</h3>
+              <p className="mt-1 text-[10px] md:text-xs font-semibold text-ink/60">3PM ONWARDS</p>
             </motion.div>
 
             {/* SVGs & Badges */}
