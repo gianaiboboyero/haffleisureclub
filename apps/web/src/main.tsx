@@ -3281,6 +3281,28 @@ function PlayerView() {
   const [profilePhotoError, setProfilePhotoError] = React.useState("");
   const [isProcessingProfilePhoto, setIsProcessingProfilePhoto] = React.useState(false);
 
+  // Match Review & Feedback state
+  const [reviews, setReviews] = React.useState<Record<string, any>>(() => {
+    try {
+      const saved = localStorage.getItem("haff-match-reviews");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const [reviewingMatch, setReviewingMatch] = React.useState<any | null>(null);
+  const [feedbackScores, setFeedbackScores] = React.useState({ scoreA: 0, scoreB: 0 });
+  const [feedbackRecs, setFeedbackRecs] = React.useState<Record<string, { chat: string; endorsements: string[] }>>({});
+  
+  // Custom trigger for updating endorsements
+  const [endorsementTrigger, setEndorsementTrigger] = React.useState(0);
+  React.useEffect(() => {
+    const handleUpdate = () => setEndorsementTrigger(prev => prev + 1);
+    window.addEventListener("haff-endorsements-updated", handleUpdate);
+    return () => window.removeEventListener("haff-endorsements-updated", handleUpdate);
+  }, []);
+
   React.useEffect(() => {
     fetch("/api/auth?action=me", { credentials: "include" })
       .then((response) => response.json())
@@ -4012,14 +4034,18 @@ function PlayerView() {
                 <Activity size={16} />
                 <span className="text-[10px] font-bold uppercase tracking-[0.20em]">Player Statistics</span>
               </div>
-              <div className="grid grid-cols-2 gap-3 text-center">
-                <div className="rounded-2xl bg-[#073427] p-3">
-                  <p className="text-3xl font-black text-ivory">{player.totalGamesPlayed}</p>
-                  <p className="text-[9px] uppercase tracking-wider text-linen/50 mt-1">Total Games</p>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-2xl bg-[#073427] p-2.5">
+                  <p className="text-2xl font-black text-ivory">{player.totalGamesPlayed}</p>
+                  <p className="text-[9px] uppercase tracking-wider text-linen/50 mt-1">Games</p>
                 </div>
-                <div className="rounded-2xl bg-[#073427] p-3">
-                  <p className="text-3xl font-black text-ivory">{player.totalDaysPlayed}</p>
-                  <p className="text-[9px] uppercase tracking-wider text-linen/50 mt-1">Total Visits</p>
+                <div className="rounded-2xl bg-[#073427] p-2.5">
+                  <p className="text-2xl font-black text-ivory">{((player.totalGamesPlayed * 12) / 60).toFixed(1)}</p>
+                  <p className="text-[9px] uppercase tracking-wider text-linen/50 mt-1">Hours</p>
+                </div>
+                <div className="rounded-2xl bg-[#073427] p-2.5">
+                  <p className="text-2xl font-black text-ivory">{player.totalDaysPlayed}</p>
+                  <p className="text-[9px] uppercase tracking-wider text-linen/50 mt-1">Visits</p>
                 </div>
               </div>
               
@@ -4029,6 +4055,285 @@ function PlayerView() {
                 </p>
               </div>
             </div>
+
+            {/* Kudos & Recommendations Card */}
+            {(() => {
+              const { tallies, chats } = (() => {
+                try {
+                  const raw = localStorage.getItem("haff-player-endorsements");
+                  if (!raw) return { tallies: {}, chats: [] };
+                  const all = JSON.parse(raw);
+                  const playerEndorsements = all.filter((item: any) => item.targetPlayerId === player.id);
+                  const tallies: Record<string, number> = {};
+                  const chats: any[] = [];
+                  for (const item of playerEndorsements) {
+                    if (item.endorsements) {
+                      for (const e of item.endorsements) {
+                        tallies[e] = (tallies[e] ?? 0) + 1;
+                      }
+                    }
+                    if (item.chat && item.chat.trim()) {
+                      chats.push({ reviewerName: item.reviewerName, chat: item.chat, timestamp: item.timestamp });
+                    }
+                  }
+                  return { tallies, chats };
+                } catch {
+                  return { tallies: {}, chats: [] };
+                }
+              })();
+
+              const hasEndorsements = Object.keys(tallies).length > 0 || chats.length > 0;
+
+              return (
+                <div className="mt-4 rounded-xl bg-[#124a39] p-4 text-ivory" key={endorsementTrigger}>
+                  <div className="mb-3 flex items-center gap-1.5 border-b border-[#2f7b61] pb-2.5 text-brass">
+                    <Sparkles size={16} />
+                    <span className="text-[10px] font-bold uppercase tracking-[0.20em]">Player Kudos & Endorsements</span>
+                  </div>
+
+                  {!hasEndorsements ? (
+                    <p className="text-xs text-linen/50 italic text-center py-4">No player endorsements logged yet. Finish matches to receive kudos!</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {Object.keys(tallies).length > 0 && (
+                        <div>
+                          <p className="text-[9px] uppercase tracking-wider text-brass font-bold mb-1.5">Top Skills Recognized</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {Object.entries(tallies).map(([skill, count]) => (
+                              <span key={skill} className="text-[10px] bg-forest border border-white/10 rounded-full px-2.5 py-1 flex items-center gap-1.5 font-bold">
+                                <span>⚡ {skill}</span>
+                                <span className="bg-brass text-forest rounded-full h-4 w-4 flex items-center justify-center font-black text-[9px]">{count}</span>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {chats.length > 0 && (
+                        <div>
+                          <p className="text-[9px] uppercase tracking-wider text-brass font-bold mb-1.5">Recent Recommendation Chats</p>
+                          <div className="space-y-2 max-h-40 overflow-y-auto pr-1 scrollbar-none">
+                            {chats.map((c, idx) => (
+                              <div key={idx} className="bg-forest/40 border border-white/5 p-2 rounded-xl text-xs">
+                                <p className="text-brass font-bold">{c.reviewerName}</p>
+                                <p className="text-linen/90 mt-0.5 font-medium">“{c.chat}”</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Recent Games & Feedback Card */}
+            {(() => {
+              const completedGames = matches.filter(m => 
+                m.status === "Completed" && 
+                [...m.teamAPlayerIds, ...m.teamBPlayerIds].includes(player.id)
+              );
+
+              return (
+                <div className="mt-4 rounded-xl bg-[#124a39] p-4 text-ivory">
+                  <div className="mb-3 flex items-center gap-1.5 border-b border-[#2f7b61] pb-2.5 text-brass">
+                    <Activity size={16} />
+                    <span className="text-[10px] font-bold uppercase tracking-[0.20em]">Recent Games & Feedback</span>
+                  </div>
+
+                  {completedGames.length === 0 ? (
+                    <p className="text-xs text-linen/50 italic text-center py-4">No completed matches logged for you today.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {completedGames.map((m) => {
+                        const isReviewed = Boolean(reviews[m.id]);
+                        const otherPlayerIds = [...m.teamAPlayerIds, ...m.teamBPlayerIds].filter(id => id !== player.id);
+                        
+                        return (
+                          <div key={m.id} className="rounded-2xl bg-[#073427] p-3 border border-white/5">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <p className="text-[10px] font-mono text-brass">Match ID: {m.id.slice(-6).toUpperCase()}</p>
+                                <p className="text-xs font-bold text-ivory mt-0.5">
+                                  Score: <span className="font-mono text-brass">{m.scoreA} - {m.scoreB}</span>
+                                </p>
+                              </div>
+                              <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                                isReviewed ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/20" : "bg-amber-500/20 text-amber-300 border border-amber-500/20"
+                              }`}>
+                                {isReviewed ? "Reviewed" : "Review Pending"}
+                              </span>
+                            </div>
+
+                            {reviewingMatch?.id === m.id ? (
+                              <div className="mt-4 border-t border-white/5 pt-3 space-y-4">
+                                <p className="text-xs font-bold text-brass uppercase tracking-wider">Submit Match Feedback</p>
+                                
+                                <div className="grid grid-cols-2 gap-3 bg-forest/20 p-2.5 rounded-xl border border-white/5">
+                                  <div>
+                                    <label className="block text-[10px] uppercase text-linen/60 mb-1">Team A Score</label>
+                                    <input
+                                      type="number"
+                                      value={feedbackScores.scoreA}
+                                      onChange={(e) => setFeedbackScores({ ...feedbackScores, scoreA: Number(e.target.value) })}
+                                      className="w-full bg-[#073427] border-none text-ivory font-mono font-bold text-center rounded px-2 py-1.5"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] uppercase text-linen/60 mb-1">Team B Score</label>
+                                    <input
+                                      type="number"
+                                      value={feedbackScores.scoreB}
+                                      onChange={(e) => setFeedbackScores({ ...feedbackScores, scoreB: Number(e.target.value) })}
+                                      className="w-full bg-[#073427] border-none text-ivory font-mono font-bold text-center rounded px-2 py-1.5"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="space-y-4">
+                                  {otherPlayerIds.map((targetId) => {
+                                    const targetPlayer = players.find(p => p.id === targetId);
+                                    if (!targetPlayer || targetPlayer.isVacant) return null;
+                                    const rec = feedbackRecs[targetId] || { chat: "", endorsements: [] };
+                                    const skills = ["Good Dinking", "Strong Backhand", "Powerful Drive", "Great Third Shot Drop", "Amazing Fast Hands", "Excellent Communication"];
+
+                                    return (
+                                      <div key={targetId} className="bg-forest/15 border border-white/5 p-3 rounded-xl space-y-3">
+                                        <div className="flex items-center gap-2">
+                                          <div className="h-6 w-6 rounded-full overflow-hidden shrink-0 border border-white/10">
+                                            <img src={getPlayerAvatar(targetPlayer)} className="h-full w-full object-cover" />
+                                          </div>
+                                          <span className="text-xs font-bold text-ivory">{targetPlayer.displayName}</span>
+                                        </div>
+
+                                        <input
+                                          type="text"
+                                          placeholder={`Kudos message for ${targetPlayer.displayName.split(" ")[0]}...`}
+                                          value={rec.chat}
+                                          onChange={(e) => {
+                                            setFeedbackRecs({
+                                              ...feedbackRecs,
+                                              [targetId]: { ...rec, chat: e.target.value }
+                                            });
+                                          }}
+                                          className="w-full bg-[#073427] border-none text-xs text-ivory placeholder:text-ivory/30 rounded px-2.5 py-1.5 focus:ring-1 focus:ring-brass"
+                                        />
+
+                                        <div className="flex flex-wrap gap-1">
+                                          {skills.map((skill) => {
+                                            const isSelected = rec.endorsements.includes(skill);
+                                            return (
+                                              <button
+                                                key={skill}
+                                                type="button"
+                                                onClick={() => {
+                                                  const newEndorsements = isSelected
+                                                    ? rec.endorsements.filter(e => e !== skill)
+                                                    : [...rec.endorsements, skill];
+                                                  setFeedbackRecs({
+                                                    ...feedbackRecs,
+                                                    [targetId]: { ...rec, endorsements: newEndorsements }
+                                                  });
+                                                }}
+                                                className={`text-[9px] font-semibold px-2 py-1 rounded-full border transition ${
+                                                  isSelected 
+                                                    ? "bg-brass text-forest border-brass" 
+                                                    : "bg-[#073427]/50 text-linen/70 border-white/10 hover:border-white/20"
+                                                }`}
+                                              >
+                                                {skill}
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={async () => {
+                                      const newReview = {
+                                        matchId: m.id,
+                                        scoreA: feedbackScores.scoreA,
+                                        scoreB: feedbackScores.scoreB,
+                                        recommendations: feedbackRecs
+                                      };
+                                      const updatedReviews = { ...reviews, [m.id]: newReview };
+                                      localStorage.setItem("haff-match-reviews", JSON.stringify(updatedReviews));
+                                      setReviews(updatedReviews);
+
+                                      try {
+                                        const globalSaved = localStorage.getItem("haff-player-endorsements") || "[]";
+                                        const endorsementsList = JSON.parse(globalSaved);
+                                        for (const [targetPlayerId, info] of Object.entries(feedbackRecs)) {
+                                          endorsementsList.push({
+                                            id: crypto.randomUUID(),
+                                            targetPlayerId,
+                                            reviewerName: player.displayName,
+                                            chat: info.chat,
+                                            endorsements: info.endorsements,
+                                            timestamp: new Date().toISOString()
+                                          });
+                                        }
+                                        localStorage.setItem("haff-player-endorsements", JSON.stringify(endorsementsList));
+                                        window.dispatchEvent(new Event("haff-endorsements-updated"));
+                                      } catch (err) {
+                                        console.error(err);
+                                      }
+
+                                      const updatedStoreMatch = {
+                                        ...m,
+                                        scoreA: feedbackScores.scoreA,
+                                        scoreB: feedbackScores.scoreB,
+                                        syncStatus: "PendingSync" as const
+                                      };
+                                      await db.matches.put(updatedStoreMatch);
+                                      useClubStore.setState({
+                                        matches: matches.map(item => item.id === m.id ? updatedStoreMatch : item)
+                                      });
+                                      await updateMatchScores(m.id, feedbackScores.scoreA, feedbackScores.scoreB);
+
+                                      setReviewingMatch(null);
+                                    }}
+                                    className="flex-1 rounded-xl bg-brass px-3 py-2 font-black text-forest text-xs hover:bg-ivory transition"
+                                  >
+                                    Submit Feedback
+                                  </button>
+                                  <button
+                                    onClick={() => setReviewingMatch(null)}
+                                    className="rounded-xl bg-forest/20 px-3 py-2 font-bold text-xs hover:bg-forest/30 transition text-ivory"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setReviewingMatch(m);
+                                  setFeedbackScores({ scoreA: m.scoreA, scoreB: m.scoreB });
+                                  const initialRecs: any = {};
+                                  otherPlayerIds.forEach(id => {
+                                    initialRecs[id] = { chat: "", endorsements: m.id === reviewingMatch?.id ? reviewingMatch.recommendations[id]?.endorsements ?? [] : [] };
+                                  });
+                                  setFeedbackRecs(initialRecs);
+                                }}
+                                className="mt-3 w-full rounded-xl bg-forest/40 hover:bg-forest/60 border border-white/10 px-3 py-2 text-xs font-bold transition flex items-center justify-center gap-1.5"
+                              >
+                                <span>{isReviewed ? "📝 Edit Review" : "⭐ Leave Review & Kudos"}</span>
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </Card>
         </div>
       )}

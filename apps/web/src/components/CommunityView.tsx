@@ -35,7 +35,7 @@ const api = async (url: string, options?: RequestInit) => {
   const data = text && response.headers.get("content-type")?.includes("application/json")
     ? JSON.parse(text)
     : {};
-  if (!response.ok) throw new Error(data.error ?? "Request failed");
+  if (!response.ok) throw new Error(data.error ?? "Unable to reach the HAFF community server. Please verify your connection or contact the desk coordinator.");
   return data;
 };
 

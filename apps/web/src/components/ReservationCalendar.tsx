@@ -73,7 +73,7 @@ const api = async (url: string, options?: RequestInit) => {
   });
   const text = await response.text();
   const data = text && response.headers.get("content-type")?.includes("application/json") ? JSON.parse(text) : {};
-  if (!response.ok) throw new Error(data.error ?? "Request failed.");
+  if (!response.ok) throw new Error(data.error ?? "Unable to complete request. Please verify status with the marshal at the front desk.");
   return data;
 };
 
@@ -515,7 +515,7 @@ function ReservationDrawer({ member, selection, courts, close, reload, onMemberU
       await reload();
       close();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Request failed.");
+      setError(reason instanceof Error ? reason.message : "Unable to complete reservation request. Please try again shortly.");
     } finally {
       setSubmitting(false);
     }

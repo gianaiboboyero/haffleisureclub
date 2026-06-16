@@ -80,6 +80,7 @@ type ClubState = {
   startReservedCourt: (courtId: string) => Promise<void>;
   clearCourt: (courtId: string) => Promise<void>;
   finishCourt: (courtId: string) => Promise<void>;
+  updateMatchScores: (matchId: string, scoreA: number, scoreB: number) => Promise<void>;
   assignPlayerToCourt: (playerId: string, courtId: string) => Promise<void>;
   removePlayerFromCourt: (playerId: string) => Promise<void>;
   joinActiveMatch: (playerId: string, courtId: string) => Promise<void>;
@@ -1181,6 +1182,24 @@ export const useClubStore = create<ClubState>((set, get) => ({
     } else {
       pushToast(set, "Court available", `${court.name} is waiting for a complete stack of four.`, "system");
     }
+    await get().publishSharedState();
+  },
+  updateMatchScores: async (matchId, scoreA, scoreB) => {
+    const state = get();
+    const match = state.matches.find((m) => m.id === matchId);
+    if (!match) return;
+    const updated = {
+      ...match,
+      scoreA,
+      scoreB,
+      syncStatus: "PendingSync" as const
+    };
+    await db.matches.put(updated);
+    await queue("UPDATE_MATCH", "Match", matchId, updated);
+    
+    set({
+      matches: state.matches.map((m) => (m.id === matchId ? updated : m))
+    });
     await get().publishSharedState();
   },
   assignPlayerToCourt: async (playerId, courtId) => {
