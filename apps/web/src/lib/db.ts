@@ -1,13 +1,18 @@
 import Dexie, { type Table } from "dexie";
-import type { Court, Match, Player, Session } from "./types";
+import type { Court, Match, Player, Session, Reservation, Transaction } from "./types";
 
 export type SyncQueueItem = {
   id: string;
+  idempotencyKey: string;
+  deviceId: string;
+  actorId?: string;
   actionType: string;
   entityType: string;
   entityId: string;
+  baseVersion?: number;
   payload: unknown;
   status: "Pending" | "Syncing" | "Synced" | "Failed" | "Conflict";
+  retryCount: number;
   createdAt: string;
 };
 
@@ -17,62 +22,78 @@ class PicklePulseDb extends Dexie {
   matches!: Table<Match, string>;
   sessions!: Table<Session, string>;
   syncQueue!: Table<SyncQueueItem, string>;
+  reservations!: Table<Reservation, string>;
+  transactions!: Table<Transaction, string>;
 
   constructor() {
     super("haff-picklepulse");
-    this.version(2).stores({
+    this.version(3).stores({
       players: "id, displayName, checkedIn",
       courts: "id, number, status",
       matches: "id, courtId, status, syncStatus",
       sessions: "id, name, status",
-      syncQueue: "id, entityType, entityId, status"
+      syncQueue: "id, entityType, entityId, status",
+      reservations: "id, courtId, startTime, status",
+      transactions: "id, playerId, type, status, timestamp"
     });
+    this.version(4)
+      .stores({
+        players: "id, displayName, checkedIn",
+        courts: "id, number, status",
+        matches: "id, courtId, status, syncStatus",
+        sessions: "id, name, status",
+        syncQueue: "id, entityType, entityId, status",
+        reservations: "id, courtId, startTime, status",
+        transactions: "id, playerId, type, status, timestamp"
+      })
+      .upgrade(async (transaction) => {
+        await Promise.all([
+          transaction.table("players").clear(),
+          transaction.table("matches").clear(),
+          transaction.table("reservations").clear(),
+          transaction.table("transactions").clear()
+        ]);
+        await transaction
+          .table("syncQueue")
+          .where("entityType")
+          .anyOf(["Player", "Match", "Reservation", "Transaction"])
+          .delete();
+        await transaction.table("sessions").toCollection().modify((session) => {
+          session.checkedInPlayerIds = [];
+        });
+      });
+    this.version(5)
+      .stores({
+        players: "id, displayName, checkedIn",
+        courts: "id, number, status",
+        matches: "id, courtId, status, syncStatus",
+        sessions: "id, name, status",
+        syncQueue: "id, idempotencyKey, entityType, entityId, status, createdAt",
+        reservations: "id, courtId, startTime, status",
+        transactions: "id, playerId, type, status, timestamp"
+      })
+      .upgrade(async (transaction) => {
+        const deviceId = getDeviceId();
+        await transaction.table("syncQueue").toCollection().modify((item) => {
+          item.idempotencyKey ??= item.id;
+          item.deviceId ??= deviceId;
+          item.retryCount ??= 0;
+        });
+      });
   }
 }
 
 export const db = new PicklePulseDb();
 
+export function getDeviceId() {
+  const key = "haff-device-id";
+  const existing = localStorage.getItem(key);
+  if (existing) return existing;
+  const id = crypto.randomUUID();
+  localStorage.setItem(key, id);
+  return id;
+}
 
-export const seedPlayers: Player[] = [
-  ["Juan Dela Cruz", "Intermediate", 4],
-  ["Maria Santos", "Pro", 6],
-  ["Alex Tan", "Pro", 6],
-  ["Kim Reyes", "Low Intermediate", 3],
-  ["Paolo Lim", "Novice", 2],
-  ["Bea Garcia", "Beginner", 1],
-  ["Carlo Cruz", "Newbie", 0.5],
-  ["Nina Yu", "Intermediate", 4],
-  ["Luis Ramos", "Low Intermediate", 3]
-].map(([displayName, skillLevel, rating], index) => ({
-  id: `player-${index + 1}`,
-  displayName: displayName as string,
-  skillLevel: skillLevel as Player["skillLevel"],
-  rating: rating as number,
-  tags: index % 3 === 0 ? ["Regular"] : [],
-  checkedIn: index < 8,
-  parked: false,
-  totalGamesPlayed: 8 + index * 3,
-  totalDaysPlayed: 3 + index,
-  lastPlayedDate: "2026-06-04",
-  isActive: true
-}));
-
-export const demoPlayerAccount: Player = {
-  id: "player-haff-demo",
-  displayName: "Giana Ibo",
-  fullName: "Giana Ibo",
-  skillLevel: "Beginner",
-  rating: 1,
-  tags: ["Member"],
-  checkedIn: false,
-  parked: false,
-  totalGamesPlayed: 0,
-  totalDaysPlayed: 0,
-  isActive: true,
-  phoneNumber: "09170000000",
-  accessCode: "1234",
-  preferredPlayStyle: "Casual open play"
-};
 
 export const seedCourts: Court[] = [1, 2, 3, 4].map((number) => ({
   id: `court-${number}`,

@@ -14,6 +14,7 @@ export type Session = {
   courtIds: string[];
   checkedInPlayerIds: string[];
   settings: Record<string, any>;
+  version?: number;
 };
 
 export type Player = {
@@ -35,6 +36,8 @@ export type Player = {
   emergencyNote?: string;
   preferredPlayStyle?: string;
   avatarUrl?: string;
+  statusNote?: string;
+  version?: number;
 };
 
 export type Court = {
@@ -45,6 +48,7 @@ export type Court = {
   currentMatchId?: string;
   reservedFor?: string;
   reservedPlayerIds?: string[];
+  version?: number;
 };
 
 export type Match = {
@@ -58,6 +62,7 @@ export type Match = {
   startedAt?: string;
   endedAt?: string;
   syncStatus: SyncStatus;
+  version?: number;
 };
 
 export type Toast = {
@@ -65,4 +70,53 @@ export type Toast = {
   title: string;
   message: string;
   tone: "system" | "fun" | "achievement";
+};
+
+export type Reservation = {
+  id: string;
+  title?: string;
+  notes?: string;
+  courtId: string;
+  startTime: string;
+  endTime: string;
+  hostPlayerId: string;
+  playerIds: string[];
+  status: "Confirmed" | "Cancelled" | "NoShow";
+  paymentStatus: "Paid" | "Pending" | "Refunded";
+  feeAmount: number;
+  cancellationReason?: string;
+  seriesId?: string;
+};
+
+export type Transaction = {
+  id: string;
+  playerId: string;
+  amount: number;
+  type: "CheckInFee" | "CourtReservation" | "SessionPass";
+  paymentMethod: "Cash" | "EWallet" | "Card";
+  status: "Pending" | "Success" | "Failed" | "Voided";
+  timestamp: string;
+  voidReason?: string;
+  voidedAt?: string;
+};
+
+export type Testimonial = {
+  id: string;
+  quote: string;
+  rating: number;
+  displayName: string;
+};
+
+export type Achievement = {
+  id: string;
+  title: string;
+  value: string;
+  desc: string;
+};
+
+export type Announcement = {
+  id: string;
+  title: string;
+  content: string;
+  date: string;
 };

@@ -1,0 +1,16 @@
+{
+  "projectId": "prj_ig9Ohv3rnzL3eMkjAHbEUzxEAV1v",
+  "orgId": "team_6TijlDz0u3u7bcM50FCGafNS",
+  "projectName": "haff-leisure-club",
+  "settings": {
+    "createdAt": 1781293181083,
+    "framework": "vite",
+    "devCommand": null,
+    "installCommand": "npm install",
+    "buildCommand": "npm run build:web",
+    "outputDirectory": "dist/web",
+    "rootDirectory": null,
+    "directoryListing": false,
+    "nodeVersion": "24.x"
+  }
+}

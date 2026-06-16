@@ -10,10 +10,10 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["haff-logo.jpg"],
       manifest: {
-        name: "HAFF PicklePulse",
-        short_name: "PicklePulse",
+        name: "HAFF Leisure Club - Cadiz City",
+        short_name: "HAFF Cadiz",
         theme_color: "#203d34",
-        background_color: "#f4f1e8",
+        background_color: "#082d23",
         display: "standalone",
         icons: [
           {
@@ -25,7 +25,20 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ["**/*.{js,css,html,svg,png,jpg,jpeg,webp,woff2}"]
+        globPatterns: ["**/*.{js,css,html,svg,png,jpg,jpeg,webp,woff2}"],
+        // Cache API responses for faster repeat loads
+        runtimeCaching: [
+          {
+            urlPattern: /^\/api\/auth\?action=me/,
+            handler: "NetworkFirst",
+            options: { cacheName: "api-auth", expiration: { maxAgeSeconds: 60 } }
+          },
+          {
+            urlPattern: /^\/api\/reservations/,
+            handler: "NetworkFirst",
+            options: { cacheName: "api-reservations", expiration: { maxAgeSeconds: 30 } }
+          }
+        ]
       }
     })
   ],
@@ -34,6 +47,18 @@ export default defineConfig({
   },
   build: {
     outDir: "../../dist/web",
-    emptyOutDir: true
+    emptyOutDir: true,
+    // Inline tiny assets to reduce HTTP requests
+    assetsInlineLimit: 4096,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom"],
+          motion: ["framer-motion"],
+          storage: ["dexie", "zustand"],
+          icons: ["lucide-react"]
+        }
+      }
+    }
   }
 });

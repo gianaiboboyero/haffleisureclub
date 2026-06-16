@@ -1,5 +1,5 @@
 import React from "react";
-import { motion } from "motion/react";
+import { motion } from "framer-motion";
 import { QrCode } from "lucide-react";
 
 const playerImage =
@@ -82,7 +82,7 @@ export const Component = ({
   };
 
   return (
-    <div className="relative flex min-h-[420px] w-full flex-col overflow-hidden rounded-[1.5rem] bg-forest font-sans text-ivory selection:bg-brass selection:text-forest shadow-[0_30px_90px_rgba(6,36,27,0.38)] sm:rounded-[2rem] md:min-h-[500px]">
+    <div className="relative flex min-h-[400px] w-full flex-col overflow-hidden rounded-[1.5rem] bg-forest font-sans text-ivory selection:bg-brass selection:text-forest shadow-[0_30px_90px_rgba(6,36,27,0.38)] sm:rounded-[2rem] md:min-h-[450px]">
       <div className="absolute inset-0 bg-[linear-gradient(to_right,#fff8ea1f_1px,transparent_1px),linear-gradient(to_bottom,#fff8ea1f_1px,transparent_1px)] bg-[size:3.75rem_3.75rem] pointer-events-none" />
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(244,201,93,0.34),transparent_34%),radial-gradient(circle_at_80%_18%,rgba(127,182,154,0.35),transparent_28%),linear-gradient(180deg,rgba(14,90,67,0.2),rgba(6,36,27,0.84))] pointer-events-none" />
 
@@ -99,7 +99,7 @@ export const Component = ({
           ))}
         </div>
         <button onClick={onLogin} className="rounded-full bg-ivory px-5 py-2 text-xs font-bold text-forest transition hover:bg-linen md:text-sm">
-          Player login
+          Sign in
         </button>
       </nav>
 
@@ -177,7 +177,7 @@ export const Component = ({
           className="relative z-30 flex flex-col items-center gap-2.5 sm:flex-row"
         >
           <button onClick={onLogin} className="min-h-12 rounded-full bg-linen px-6 text-sm font-black text-forest shadow-xl ring-1 ring-ivory/40 transition hover:bg-ivory">
-            Open player account
+            Sign in to player profile
           </button>
           <button onClick={onQuickCheckIn} className="min-h-12 rounded-full border border-linen/35 bg-linen/10 px-6 text-sm font-bold text-linen backdrop-blur transition hover:bg-linen/16">
             Check me in

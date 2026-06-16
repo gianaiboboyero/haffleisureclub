@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-arm64-openssl-3.0.x"]
 }
 
 datasource db {
@@ -7,27 +8,76 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+enum TestimonialStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ReportStatus {
+  OPEN
+  RESOLVED
+}
+
+enum OperationEventStatus {
+  PENDING
+  APPLIED
+  CONFLICT
+  FAILED
+}
+
+enum ReservationApprovalStatus {
+  REQUESTED
+  AWAITING_PAYMENT
+  CONFIRMED
+  REJECTED
+  CANCELLED
+  NO_SHOW
+  PAYMENT_ISSUE
+}
+
+enum ReservationPaymentStatus {
+  PENDING
+  PAID
+  REFUNDED
+  VOIDED
+}
+
 model Player {
-  id                   String   @id @default(cuid())
+  id                   String        @id @default(cuid())
   displayName          String
   fullName             String?
   nickname             String?
   skillLevel           String
-  rating               Float    @default(2)
+  rating               Float         @default(2)
   avatarUrl            String?
   phone                String?
   email                String?
-  tags                 String[] @default([])
-  status               String   @default("Active")
-  totalGamesPlayed     Int      @default(0)
-  totalPointsScored    Int      @default(0)
-  totalPointsAgainst   Int      @default(0)
-  totalDaysPlayed      Int      @default(0)
-  currentPlayDayStreak Int      @default(0)
-  bestPlayDayStreak    Int      @default(0)
+  tags                 String[]      @default([])
+  status               String        @default("Active")
+  totalGamesPlayed     Int           @default(0)
+  totalPointsScored    Int           @default(0)
+  totalPointsAgainst   Int           @default(0)
+  totalDaysPlayed      Int           @default(0)
+  currentPlayDayStreak Int           @default(0)
+  bestPlayDayStreak    Int           @default(0)
   lastPlayedDate       DateTime?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  version              Int           @default(1)
+  user                 User?
+  testimonials         Testimonial[]
 }
 
 model Court {
@@ -40,6 +90,11 @@ model Court {
   notes          String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+  reservationSetting CourtReservationSetting?
+  reservations   CourtReservation[]
+  allocations    CourtAllocation[]
+  blackouts      CourtBlackout[]
 }
 
 model Session {
@@ -56,35 +111,42 @@ model Session {
   settings           Json
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+  version            Int      @default(1)
+
+  @@index([status, date])
 }
 
 model Match {
-  id             String   @id @default(cuid())
-  sessionId      String?
-  courtId        String?
-  mode           String
-  teamAPlayerIds String[] @default([])
-  teamBPlayerIds String[] @default([])
-  scoreA         Int      @default(0)
-  scoreB         Int      @default(0)
-  status         String   @default("Queued")
-  startedAt      DateTime?
-  endedAt        DateTime?
+  id              String    @id @default(cuid())
+  sessionId       String?
+  courtId         String?
+  mode            String
+  teamAPlayerIds  String[]  @default([])
+  teamBPlayerIds  String[]  @default([])
+  scoreA          Int       @default(0)
+  scoreB          Int       @default(0)
+  status          String    @default("Queued")
+  startedAt       DateTime?
+  endedAt         DateTime?
   durationSeconds Int?
-  syncStatus     String   @default("PendingSync")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  syncStatus      String    @default("PendingSync")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  version         Int       @default(1)
+
+  @@index([sessionId, status])
+  @@index([courtId, status])
 }
 
 model SyncEvent {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   actionType String
   entityType String
   entityId   String
   payload    Json
-  status     String   @default("Pending")
+  status     String    @default("Pending")
   error      String?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime  @default(now())
   syncedAt   DateTime?
 }
 
@@ -97,4 +159,250 @@ model Notification {
   soundKey      String?
   displayTarget String
   createdAt     DateTime @default(now())
+}
+
+model CourtReservationSetting {
+  id                 String   @id @default(cuid())
+  courtId            String   @unique
+  court              Court    @relation(fields: [courtId], references: [id], onDelete: Cascade)
+  reservationsEnabled Boolean @default(false)
+  openingTime        String   @default("06:00")
+  closingTime        String   @default("22:00")
+  minDurationMinutes Int      @default(30)
+  maxDurationMinutes Int      @default(180)
+  intervalMinutes    Int      @default(30)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model CourtAllocation {
+  id          String   @id @default(cuid())
+  courtId     String
+  court       Court    @relation(fields: [courtId], references: [id], onDelete: Cascade)
+  date        DateTime
+  startTime   String   @default("15:00")
+  endTime     String   @default("23:00")
+  mode        String
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([courtId, date, startTime])
+  @@index([date, mode])
+}
+
+model CourtBlackout {
+  id        String   @id @default(cuid())
+  courtId   String
+  court     Court    @relation(fields: [courtId], references: [id], onDelete: Cascade)
+  startTime DateTime
+  endTime   DateTime
+  reason    String
+  createdById String
+  createdAt DateTime @default(now())
+
+  @@index([courtId, startTime, endTime])
+}
+
+model CourtReservation {
+  id                    String                    @id @default(cuid())
+  courtId               String
+  court                 Court                     @relation(fields: [courtId], references: [id], onDelete: Cascade)
+  requesterUserId       String
+  requester             User                      @relation("RequestedReservations", fields: [requesterUserId], references: [id], onDelete: Cascade)
+  hostPlayerId          String?
+  title                 String
+  notes                 String?
+  participantPlayerIds  String[]                  @default([])
+  startTime             DateTime
+  endTime               DateTime
+  feeAmount             Float                     @default(350)
+  approvalStatus        ReservationApprovalStatus @default(REQUESTED)
+  paymentStatus         ReservationPaymentStatus  @default(PENDING)
+  transactionId         String?
+  approvedByUserId      String?
+  approvedBy            User?                     @relation("ApprovedReservations", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  approvedAt            DateTime?
+  rejectedByUserId      String?
+  rejectedBy            User?                     @relation("RejectedReservations", fields: [rejectedByUserId], references: [id], onDelete: SetNull)
+  rejectedAt            DateTime?
+  rejectionReason       String?
+  cancelledByUserId     String?
+  cancelledBy           User?                     @relation("CancelledReservations", fields: [cancelledByUserId], references: [id], onDelete: SetNull)
+  cancelledAt           DateTime?
+  cancellationReason    String?
+  seriesId              String?
+  recurrenceRule        String?
+  visibility            String                    @default("PRIVATE")
+  version               Int                       @default(1)
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+
+  @@index([courtId, startTime, endTime])
+  @@index([requesterUserId, createdAt])
+  @@index([approvalStatus, startTime])
+  @@index([seriesId])
+}
+
+model UserNotification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  message   String
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model User {
+  id              String           @id @default(cuid())
+  email           String           @unique
+  passwordHash    String
+  role            Role             @default(MEMBER)
+  status          AccountStatus    @default(ACTIVE)
+  playerId        String?          @unique
+  player          Player?          @relation(fields: [playerId], references: [id], onDelete: SetNull)
+  sessions        AuthSession[]
+  messages        ChatMessage[]
+  reactions       ChatReaction[]
+  chatReports     ChatReport[]
+  testimonials    Testimonial[]
+  auditLogs       AuditLog[]
+  operationEvents OperationEvent[]
+  requestedReservations CourtReservation[] @relation("RequestedReservations")
+  approvedReservations  CourtReservation[] @relation("ApprovedReservations")
+  rejectedReservations  CourtReservation[] @relation("RejectedReservations")
+  cancelledReservations CourtReservation[] @relation("CancelledReservations")
+  notifications          UserNotification[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+}
+
+model AuthSession {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model ChatMessage {
+  id        String         @id @default(cuid())
+  authorId  String
+  author    User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  body      String
+  replyToId String?
+  replyTo   ChatMessage?   @relation("ChatReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies   ChatMessage[]  @relation("ChatReplies")
+  reactions ChatReaction[]
+  reports   ChatReport[]
+  editedAt  DateTime?
+  deletedAt DateTime?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@index([createdAt])
+  @@index([authorId])
+  @@index([createdAt, id])
+}
+
+model ChatReaction {
+  id        String      @id @default(cuid())
+  messageId String
+  message   ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emoji     String
+  createdAt DateTime    @default(now())
+
+  @@unique([messageId, userId, emoji])
+}
+
+model ChatReport {
+  id         String       @id @default(cuid())
+  messageId  String
+  message    ChatMessage  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  reporterId String
+  reporter   User         @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  reason     String
+  status     ReportStatus @default(OPEN)
+  createdAt  DateTime     @default(now())
+
+  @@unique([messageId, reporterId])
+  @@index([status, createdAt])
+}
+
+model Testimonial {
+  id           String            @id @default(cuid())
+  userId       String
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  playerId     String?
+  player       Player?           @relation(fields: [playerId], references: [id], onDelete: SetNull)
+  quote        String
+  rating       Int?
+  status       TestimonialStatus @default(PENDING)
+  featured     Boolean           @default(false)
+  approvedById String?
+  approvedAt   DateTime?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([status, featured])
+}
+
+model ImprovementReport {
+  id         String   @id @default(cuid())
+  category   String
+  message    String
+  contact    String?
+  sourceHash String
+  status     String   @default("NEW")
+  createdAt  DateTime @default(now())
+
+  @@index([sourceHash, createdAt])
+  @@index([status, createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+}
+
+model OperationEvent {
+  id             String               @id @default(cuid())
+  idempotencyKey String               @unique
+  deviceId       String
+  actorId        String
+  actor          User                 @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  actionType     String
+  entityType     String
+  entityId       String
+  baseVersion    Int?
+  payload        Json
+  clientAt       DateTime
+  status         OperationEventStatus @default(PENDING)
+  result         Json?
+  error          String?
+  createdAt      DateTime             @default(now())
+  appliedAt      DateTime?
+
+  @@index([actorId, createdAt])
+  @@index([status, createdAt])
+  @@index([entityType, entityId])
 }

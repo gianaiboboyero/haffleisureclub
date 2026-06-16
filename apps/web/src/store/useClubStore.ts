@@ -1,10 +1,13 @@
 import { create } from "zustand";
-import { db, demoPlayerAccount, seedCourts, seedPlayers } from "../lib/db";
-import { playSound } from "../lib/sound";
+import { db, getDeviceId, seedCourts } from "../lib/db";
+import { playSound, speakAnnouncement } from "../lib/sound";
 import { todayKey } from "../lib/utils";
-import type { Court, Match, Player, Toast, Session } from "../lib/types";
+import type { Court, Match, Player, Toast, Session, Reservation, Transaction, Testimonial, Achievement, Announcement } from "../lib/types";
 
-type ViewMode = "admin" | "player" | "tv";
+let suppressSharedPublishUntil = 0;
+let suppressSharedRefreshUntil = 0;
+
+type ViewMode = "landing" | "admin" | "player" | "parking" | "tv" | "calendar" | "finance" | "community";
 
 type ClubState = {
   players: Player[];
@@ -20,6 +23,14 @@ type ClubState = {
   hydrated: boolean;
   matchDurationMinutes: number;
   clubStatus: string;
+  reservations: Reservation[];
+  transactions: Transaction[];
+  testimonials: Testimonial[];
+  announcements: Announcement[];
+  achievements: Achievement[];
+  activeBillboard: { courtName: string; players: Array<{ displayName: string; avatarUrl?: string; skillLevel: string }> } | null;
+  showBillboard: (courtName: string, players: Array<{ displayName: string; avatarUrl?: string; skillLevel: string }>) => void;
+  clearBillboard: () => void;
   setView: (view: ViewMode) => void;
   setMatchDurationMinutes: (minutes: number) => void;
   setClubStatus: (status: string) => void;
@@ -27,11 +38,24 @@ type ClubState = {
   setOnline: (online: boolean) => void;
   refreshPendingSyncCount: () => Promise<void>;
   processSyncQueue: () => Promise<void>;
+  refreshSharedState: () => Promise<void>;
+  publishSharedState: () => Promise<void>;
+
+  // Reservation Actions
+  addReservation: (reservation: Omit<Reservation, "id">) => Promise<void>;
+  cancelReservation: (id: string, reason?: string) => Promise<void>;
+
+  // Transaction Actions
+  addTransaction: (transaction: Omit<Transaction, "id" | "status" | "timestamp">) => Promise<void>;
+  completeTransaction: (id: string) => Promise<void>;
+  voidTransaction: (id: string, reason: string) => Promise<void>;
+
   // Player Actions
-  checkIn: (playerId: string) => Promise<void>;
+  checkIn: (playerId: string, autoLog?: boolean) => Promise<void>;
   checkOut: (playerId: string) => Promise<void>;
+  checkOutAll: () => Promise<void>;
   setPlayerParked: (playerId: string, parked: boolean) => Promise<void>;
-  movePlayerToStack: (playerId: string, stackIndex: number) => void;
+  movePlayerToIndex: (playerId: string, targetIndex: number) => Promise<void>;
   addPlayer: (player: Omit<Player, "id" | "totalGamesPlayed" | "totalDaysPlayed">) => Promise<void>;
   updatePlayer: (player: Player) => Promise<void>;
   deletePlayer: (playerId: string) => Promise<void>;
@@ -58,7 +82,51 @@ type ClubState = {
   finishCourt: (courtId: string) => Promise<void>;
   assignPlayerToCourt: (playerId: string, courtId: string) => Promise<void>;
   removePlayerFromCourt: (playerId: string) => Promise<void>;
+  joinActiveMatch: (playerId: string, courtId: string) => Promise<void>;
   dismissToast: (id: string) => void;
+  suppressRefresh: (ms?: number) => void;
+  addTestimonial: (quote: string, rating: number, displayName: string) => Promise<void>;
+  deleteTestimonial: (id: string) => Promise<void>;
+  addAnnouncement: (title: string, content: string) => Promise<void>;
+  deleteAnnouncement: (id: string) => Promise<void>;
+  addAchievement: (title: string, value: string, desc: string) => Promise<void>;
+  deleteAchievement: (id: string) => Promise<void>;
+  seedDemoPlayers: () => Promise<void>;
+};
+
+const getInitialTestimonials = () => {
+  const existing = localStorage.getItem("haff-testimonials");
+  if (existing) return JSON.parse(existing);
+  const defaults = [
+    { id: "t-1", quote: "HAFF Leisure Club has the best open play rotation! Extremely friendly and organized.", rating: 5, displayName: "Ace" },
+    { id: "t-2", quote: "Love the cafe, iced matchas, and smart court countdown timers. Very premium.", rating: 5, displayName: "Dink" },
+    { id: "t-3", quote: "Perfect venue to check in, park when you need to grab a bite, and step right back into queue.", rating: 5, displayName: "Spike" }
+  ];
+  localStorage.setItem("haff-testimonials", JSON.stringify(defaults));
+  return defaults;
+};
+
+const getInitialAchievements = () => {
+  const existing = localStorage.getItem("haff-achievements");
+  if (existing) return JSON.parse(existing);
+  const defaults = [
+    { id: "ac-1", title: "Games Logged Today", value: "42 matches", desc: "Active open-play courts running smoothly" },
+    { id: "ac-2", title: "Average Wait Time", value: "12 minutes", desc: "Highly optimized stack assignments" },
+    { id: "ac-3", title: "Players Checked In", value: "38 regulars", desc: "Connecting diverse skill levels" }
+  ];
+  localStorage.setItem("haff-achievements", JSON.stringify(defaults));
+  return defaults;
+};
+
+const getInitialAnnouncements = () => {
+  const existing = localStorage.getItem("haff-announcements");
+  if (existing) return JSON.parse(existing);
+  const defaults = [
+    { id: "an-1", title: "Summer Pickleball Open", content: "Registration opens next Monday at the front desk. Limited slots available!", date: "2026-06-15" },
+    { id: "an-2", title: "New Court Hours", content: "We are now open from 6:00 AM to 10:00 PM daily starting this week.", date: "2026-06-14" }
+  ];
+  localStorage.setItem("haff-announcements", JSON.stringify(defaults));
+  return defaults;
 };
 
 export const useClubStore = create<ClubState>((set, get) => ({
@@ -66,16 +134,34 @@ export const useClubStore = create<ClubState>((set, get) => ({
   courts: [],
   matches: [],
   sessions: [],
+  reservations: [],
+  transactions: [],
+  testimonials: getInitialTestimonials(),
+  announcements: getInitialAnnouncements(),
+  achievements: getInitialAchievements(),
+  activeBillboard: null,
+  showBillboard: (courtName, players) => {
+    set({ activeBillboard: { courtName, players } });
+    playSound("checkin");
+    setTimeout(() => {
+      set((state) => (state.activeBillboard?.courtName === courtName ? { activeBillboard: null } : {}));
+    }, 5000);
+  },
+  clearBillboard: () => set({ activeBillboard: null }),
   currentSessionId: localStorage.getItem("haff-current-session-id") ?? "default-active-session",
   stackOrder: JSON.parse(localStorage.getItem("haff-stack-order") ?? "[]") as string[],
   toasts: [],
   view: (() => {
     const path = window.location.pathname.replace(/^\//, "");
-    if (path === "admin" || path === "player" || path === "tv") return path;
+    if (path === "home" || path === "landing") return "landing";
+    if (["landing", "admin", "player", "parking", "tv", "calendar", "finance", "community"].includes(path)) return path;
     const hash = window.location.hash.replace(/^#\/?/, "");
-    if (hash === "admin" || hash === "player" || hash === "tv") return hash;
+    if (hash === "home" || hash === "landing") return "landing";
+    if (["landing", "admin", "player", "parking", "tv", "calendar", "finance", "community"].includes(hash)) return hash;
     if (hash === "display") return "tv";
-    return "admin";
+    if (hash === "payments" || hash === "revenue") return "finance";
+    if (hash === "schedule" || hash === "reservation") return "calendar";
+    return "landing";
   })() as ViewMode,
   online: navigator.onLine,
   pendingSyncCount: 0,
@@ -83,7 +169,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
   matchDurationMinutes: Number(localStorage.getItem("haff-match-duration-minutes") ?? 12),
   clubStatus: localStorage.getItem("haff-club-status") ?? "",
   setView: (view) => {
-    window.history.pushState(null, "", `/${view}`);
+    window.history.pushState(null, "", view === "landing" ? "/home" : `/${view}`);
     set({ view });
   },
   setMatchDurationMinutes: (minutes) => {
@@ -99,67 +185,40 @@ export const useClubStore = create<ClubState>((set, get) => ({
     window.dispatchEvent(new CustomEvent("haff-club-status", { detail: next }));
   },
   hydrate: async () => {
-    // 1. Determine online status and check for pending unsynced changes
+    if (Date.now() < suppressSharedRefreshUntil) return;
     const online = navigator.onLine;
     const pendingSyncCount = await db.syncQueue.where("status").equals("Pending").count();
 
-    if (online && pendingSyncCount === 0) {
-      try {
-        const baseUrl = (import.meta as any).env?.VITE_API_URL || "http://localhost:3001";
-        
-        // Pull latest players from NestJS
-        const resPlayers = await fetch(`${baseUrl}/players`);
-        if (resPlayers.ok) {
-          const serverPlayers = await resPlayers.json();
-          if (Array.isArray(serverPlayers) && serverPlayers.length > 0) {
-            await db.players.bulkPut(serverPlayers);
-          }
-        }
-
-        // Pull latest courts from NestJS
-        const resCourts = await fetch(`${baseUrl}/courts`);
-        if (resCourts.ok) {
-          const serverCourts = await resCourts.json();
-          if (Array.isArray(serverCourts) && serverCourts.length > 0) {
-            await db.courts.bulkPut(serverCourts);
-          }
-        }
-      } catch (e) {
-        console.warn("Server pull sync failed, falling back to local storage:", e);
-      }
-    }
-
-    // 2. Load and seed if local database is completely empty
-    if ((await db.players.count()) === 0) {
-      await db.players.bulkPut(seedPlayers);
+    // 1. Load local data immediately — don't wait for server
+    if ((await db.courts.count()) === 0) {
       await db.courts.bulkPut(seedCourts);
     }
-    const retiredSeedPlayer = await db.players.get("player-10");
-    if (retiredSeedPlayer?.displayName === "Mark Flores") {
-      await db.players.delete(retiredSeedPlayer.id);
-    }
-    const demoAccount = await db.players.get(demoPlayerAccount.id);
-    if (!demoAccount) {
-      await db.players.put(demoPlayerAccount);
-    }
 
-    // 3. Normalize skillLevel for security
-    let players = (await db.players.toArray()).map((player) => ({
+    const [rawPlayers, rawCourts, matches, sessions, rawReservations, rawTransactions] = await Promise.all([
+      db.players.toArray(),
+      db.courts.toArray(),
+      db.matches.toArray(),
+      db.sessions.toArray(),
+      db.reservations.toArray(),
+      db.transactions.toArray(),
+    ]);
+
+    const players = rawPlayers.map((player) => ({
       ...player,
       skillLevel: normalizeSkillLevel(player.skillLevel),
       parked: player.parked ?? false
     }));
-    await db.players.bulkPut(players);
-
-    const courts = (await db.courts.toArray()).map((court) =>
+    const courts = rawCourts.map((court) =>
       court.status === "InUse" && !court.currentMatchId ? { ...court, status: "Available" as const } : court
     );
-    await db.courts.bulkPut(courts);
+    const reservations = rawReservations.map((r) =>
+      r.paymentStatus === "Pending" ? { ...r, paymentStatus: "Paid" as const } : r
+    );
+    const transactions = rawTransactions.map((t) =>
+      t.status === "Pending" ? { ...t, status: "Success" as const } : t
+    );
 
-    const matches = await db.matches.toArray();
-    const sessions = await db.sessions.toArray();
-
-    let currentSessionId = get().currentSessionId || "default-active-session";
+    let currentSessionId = get().currentSessionId || localStorage.getItem("haff-current-session-id") || "default-active-session";
     if (sessions.length === 0) {
       const defaultSession: Session = {
         id: "default-active-session",
@@ -173,7 +232,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
         settings: {}
       };
       sessions.push(defaultSession);
-      await db.sessions.put(defaultSession);
+      void db.sessions.put(defaultSession);
     }
     if (!currentSessionId) {
       currentSessionId = sessions[0]?.id || "default-active-session";
@@ -184,17 +243,67 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const stackOrder = reconcileStackOrder(storedOrder, players, matches, courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
 
+    // 2. Render immediately with local data
     set({
       players,
       courts,
       matches,
       sessions,
+      reservations,
+      transactions,
       currentSessionId,
       stackOrder,
       pendingSyncCount,
       clubStatus: localStorage.getItem("haff-club-status") ?? "",
       hydrated: true
     });
+
+    // 3. Background: persist normalizations + server sync (non-blocking)
+    void (async () => {
+      await Promise.all([
+        db.players.bulkPut(players),
+        db.courts.bulkPut(courts),
+        db.reservations.bulkPut(reservations),
+        db.transactions.bulkPut(transactions),
+      ]);
+
+      if (online && pendingSyncCount === 0) {
+        try {
+          const baseUrl = (import.meta as any).env?.VITE_API_URL || ((import.meta as any).env?.PROD ? "/api" : "http://localhost:3001");
+          const [resPlayers, resCourts] = await Promise.all([
+            fetch(`${baseUrl}/players`),
+            fetch(`${baseUrl}/courts`)
+          ]);
+          const updates: Promise<unknown>[] = [];
+          if (resPlayers.ok) {
+            const response = await resPlayers.json();
+            const serverPlayers = Array.isArray(response) ? response : response.players;
+            if (Array.isArray(serverPlayers)) {
+              updates.push(db.players.clear().then(() => serverPlayers.length > 0 ? db.players.bulkPut(serverPlayers) : Promise.resolve()));
+              get().players; // trigger re-read below
+            }
+          }
+          if (resCourts.ok) {
+            const response = await resCourts.json();
+            const serverCourts = Array.isArray(response) ? response : response.courts;
+            if (Array.isArray(serverCourts) && serverCourts.length > 0) {
+              updates.push(db.courts.bulkPut(serverCourts));
+            }
+          }
+          if (updates.length > 0) {
+            await Promise.all(updates);
+            // Re-read and refresh state silently
+            const [freshPlayers, freshCourts] = await Promise.all([db.players.toArray(), db.courts.toArray()]);
+            set({
+              players: freshPlayers.map((p) => ({ ...p, skillLevel: normalizeSkillLevel(p.skillLevel), parked: p.parked ?? false })),
+              courts: freshCourts.map((c) => c.status === "InUse" && !c.currentMatchId ? { ...c, status: "Available" as const } : c),
+            });
+          }
+        } catch {
+          // Silently ignore — we already have local data
+        }
+      }
+    })();
   },
   setOnline: (online) => set({ online }),
   refreshPendingSyncCount: async () => {
@@ -203,6 +312,80 @@ export const useClubStore = create<ClubState>((set, get) => ({
     if (pendingSyncCount > 0) {
       await get().processSyncQueue();
     }
+  },
+  refreshSharedState: async () => {
+    if (Date.now() < suppressSharedRefreshUntil) return;
+    const currentSessionId = get().currentSessionId;
+    if (!currentSessionId || !navigator.onLine) return;
+    let shared: any;
+    try {
+      const response = await fetch(`/api/club-state?sessionId=${encodeURIComponent(currentSessionId)}`, {
+        credentials: "include",
+        cache: "no-store"
+      });
+      if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) return;
+      shared = await response.json();
+    } catch {
+      return;
+    }
+    const checkedInIds = new Set<string>(shared.checkedInPlayerIds ?? []);
+    const parkedIds = new Set<string>(shared.parkedPlayerIds ?? []);
+    const players = get().players.map((player) => ({
+      ...player,
+      checkedIn: checkedInIds.has(player.id),
+      parked: checkedInIds.has(player.id) && parkedIds.has(player.id)
+    }));
+    const stackOrder = reconcileStackOrder(
+      Array.isArray(shared.stackOrder) ? shared.stackOrder : [],
+      players,
+      Array.isArray(shared.matches) ? shared.matches : get().matches,
+      Array.isArray(shared.courts) ? shared.courts : get().courts
+    );
+    const courts = Array.isArray(shared.courts) && shared.courts.length > 0 ? shared.courts : get().courts;
+    const matches = Array.isArray(shared.matches) ? shared.matches : get().matches;
+    const currentSignature = JSON.stringify({
+      players: get().players.map(({ id, checkedIn, parked }) => [id, checkedIn, Boolean(parked)]),
+      courts: get().courts,
+      matches: get().matches,
+      stackOrder: get().stackOrder
+    });
+    const nextSignature = JSON.stringify({
+      players: players.map(({ id, checkedIn, parked }) => [id, checkedIn, Boolean(parked)]),
+      courts,
+      matches,
+      stackOrder
+    });
+    if (currentSignature === nextSignature) return;
+    await db.players.bulkPut(players);
+    if (Array.isArray(shared.courts) && shared.courts.length > 0) await db.courts.bulkPut(courts);
+    if (Array.isArray(shared.matches)) {
+      await db.matches.clear();
+      if (matches.length > 0) await db.matches.bulkPut(matches);
+    }
+    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    suppressSharedPublishUntil = Date.now() + 750;
+    set({ players, courts, matches, stackOrder });
+  },
+  publishSharedState: async () => {
+    if (Date.now() < suppressSharedPublishUntil) return;
+    suppressSharedRefreshUntil = Date.now() + 2500;
+
+    const state = get();
+    fetch("/api/club-state", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: state.currentSessionId,
+        checkedInPlayerIds: state.players.filter((player) => player.checkedIn).map((player) => player.id),
+        parkedPlayerIds: state.players.filter((player) => player.checkedIn && player.parked).map((player) => player.id),
+        stackOrder: state.stackOrder,
+        courts: state.courts,
+        matches: state.matches
+      })
+    }).catch(() => {
+      // Local state remains authoritative until the next successful sync.
+    });
   },
   processSyncQueue: async () => {
     if (!get().online) return;
@@ -213,11 +396,16 @@ export const useClubStore = create<ClubState>((set, get) => ({
     await db.syncQueue.where("id").anyOf(ids).modify({ status: "Syncing" });
 
     try {
-      const baseUrl = (import.meta as any).env?.VITE_API_URL || "http://localhost:3001";
-      const response = await fetch(`${baseUrl}/sync`, {
+      const baseUrl = (import.meta as any).env?.VITE_API_URL || ((import.meta as any).env?.PROD ? "/api" : "http://localhost:3001");
+      const operationSyncEnabled = ((import.meta as any).env?.VITE_OPERATION_EVENT_SYNC ?? "true") !== "false";
+      const response = await fetch(`${baseUrl}${operationSyncEnabled ? "/operations/events" : "/sync"}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(pending)
+        body: JSON.stringify(
+          operationSyncEnabled
+            ? pending.map((item) => ({ ...item, clientAt: item.createdAt }))
+            : pending
+        )
       });
 
       if (!response.ok) throw new Error("Sync response error");
@@ -229,13 +417,22 @@ export const useClubStore = create<ClubState>((set, get) => ({
 
       const failed = (result.results ?? [])
         .filter((r: any) => r.status === "Failed");
+      const conflicts = (result.results ?? [])
+        .filter((r: any) => r.status === "Conflict");
 
       if (syncedIds.length > 0) {
         await db.syncQueue.where("id").anyOf(syncedIds).delete();
       }
 
       for (const item of failed) {
-        await db.syncQueue.update(item.id, { status: "Failed" });
+        const queued = pending.find((entry) => entry.id === item.id);
+        await db.syncQueue.update(item.id, {
+          status: "Failed",
+          retryCount: (queued?.retryCount ?? 0) + 1
+        });
+      }
+      for (const item of conflicts) {
+        await db.syncQueue.update(item.id, { status: "Conflict" });
       }
     } catch (e) {
       console.warn("Background sync connection failed (changes saved locally):", e);
@@ -247,16 +444,18 @@ export const useClubStore = create<ClubState>((set, get) => ({
   },
 
   // Player Actions
-  checkIn: async (playerId) => {
+  checkIn: async (playerId, autoLog = true) => {
+    const existingPlayer = get().players.find((player) => player.id === playerId);
+    if (!existingPlayer || existingPlayer.checkedIn) return;
     const players = get().players.map((player) =>
-      player.id === playerId ? { ...player, checkedIn: true, parked: false } : player
+      player.id === playerId ? { ...player, checkedIn: true, parked: true } : player
     );
     const player = players.find((item) => item.id === playerId);
     if (!player) return;
     await db.players.put(player);
     await queue("CHECK_IN_PLAYER", "Player", player.id, player);
     playSound("checkin");
-    pushToast(set, "Player checked in", `${player.displayName} is ready for open play.`, "fun");
+    pushToast(set, "Player cleared for parking", `${player.displayName} is checked in${autoLog ? " and paid" : ""}.`, "fun");
 
     // Also update current session's checked-in list if there is an active session
     const currentSessionId = get().currentSessionId;
@@ -275,9 +474,19 @@ export const useClubStore = create<ClubState>((set, get) => ({
       }
     }
 
-    const stackOrder = reconcileStackOrder([...get().stackOrder, playerId], players, get().matches, get().courts);
+    const stackOrder = reconcileStackOrder(get().stackOrder, players, get().matches, get().courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ players, stackOrder });
+
+    if (autoLog) {
+      await get().addTransaction({
+        playerId,
+        amount: 150,
+        type: "CheckInFee",
+        paymentMethod: "Cash"
+      });
+    }
+    await get().publishSharedState();
   },
   checkOut: async (playerId) => {
     const players = get().players.map((player) =>
@@ -309,6 +518,41 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const stackOrder = reconcileStackOrder(get().stackOrder, players, get().matches, get().courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ players, stackOrder });
+    await get().publishSharedState();
+  },
+  checkOutAll: async () => {
+    const state = get();
+    const checkedInPlayers = state.players.filter(p => p.checkedIn);
+    if (checkedInPlayers.length === 0) return;
+
+    const players = state.players.map(player => 
+      player.checkedIn ? { ...player, checkedIn: false, parked: false } : player
+    );
+
+    const updatedPlayers = players.filter(p => checkedInPlayers.some(cip => cip.id === p.id));
+    await db.players.bulkPut(updatedPlayers);
+    for (const player of updatedPlayers) {
+      await queue("CHECK_OUT_PLAYER", "Player", player.id, player);
+    }
+    pushToast(set, "All players checked out", `Checked out ${checkedInPlayers.length} players.`, "system");
+
+    const currentSessionId = state.currentSessionId;
+    if (currentSessionId) {
+      const session = state.sessions.find((s) => s.id === currentSessionId);
+      if (session) {
+        const updatedSession = { ...session, checkedInPlayerIds: [] };
+        await db.sessions.put(updatedSession);
+        await queue("UPDATE_SESSION", "Session", session.id, updatedSession);
+        set((s) => ({
+          sessions: s.sessions.map((x) => x.id === currentSessionId ? updatedSession : x)
+        }));
+      }
+    }
+
+    const stackOrder = reconcileStackOrder(state.stackOrder, players, state.matches, state.courts);
+    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    set({ players, stackOrder });
+    await get().publishSharedState();
   },
   setPlayerParked: async (playerId, parked) => {
     const players = get().players.map((player) =>
@@ -334,8 +578,18 @@ export const useClubStore = create<ClubState>((set, get) => ({
       "system"
     );
     set({ players, stackOrder });
+    await get().publishSharedState();
   },
-  movePlayerToStack: (playerId, stackIndex) => {
+  movePlayerToIndex: async (playerId: string, targetIndex: number) => {
+    // If player is on a court or playing, free them first
+    const stateBefore = get();
+    const isReserved = stateBefore.courts.some(c => c.reservedPlayerIds?.includes(playerId));
+    const isPlaying = stateBefore.matches.some(m => m.status === "InProgress" && [...m.teamAPlayerIds, ...m.teamBPlayerIds].includes(playerId));
+    
+    if (isReserved || isPlaying) {
+      await get().removePlayerFromCourt(playerId);
+    }
+
     const state = get();
     const currentOrder = [...state.stackOrder];
     const oldIndex = currentOrder.indexOf(playerId);
@@ -344,35 +598,12 @@ export const useClubStore = create<ClubState>((set, get) => ({
       const player = state.players.find((p) => p.id === playerId);
       if (!player) return;
 
-      // If player is reserved on any court, remove them first
-      let updatedCourts = state.courts;
-      let courtUpdated = false;
-      updatedCourts = state.courts.map((c) => {
-        if (c.reservedPlayerIds?.includes(playerId)) {
-          courtUpdated = true;
-          const nextReserved = c.reservedPlayerIds.filter((id) => id !== playerId);
-          const nextStatus = nextReserved.length === 0 ? "Available" : c.status;
-          return { ...c, reservedPlayerIds: nextReserved, status: nextStatus } as Court;
-        }
-        return c;
-      });
-      if (courtUpdated) {
-        for (const c of updatedCourts) {
-          const oldC = state.courts.find((o) => o.id === c.id);
-          if (JSON.stringify(oldC) !== JSON.stringify(c)) {
-            db.courts.put(c).catch(console.warn);
-            queue("UPDATE_COURT_STATUS", "Court", c.id, c).catch(console.warn);
-          }
-        }
-        set({ courts: updatedCourts });
-      }
-
       // Check in / resume if needed
       let updatedPlayersList = state.players;
       if (!player.checkedIn || player.parked) {
         const updatedPlayer = { ...player, checkedIn: true, parked: false };
-        db.players.put(updatedPlayer).catch(console.warn);
-        queue("CHECK_IN_PLAYER", "Player", player.id, updatedPlayer).catch(console.warn);
+        await db.players.put(updatedPlayer);
+        await queue("CHECK_IN_PLAYER", "Player", player.id, updatedPlayer);
         
         const currentSessionId = state.currentSessionId;
         if (currentSessionId) {
@@ -382,8 +613,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
               ...session,
               checkedInPlayerIds: [...session.checkedInPlayerIds, playerId]
             };
-            db.sessions.put(updatedSession).catch(console.warn);
-            queue("UPDATE_SESSION", "Session", session.id, updatedSession).catch(console.warn);
+            await db.sessions.put(updatedSession);
+            await queue("UPDATE_SESSION", "Session", session.id, updatedSession);
             set((s) => ({
               sessions: s.sessions.map((x) => x.id === currentSessionId ? updatedSession : x)
             }));
@@ -392,53 +623,16 @@ export const useClubStore = create<ClubState>((set, get) => ({
         updatedPlayersList = state.players.map((p) => p.id === playerId ? updatedPlayer : p);
         set({ players: updatedPlayersList });
       }
+      currentOrder.splice(targetIndex, 0, playerId);
     } else {
-      // Remove player from old position and replace with "vacant"
-      currentOrder[oldIndex] = "vacant";
-    }
-
-    // Find the first vacant slot in the target stack
-    const targetStart = stackIndex * 4;
-    const targetEnd = targetStart + 3;
-    let targetIndex = -1;
-
-    for (let i = targetStart; i <= targetEnd; i++) {
-      if (currentOrder[i] === "vacant") {
-        targetIndex = i;
-        break;
-      }
-    }
-
-    if (targetIndex !== -1) {
-      currentOrder[targetIndex] = playerId;
-    } else {
-      // If target stack is full, we insert the player at targetStart and shift the others
-      let nextVacant = -1;
-      for (let i = targetStart; i < currentOrder.length; i++) {
-        if (currentOrder[i] === "vacant") {
-          nextVacant = i;
-          break;
-        }
-      }
-
-      if (nextVacant !== -1) {
-        for (let i = nextVacant; i > targetStart; i--) {
-          currentOrder[i] = currentOrder[i - 1];
-        }
-        currentOrder[targetStart] = playerId;
-      } else {
-        currentOrder.push("vacant", "vacant", "vacant", "vacant");
-        const len = currentOrder.length;
-        for (let i = len - 1; i > targetStart; i--) {
-          currentOrder[i] = currentOrder[i - 1];
-        }
-        currentOrder[targetStart] = playerId;
-      }
+      currentOrder.splice(oldIndex, 1);
+      currentOrder.splice(targetIndex, 0, playerId);
     }
 
     const stackOrder = reconcileStackOrder(currentOrder, state.players, state.matches, state.courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ stackOrder });
+    await get().publishSharedState();
   },
   addPlayer: async (playerData) => {
     const newPlayer: Player = {
@@ -462,7 +656,6 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const stackOrder = reconcileStackOrder(get().stackOrder, players, get().matches, get().courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ players, stackOrder });
-    pushToast(set, "Player updated", `${player.displayName} has been updated.`, "system");
   },
   deletePlayer: async (playerId) => {
     const player = get().players.find((p) => p.id === playerId);
@@ -699,6 +892,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ courts, stackOrder });
     pushToast(set, "Returned to queue", "Players returned to front of waiting queue.", "system");
+    await get().publishSharedState();
   },
 
   // Game/Match Actions
@@ -744,7 +938,18 @@ export const useClubStore = create<ClubState>((set, get) => ({
     if (newMatches.length > 0) {
       await db.matches.bulkPut(newMatches);
       await db.courts.bulkPut(updatedCourts);
-      for (const match of newMatches) await queue("CREATE_MATCH", "Match", match.id, match);
+      for (const match of newMatches) {
+        await queue("CREATE_MATCH", "Match", match.id, match);
+        const c = updatedCourts.find((x) => x.id === match.courtId);
+        if (c) {
+          await queue("UPDATE_COURT", "Court", c.id, c);
+          const names = [...match.teamAPlayerIds, ...match.teamBPlayerIds]
+            .map(id => state.players.find(p => p.id === id)?.displayName)
+            .filter((name): name is string => Boolean(name));
+          const list = names.length > 0 ? names.join(", ") : "players";
+          speakAnnouncement(`Next players for ${c.name}: ${list}. Please proceed to your court.`);
+        }
+      }
       pushToast(set, "Courts assigned", `${newMatches.length} match${newMatches.length === 1 ? "" : "es"} sent to court.`, "system");
     }
 
@@ -752,6 +957,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const stackOrder = reconcileStackOrder(currentOrder, state.players, matches, updatedCourts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ matches, courts: updatedCourts, stackOrder });
+    await get().publishSharedState();
   },
   reserveCourt: async (courtId) => {
     const state = get();
@@ -805,6 +1011,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const stackOrder = reconcileStackOrder(remainingOrder, state.players, state.matches, courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ courts, stackOrder });
+    await get().publishSharedState();
   },
   clearCourt: async (courtId) => {
     const courts = get().courts.map((court) =>
@@ -826,6 +1033,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const stackOrder = reconcileStackOrder(get().stackOrder, get().players, get().matches, courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ courts, stackOrder });
+    await get().publishSharedState();
   },
   startReservedCourt: async (courtId) => {
     const state = get();
@@ -833,8 +1041,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const stack = (court?.reservedPlayerIds ?? [])
       .map((id) => state.players.find((player) => player.id === id))
       .filter((player): player is Player => Boolean(player));
-    if (!court || stack.length === 0) return;
-    const teams = balanceTeams(stack);
+    if (!court) return;
+    const teams = stack.length > 0 ? balanceTeams(stack) : { a: [], b: [] };
     const match: Match = {
       id: crypto.randomUUID(),
       courtId: court.id,
@@ -857,14 +1065,28 @@ export const useClubStore = create<ClubState>((set, get) => ({
           }
         : item
     );
+    const updatedCourt = courts.find((item) => item.id === courtId);
     await db.matches.put(match);
     await db.courts.bulkPut(courts);
     await queue("START_RESERVED_STACK", "Match", match.id, match);
-    pushToast(set, "Reserved stack started", `${court.name} is now playing ${court.reservedFor}.`, "system");
+    if (updatedCourt) {
+      await queue("UPDATE_COURT", "Court", updatedCourt.id, updatedCourt);
+    }
+    
+    // Announce reserved stack start
+    if (stack.length > 0) {
+      const list = stack.map(p => p.displayName).join(", ");
+      speakAnnouncement(`Next players for ${court.name}: ${list}. Please proceed to your court.`);
+    } else {
+      speakAnnouncement(`${court.name} is now open play.`);
+    }
+    
+    pushToast(set, "Reserved stack started", `${court.name} is now playing ${court.reservedFor || "open play"}.`, "system");
     const matches = [...state.matches, match];
     const stackOrder = reconcileStackOrder(state.stackOrder, state.players, matches, courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ matches, courts, stackOrder });
+    await get().publishSharedState();
   },
   finishCourt: async (courtId) => {
     const state = get();
@@ -889,8 +1111,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
       endedAt: new Date().toISOString(),
       syncStatus: "PendingSync" as const
     };
-    const matches = state.matches.map((item) => (item.id === match.id ? completed : item));
-    const courts = state.courts.map((item) =>
+    let matches = state.matches.map((item) => (item.id === match.id ? completed : item));
+    let courts = state.courts.map((item) =>
       item.id === courtId
         ? {
             ...item,
@@ -898,17 +1120,68 @@ export const useClubStore = create<ClubState>((set, get) => ({
             currentMatchId: undefined,
             reservedFor: undefined,
             reservedPlayerIds: undefined
-          }
+        }
         : item
     );
+    const waitingOrder = reconcileStackOrder(state.stackOrder, players, state.matches, courts);
+    let nextStackStart = -1;
+    if (waitingOrder.length >= 4) {
+      nextStackStart = 0;
+    }
+    let remainingOrder = waitingOrder;
+    let nextMatch: Match | null = null;
+    if (nextStackStart >= 0) {
+      const nextIds = waitingOrder.slice(0, 4);
+      const nextPlayers = nextIds
+        .map((id) => players.find((player) => player.id === id))
+        .filter((player): player is Player => Boolean(player?.checkedIn && !player.parked));
+      if (nextPlayers.length === 4) {
+        const teams = balanceTeams(nextPlayers);
+        nextMatch = {
+          id: crypto.randomUUID(),
+          courtId,
+          teamAPlayerIds: teams.a.map((player) => player.id),
+          teamBPlayerIds: teams.b.map((player) => player.id),
+          scoreA: 0,
+          scoreB: 0,
+          status: "InProgress",
+          startedAt: new Date().toISOString(),
+          syncStatus: "PendingSync"
+        };
+        matches = [...matches, nextMatch];
+        courts = courts.map((item) =>
+          item.id === courtId ? { ...item, status: "InUse" as const, currentMatchId: nextMatch!.id } : item
+        );
+        remainingOrder = waitingOrder.slice(4);
+      }
+    }
+    remainingOrder = [
+      ...remainingOrder.filter((id) => !participantIds.includes(id)),
+      ...participantIds
+    ];
+    const updatedCourt = courts.find((item) => item.id === courtId);
     await db.players.bulkPut(players);
     await db.matches.put(completed);
+    if (nextMatch) await db.matches.put(nextMatch);
     await db.courts.bulkPut(courts);
     await queue("FINISH_COURT", "Match", completed.id, completed);
-    pushToast(set, "Court cleared", `${court.name} is ready for the next stack.`, "system");
-    const stackOrder = reconcileStackOrder(state.stackOrder, players, matches, courts);
+    if (nextMatch) await queue("CREATE_MATCH", "Match", nextMatch.id, nextMatch);
+    if (updatedCourt) {
+      await queue("UPDATE_COURT", "Court", updatedCourt.id, updatedCourt);
+    }
+    const stackOrder = reconcileStackOrder(remainingOrder, players, matches, courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ players, matches, courts, stackOrder });
+    if (nextMatch) {
+      const names = [...nextMatch.teamAPlayerIds, ...nextMatch.teamBPlayerIds]
+        .map((id) => players.find((player) => player.id === id)?.displayName)
+        .filter((name): name is string => Boolean(name));
+      speakAnnouncement(`Next players for ${court.name}: ${names.join(", ")}. Please proceed to your court.`);
+      pushToast(set, "Next stack assigned", `${names.join(", ")} sent to ${court.name}.`, "system");
+    } else {
+      pushToast(set, "Court available", `${court.name} is waiting for a complete stack of four.`, "system");
+    }
+    await get().publishSharedState();
   },
   assignPlayerToCourt: async (playerId, courtId) => {
     const state = get();
@@ -985,6 +1258,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
 
     set({ players: updatedPlayers, courts: updatedCourts, stackOrder });
     pushToast(set, "Player assigned to court", `${player.displayName} assigned to ${court.name}.`, "fun");
+    speakAnnouncement(`${player.displayName} assigned to ${court.name}.`);
   },
   removePlayerFromCourt: async (playerId) => {
     const state = get();
@@ -1002,6 +1276,47 @@ export const useClubStore = create<ClubState>((set, get) => ({
       }
       return c;
     });
+
+    // Handle removing player from active InProgress match
+    const activeMatchIndex = state.matches.findIndex((m) => m.status === "InProgress" && [...m.teamAPlayerIds, ...m.teamBPlayerIds].includes(playerId));
+    let updatedMatches = state.matches;
+    if (activeMatchIndex !== -1) {
+      const match = state.matches[activeMatchIndex];
+      const vacantId = `vacant-${crypto.randomUUID()}`;
+      const newTeamA = match.teamAPlayerIds.map(id => id === playerId ? vacantId : id);
+      const newTeamB = match.teamBPlayerIds.map(id => id === playerId ? vacantId : id);
+      
+      const allVacant = [...newTeamA, ...newTeamB].every(id => id.startsWith("vacant"));
+      if (allVacant) {
+        const completedMatch = {
+          ...match,
+          teamAPlayerIds: newTeamA,
+          teamBPlayerIds: newTeamB,
+          status: "Completed" as const,
+          endedAt: new Date().toISOString()
+        };
+        updatedMatches = state.matches.map(m => m.id === match.id ? completedMatch : m);
+        await db.matches.put(completedMatch);
+        await queue("UPDATE_MATCH", "Match", match.id, completedMatch);
+        
+        updatedCourts = updatedCourts.map(c => {
+          if (c.currentMatchId === match.id) {
+            courtUpdated = true;
+            return { ...c, status: "Available", currentMatchId: undefined } as Court;
+          }
+          return c;
+        });
+      } else {
+        const updatedMatch = {
+          ...match,
+          teamAPlayerIds: newTeamA,
+          teamBPlayerIds: newTeamB
+        };
+        updatedMatches = state.matches.map(m => m.id === match.id ? updatedMatch : m);
+        await db.matches.put(updatedMatch);
+        await queue("UPDATE_MATCH", "Match", match.id, updatedMatch);
+      }
+    }
 
     if (courtUpdated) {
       for (const c of updatedCourts) {
@@ -1022,14 +1337,247 @@ export const useClubStore = create<ClubState>((set, get) => ({
       orderUpdated = true;
     }
 
-    if (courtUpdated || orderUpdated) {
-      const stackOrder = reconcileStackOrder(nextStackOrder, state.players, state.matches, updatedCourts);
-      localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
-      set({ courts: updatedCourts, stackOrder });
-    }
+    const stackOrder = reconcileStackOrder(nextStackOrder, state.players, updatedMatches, updatedCourts);
+    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    set({ courts: updatedCourts, stackOrder, matches: updatedMatches });
+    
     pushToast(set, "Player returned to lounge", `${player.displayName} returned to check-in lounge queue.`, "system");
+    await get().publishSharedState();
   },
-  dismissToast: (id) => set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) }))
+  joinActiveMatch: async (playerId, courtId) => {
+    const state = get();
+    const court = state.courts.find(c => c.id === courtId);
+    if (!court || court.status !== "InUse") return;
+    
+    const match = state.matches.find(m => m.id === court.currentMatchId && m.status === "InProgress");
+    if (!match) return;
+    
+    const vacantIndexA = match.teamAPlayerIds.findIndex(id => id.startsWith("vacant"));
+    const vacantIndexB = match.teamBPlayerIds.findIndex(id => id.startsWith("vacant"));
+    if (vacantIndexA === -1 && vacantIndexB === -1) return;
+
+    // Free player from previous courts/stacks first
+    const isReserved = state.courts.some(c => c.reservedPlayerIds?.includes(playerId));
+    const isPlaying = state.matches.some(m => m.status === "InProgress" && [...m.teamAPlayerIds, ...m.teamBPlayerIds].includes(playerId));
+    if (isReserved || isPlaying) {
+      await get().removePlayerFromCourt(playerId);
+    }
+    
+    const freshState = get();
+    const freshMatch = freshState.matches.find(m => m.id === match.id);
+    if (!freshMatch) return;
+
+    let updatedMatch = { ...freshMatch };
+    if (vacantIndexA !== -1) {
+      const newTeamA = [...freshMatch.teamAPlayerIds];
+      newTeamA[vacantIndexA] = playerId;
+      updatedMatch.teamAPlayerIds = newTeamA;
+    } else if (vacantIndexB !== -1) {
+      const newTeamB = [...freshMatch.teamBPlayerIds];
+      newTeamB[vacantIndexB] = playerId;
+      updatedMatch.teamBPlayerIds = newTeamB;
+    }
+
+    await db.matches.put(updatedMatch);
+    await queue("UPDATE_MATCH", "Match", freshMatch.id, updatedMatch);
+    
+    const remainingOrder = freshState.stackOrder.filter((id) => id !== playerId);
+    const stackOrder = reconcileStackOrder(remainingOrder, freshState.players, [...freshState.matches.filter(m => m.id !== freshMatch.id), updatedMatch], freshState.courts);
+    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    
+    set({
+      matches: freshState.matches.map(m => m.id === freshMatch.id ? updatedMatch : m),
+      stackOrder
+    });
+    await get().publishSharedState();
+    
+    speakAnnouncement(`${freshState.players.find(p => p.id === playerId)?.displayName} joined the match on ${court.name}.`);
+  },
+  addReservation: async (reservationData) => {
+    const hasConflict = get().reservations.some((reservation) =>
+      reservation.status === "Confirmed"
+      && reservation.courtId === reservationData.courtId
+      && new Date(reservationData.startTime).getTime() < new Date(reservation.endTime).getTime()
+      && new Date(reservationData.endTime).getTime() > new Date(reservation.startTime).getTime()
+    );
+    if (hasConflict) throw new Error("This court already has a reservation during that time.");
+    const id = crypto.randomUUID();
+    const reservation: Reservation = {
+      ...reservationData,
+      id,
+      status: "Confirmed"
+    };
+    await db.reservations.put(reservation);
+    await queue("CREATE_RESERVATION", "Reservation", id, reservation);
+    
+    if (reservation.paymentStatus === "Paid") {
+      await get().addTransaction({
+        playerId: reservationData.hostPlayerId,
+        amount: reservationData.feeAmount,
+        type: "CourtReservation",
+        paymentMethod: "EWallet"
+      });
+    }
+
+    set((state) => ({
+      reservations: [...state.reservations, reservation]
+    }));
+    playSound("checkin");
+    
+    const court = get().courts.find(c => c.id === reservationData.courtId);
+    speakAnnouncement(`Court reservation booked for ${court?.name || "Court"}.`);
+  },
+  cancelReservation: async (id, reason) => {
+    const reservation = get().reservations.find(r => r.id === id);
+    if (!reservation) return;
+    const updated = { ...reservation, status: "Cancelled" as const, cancellationReason: reason?.trim() || undefined };
+    await db.reservations.put(updated);
+    await queue("UPDATE_RESERVATION", "Reservation", id, updated);
+    set((state) => ({
+      reservations: state.reservations.map(r => r.id === id ? updated : r)
+    }));
+    playSound("complete");
+  },
+  addTransaction: async (txData) => {
+    const id = crypto.randomUUID();
+    const transaction: Transaction = {
+      ...txData,
+      id,
+      status: "Success",
+      timestamp: new Date().toISOString()
+    };
+    await db.transactions.put(transaction);
+    await queue("CREATE_TRANSACTION", "Transaction", id, transaction);
+    set((state) => ({
+      transactions: [...state.transactions, transaction]
+    }));
+  },
+  completeTransaction: async (id) => {
+    const tx = get().transactions.find(t => t.id === id);
+    if (!tx) return;
+    const updated = { ...tx, status: "Success" as const };
+    await db.transactions.put(updated);
+    await queue("UPDATE_TRANSACTION", "Transaction", id, updated);
+
+    // If transaction type is CheckInFee, make sure the player is checked in
+    if (tx.type === "CheckInFee") {
+      await get().checkIn(tx.playerId);
+    }
+    // Update matching court reservation payment status to Paid if applicable
+    const matchedReservation = get().reservations.find(r => r.hostPlayerId === tx.playerId && r.feeAmount === tx.amount && r.paymentStatus === "Pending");
+    if (matchedReservation) {
+      const updatedRes = { ...matchedReservation, paymentStatus: "Paid" as const };
+      await db.reservations.put(updatedRes);
+      await queue("UPDATE_RESERVATION", "Reservation", matchedReservation.id, updatedRes);
+      set((state) => ({
+        reservations: state.reservations.map(r => r.id === matchedReservation.id ? updatedRes : r)
+      }));
+    }
+
+    set((state) => ({
+      transactions: state.transactions.map(t => t.id === id ? updated : t)
+    }));
+    playSound("complete");
+  },
+  voidTransaction: async (id, reason) => {
+    const tx = get().transactions.find((transaction) => transaction.id === id);
+    const cleanReason = reason.trim();
+    if (!tx || tx.status === "Voided" || !cleanReason) return;
+    const updated: Transaction = {
+      ...tx,
+      status: "Voided",
+      voidReason: cleanReason,
+      voidedAt: new Date().toISOString()
+    };
+    await db.transactions.put(updated);
+    await queue("VOID_TRANSACTION", "Transaction", id, updated);
+    try {
+      await fetch("/api/reservations?action=payment-issue-by-transaction", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transactionId: id })
+      });
+    } catch {
+      // The finance ledger remains voided locally; reservation status will retry when online.
+    }
+    set((state) => ({
+      transactions: state.transactions.map((transaction) => transaction.id === id ? updated : transaction)
+    }));
+    pushToast(set, "Payment voided", "The false payment was removed from revenue totals.", "system");
+    playSound("complete");
+  },
+  dismissToast: (id) => set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) })),
+  suppressRefresh: (ms = 2500) => {
+    suppressSharedRefreshUntil = Date.now() + ms;
+  },
+  addTestimonial: async (quote, rating, displayName) => {
+    const testimonial = { id: crypto.randomUUID(), quote, rating, displayName };
+    set(state => {
+      const next = [...state.testimonials, testimonial];
+      localStorage.setItem("haff-testimonials", JSON.stringify(next));
+      return { testimonials: next };
+    });
+  },
+  deleteTestimonial: async (id) => {
+    set(state => {
+      const next = state.testimonials.filter(t => t.id !== id);
+      localStorage.setItem("haff-testimonials", JSON.stringify(next));
+      return { testimonials: next };
+    });
+  },
+  addAnnouncement: async (title, content) => {
+    const announcement = { id: crypto.randomUUID(), title, content, date: new Date().toISOString().split("T")[0] };
+    set(state => {
+      const next = [announcement, ...state.announcements];
+      localStorage.setItem("haff-announcements", JSON.stringify(next));
+      return { announcements: next };
+    });
+  },
+  deleteAnnouncement: async (id) => {
+    set(state => {
+      const next = state.announcements.filter(a => a.id !== id);
+      localStorage.setItem("haff-announcements", JSON.stringify(next));
+      return { announcements: next };
+    });
+  },
+  addAchievement: async (title, value, desc) => {
+    const achievement = { id: crypto.randomUUID(), title, value, desc };
+    set(state => {
+      const next = [...state.achievements, achievement];
+      localStorage.setItem("haff-achievements", JSON.stringify(next));
+      return { achievements: next };
+    });
+  },
+  deleteAchievement: async (id) => {
+    set(state => {
+      const next = state.achievements.filter(ac => ac.id !== id);
+      localStorage.setItem("haff-achievements", JSON.stringify(next));
+      return { achievements: next };
+    });
+  },
+  seedDemoPlayers: async () => {
+    const demoPlayers: Player[] = [
+      { id: "p-1", displayName: "Dink Master", skillLevel: "Pro", rating: 4.5, tags: ["Regular"], checkedIn: true, totalGamesPlayed: 14, totalDaysPlayed: 4 },
+      { id: "p-2", displayName: "Lob Champion", skillLevel: "Intermediate", rating: 3.5, tags: ["Regular"], checkedIn: true, totalGamesPlayed: 8, totalDaysPlayed: 3 },
+      { id: "p-3", displayName: "Kitchen Ace", skillLevel: "Pro", rating: 4.8, tags: ["VIP"], checkedIn: true, totalDaysPlayed: 5, totalGamesPlayed: 24 },
+      { id: "p-4", displayName: "Smash Queen", skillLevel: "Pro", rating: 4.2, tags: ["Regular"], checkedIn: true, totalDaysPlayed: 2, totalGamesPlayed: 10 },
+      { id: "p-5", displayName: "Baseline Ben", skillLevel: "Low Intermediate", rating: 2.8, tags: ["Regular"], checkedIn: true, totalDaysPlayed: 1, totalGamesPlayed: 4 },
+      { id: "p-6", displayName: "Net Crusher", skillLevel: "Intermediate", rating: 3.2, tags: ["Regular"], checkedIn: true, totalDaysPlayed: 3, totalGamesPlayed: 12 },
+      { id: "p-7", displayName: "Spin Doctor", skillLevel: "Novice", rating: 2.5, tags: ["Guest"], checkedIn: true, totalDaysPlayed: 1, totalGamesPlayed: 2 },
+      { id: "p-8", displayName: "Volley King", skillLevel: "Beginner", rating: 2.0, tags: ["Regular"], checkedIn: true, totalDaysPlayed: 1, totalGamesPlayed: 1 },
+      { id: "p-9", displayName: "Paddle Ninja", skillLevel: "Pro", rating: 4.6, tags: ["Regular"], checkedIn: true, totalDaysPlayed: 4, totalGamesPlayed: 18 },
+      { id: "p-10", displayName: "Drop Shot Donna", skillLevel: "Intermediate", rating: 3.4, tags: ["Regular"], checkedIn: true, totalDaysPlayed: 2, totalGamesPlayed: 6 },
+      { id: "p-11", displayName: "Erne Enthusiast", skillLevel: "Pro", rating: 4.0, tags: ["Regular"], checkedIn: true, totalDaysPlayed: 3, totalGamesPlayed: 9 },
+      { id: "p-12", displayName: "Pickle Power", skillLevel: "Beginner", rating: 1.8, tags: ["Guest"], checkedIn: true, totalDaysPlayed: 1, totalGamesPlayed: 1 }
+    ];
+    await db.players.bulkPut(demoPlayers);
+    const courts = get().courts;
+    const matches = get().matches;
+    const stackOrder = reconcileStackOrder(demoPlayers.map(p => p.id), demoPlayers, matches, courts);
+    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    set({ players: demoPlayers, stackOrder });
+  }
 }));
 
 function balanceTeams(players: Player[]) {
@@ -1074,49 +1622,52 @@ function reconcileStackOrder(stackOrder: string[], players: Player[], matches: M
       .map((player) => player.id)
   );
 
-  let cleaned = stackOrder.map((id) => {
-    if (id === "vacant") return "vacant";
-    if (eligibleIds.has(id)) return id;
-    return "vacant";
-  });
+  const seenIds = new Set<string>();
+  const cleaned: string[] = [];
 
-  const placedIds = new Set(cleaned.filter((id) => id !== "vacant"));
-  const unplaced = Array.from(eligibleIds).filter((id) => !placedIds.has(id));
-
-  for (const id of unplaced) {
-    const vacantIndex = cleaned.indexOf("vacant");
-    if (vacantIndex !== -1) {
-      cleaned[vacantIndex] = id;
-    } else {
+  for (const id of stackOrder) {
+    if (id !== "vacant" && eligibleIds.has(id) && !seenIds.has(id)) {
+      seenIds.add(id);
       cleaned.push(id);
     }
   }
 
-  while (cleaned.length < 12) {
-    cleaned.push("vacant");
-  }
-
-  while (cleaned.length % 4 !== 0) {
-    cleaned.push("vacant");
-  }
-
-  while (cleaned.length > 12 && cleaned.slice(-4).every((id) => id === "vacant")) {
-    cleaned = cleaned.slice(0, -4);
+  for (const id of eligibleIds) {
+    if (!seenIds.has(id)) {
+      cleaned.push(id);
+    }
   }
 
   return cleaned;
 }
 
 async function queue(actionType: string, entityType: string, entityId: string, payload: unknown) {
+  const id = crypto.randomUUID();
+  const baseVersion =
+    typeof payload === "object" && payload && "version" in payload && typeof payload.version === "number"
+      ? payload.version
+      : undefined;
   await db.syncQueue.put({
-    id: crypto.randomUUID(),
+    id,
+    idempotencyKey: id,
+    deviceId: getDeviceId(),
     actionType,
     entityType,
     entityId,
+    baseVersion,
     payload,
     status: "Pending",
+    retryCount: 0,
     createdAt: new Date().toISOString()
   });
+
+  if (navigator.onLine) {
+    try {
+      void useClubStore.getState().processSyncQueue();
+    } catch (e) {
+      console.warn("Immediate sync queue processing failed:", e);
+    }
+  }
 }
 
 export async function getPendingSyncCount() {
@@ -1129,7 +1680,12 @@ function pushToast(
   message: string,
   tone: Toast["tone"]
 ) {
-  set((state) => ({
-    toasts: [{ id: crypto.randomUUID(), title, message, tone }, ...state.toasts].slice(0, 4)
-  }));
+  const id = crypto.randomUUID();
+  set((state) => {
+    if (state.toasts.some((toast) => toast.title === title && toast.message === message)) return {};
+    return { toasts: [{ id, title, message, tone }, ...state.toasts].slice(0, 4) };
+  });
+  setTimeout(() => {
+    set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) }));
+  }, 2000);
 }

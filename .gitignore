@@ -10,3 +10,6 @@ yarn-error.log*
 pnpm-debug.log*
 
 .vercel
+.prisma/
+.prisma/
+.env*.local

@@ -1,11 +1,23 @@
 {
   "buildCommand": "npm run build:web",
+  "devCommand": "npm run dev:web -- --port $PORT",
   "outputDirectory": "dist/web",
   "installCommand": "npm install",
   "framework": "vite",
+  "headers": [
+    {
+      "source": "/assets/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    }
+  ],
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!api/|src/|@vite/|node_modules/|assets/|haff-logo.jpg|favicon.ico|manifest.webmanifest|registerSW.js|sw.js|workbox-).*)",
       "destination": "/index.html"
     }
   ]
