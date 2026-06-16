@@ -2,10 +2,8 @@ import React from "react";
 import { motion } from "framer-motion";
 import { QrCode } from "lucide-react";
 
-const playerImage =
-  "https://images.unsplash.com/photo-1599474924187-334a4ae5bd3c?auto=format&fit=crop&w=500&q=80";
-const courtImage =
-  "https://images.unsplash.com/photo-1626224583764-f87db24ac4ea?auto=format&fit=crop&w=500&q=80";
+const playerImage = "/court-2.jpg";
+const courtImage = "/court-4.jpg";
 
 const ArrowSageLeft = () => (
   <svg viewBox="0 0 100 100" className="h-full w-full overflow-visible text-[#EAF5E4] stroke-current drop-shadow-[0_8px_20px_rgba(0,0,0,0.28)]" fill="none" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
