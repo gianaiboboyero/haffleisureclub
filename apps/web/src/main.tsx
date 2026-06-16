@@ -2982,11 +2982,12 @@ const getPlayerAvatar = (player: any) => {
 // PLAYER VIEW SCREEN (QR/PHONE LOGIN INCLUDED)
 // ----------------------------------------------------
 function PlayerView() {
-  const { players, courts, matches, stackOrder, checkIn, setPlayerParked, matchDurationMinutes, currentSessionId, updatePlayer, setView } = useClubStore();
+  const { players, courts, matches, stackOrder, checkIn, setPlayerParked, movePlayerToIndex, matchDurationMinutes, currentSessionId, updatePlayer, setView } = useClubStore();
   const [selectedPlayerId, setSelectedPlayerId] = React.useState<string | null>(() => localStorage.getItem("haff-player-account-id"));
   const [sessionMember, setSessionMember] = React.useState<{ playerId?: string; displayName: string } | null>(null);
   const [checkingSession, setCheckingSession] = React.useState(true);
   const now = useNow();
+  const autoLogPayment = true;
 
   const activePlayers = players.filter((p) => p.isActive !== false);
   const player = activePlayers.find((item) => item.id === selectedPlayerId);
@@ -3044,6 +3045,8 @@ function PlayerView() {
       setLoginMethod(null);
     }
   }, [player, selectedPlayerId]);
+  
+  if (checkingSession) return <LoadingScreen />;
 
   const startEditing = () => {
     if (!player) return;
@@ -3463,6 +3466,55 @@ function PlayerView() {
                   {player.parked ? "Join Play Rotation" : "Park Me"}
                 </Button>
               )}
+
+              {/* Stack Placement/Transfer Selector */}
+              <div className="mt-4 rounded-xl bg-ivory/5 p-3.5 border border-ivory/10">
+                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-brass">Queue Stack Placement</span>
+                <p className="text-[11px] text-linen/70 mt-0.5 mb-3">Join or transfer directly into a specific stack:</p>
+                <div className="space-y-2">
+                  {(() => {
+                    const groups = getWaitingGroups(players, courts, matches, stackOrder);
+                    const totalGroupsToShow = Math.max(groups.length, 3);
+                    
+                    return Array.from({ length: totalGroupsToShow }).map((_, idx) => {
+                      const group = groups[idx] || [];
+                      const hasCurrentPlayer = group.some(p => p.id === player.id);
+                      const names = group.filter(p => !p.isVacant).map(p => p.displayName.split(" ")[0]).join(" / ");
+                      
+                      return (
+                        <div key={idx} className="flex items-center justify-between p-2 rounded-xl bg-[#092b21] border border-white/5">
+                          <div className="min-w-0 flex-1 pr-2">
+                            <p className="text-[10px] font-black text-brass uppercase">Stack {idx + 1}</p>
+                            <p className="text-xs text-ivory/80 font-semibold truncate mt-0.5">
+                              {names || "Empty / Open"}
+                            </p>
+                          </div>
+                          <button
+                            disabled={hasCurrentPlayer}
+                            onClick={async () => {
+                              let targetIndex = stackOrder.length;
+                              if (group.length > 0) {
+                                const idxInOrder = stackOrder.indexOf(group[0].id);
+                                if (idxInOrder !== -1) {
+                                  targetIndex = idxInOrder;
+                                }
+                              }
+                              await movePlayerToIndex(player.id, targetIndex);
+                            }}
+                            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition shrink-0 ${
+                              hasCurrentPlayer
+                                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                : "bg-brass text-forest hover:bg-ivory"
+                            }`}
+                          >
+                            {hasCurrentPlayer ? "Current" : player.checkedIn && !player.parked ? "Transfer" : "Check In"}
+                          </button>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
             </div>
 
             <PlayerTvPreview />

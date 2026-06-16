@@ -132,7 +132,9 @@ button:disabled {
 }
 
 .club-panel {
-  background: rgba(15, 65, 50, 0.96);
+  background: rgba(15, 65, 50, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(247, 243, 232, 0.1);
   box-shadow: var(--club-shadow);
   position: relative;
@@ -141,7 +143,9 @@ button:disabled {
 }
 
 .club-panel:not([class*="bg-"]):not(.work-surface):not(.work-surface-soft) {
-  background: rgba(15, 65, 50, 0.96);
+  background: rgba(15, 65, 50, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .club-panel::before {

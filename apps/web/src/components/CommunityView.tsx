@@ -90,6 +90,9 @@ function AuthPanel({
     setError("");
     try {
       const data = await api(`/api/auth?action=${mode}`, { method: "POST", body: JSON.stringify(form) });
+      if (mode === "register") {
+        alert("Registration successful! Welcome to the HAFF Leisure Club community.");
+      }
       onAuth(data.user);
       window.dispatchEvent(new Event("haff-auth-change"));
     } catch (reason) {
