@@ -5,13 +5,13 @@
 @tailwind utilities;
 
 :root {
-  --club-canvas: #082d23;
-  --club-canvas-deep: #05241c;
-  --club-surface: #dce7df;
-  --club-surface-strong: #edf2ed;
-  --club-ivory: #f7f3e8;
-  --club-ink: #12372c;
-  --club-muted: #5d7169;
+  --club-canvas: #0E5A43;       /* Rich forest green backdrop */
+  --club-canvas-deep: #082d23;  /* Deeper forest green canvas */
+  --club-surface: rgba(255, 255, 255, 0.05);
+  --club-surface-strong: rgba(255, 255, 255, 0.05);
+  --club-ivory: #FFF8EA;
+  --club-ink: #FFF8EA;
+  --club-muted: #7FB69A;
   --club-brass: #CBEF43;       /* MatchPoint lime-yellow accent */
   --club-brass-gold: #F4C95D;  /* legacy warm gold kept for historical surfaces */
   --club-clay: #b9654b;
@@ -75,27 +75,30 @@ button:disabled {
 
 ::selection {
   background: var(--club-brass);
-  color: var(--club-ink);
+  color: #05241c;
+}
+::-moz-selection {
+  background: var(--club-brass);
+  color: #05241c;
 }
 
 .haff-auth-input {
   color: var(--club-ink);
-  background-color: #fff;
+  background-color: rgba(255, 255, 255, 0.05);
   caret-color: var(--club-ink);
-  -webkit-text-fill-color: var(--club-ink);
+  border-color: rgba(255, 248, 234, 0.1);
 }
 
 .haff-auth-input::placeholder {
-  color: rgba(18, 55, 44, 0.48);
-  -webkit-text-fill-color: rgba(18, 55, 44, 0.48);
+  color: rgba(255, 248, 234, 0.48);
 }
 
 .haff-auth-input:-webkit-autofill,
 .haff-auth-input:-webkit-autofill:hover,
 .haff-auth-input:-webkit-autofill:focus,
 .haff-auth-input:-webkit-autofill:active {
-  border-color: rgba(18, 55, 44, 0.2);
-  box-shadow: 0 0 0 1000px #fff inset;
+  border-color: rgba(255, 248, 234, 0.2);
+  box-shadow: 0 0 0 1000px rgba(255, 255, 255, 0.05) inset;
   caret-color: var(--club-ink);
   -webkit-text-fill-color: var(--club-ink);
   transition: background-color 9999s ease-out 0s;
@@ -132,10 +135,6 @@ button:disabled {
 }
 
 .club-panel {
-  background: rgba(15, 65, 50, 0.75);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(247, 243, 232, 0.1);
   box-shadow: var(--club-shadow);
   position: relative;
   overflow: hidden;
@@ -146,6 +145,7 @@ button:disabled {
   background: rgba(15, 65, 50, 0.75);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 248, 234, 0.1);
 }
 
 .club-panel::before {
@@ -154,55 +154,58 @@ button:disabled {
 
 .court-card {
   background: var(--club-surface-strong);
-  border: 1px solid rgba(18, 55, 44, 0.08);
+  border: 1px solid rgba(255, 248, 234, 0.08);
   box-shadow: 0 12px 32px rgba(2, 20, 15, 0.16);
   transition: border-color 180ms ease, box-shadow 180ms ease;
 }
 
 .court-card:hover {
   box-shadow: 0 16px 38px rgba(2, 20, 15, 0.2);
-  border-color: rgba(18, 55, 44, 0.18);
+  border-color: rgba(255, 248, 234, 0.18);
 }
 
 .display-court {
-  background: #0b3a2c;
+  background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 248, 234, 0.14);
   box-shadow: 0 18px 46px rgba(0, 0, 0, 0.24);
 }
 
 .club-panel.admin-court {
-  overflow: hidden;
-  border: 1px solid rgba(255, 248, 234, 0.12);
   border-radius: var(--club-radius);
-  background: #0b3a2c !important;
+  background: rgba(255, 255, 255, 0.05) !important; backdrop-filter: blur(24px);
   color: var(--club-ivory);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.18);
 }
 
 .club-panel.work-surface,
 .work-surface {
-  background: var(--club-surface-strong);
-  border: 1px solid rgba(18, 55, 44, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 248, 234, 0.08);
   box-shadow: 0 12px 32px rgba(2, 20, 15, 0.16);
-  color: var(--club-ink);
+  color: var(--club-ivory);
 }
 
 .club-panel.work-surface-soft,
 .work-surface-soft {
-  background: var(--club-surface);
-  border: 1px solid rgba(18, 55, 44, 0.08);
-  color: var(--club-ink);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 248, 234, 0.08);
+  color: var(--club-ivory);
 }
 
 .control-field {
   min-height: 48px;
-  border: 1px solid rgba(18, 55, 44, 0.12);
-  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(255, 248, 234, 0.1);
+  background: rgba(255, 255, 255, 0.05);
   box-shadow: none;
+  color: var(--club-ivory) !important;
 }
 
 .control-field:focus {
-  border-color: rgba(18, 55, 44, 0.45);
+  border-color: var(--club-brass);
+}
+
+.control-field::placeholder {
+  color: rgba(255, 248, 234, 0.45);
 }
 
 .section-kicker {
@@ -221,6 +224,7 @@ button:disabled {
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
   border: 1px solid transparent;
+  white-space: nowrap;
 }
 
 .rank-newbie {
@@ -582,4 +586,24 @@ button:disabled {
     transparent 6px,
     transparent 12px
   );
+}
+
+.countdown-digits {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  display: inline-block;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.countdown-seg {
+  display: inline-block;
+  min-width: 2ch;
+  text-align: center;
+}
+
+.countdown-sep {
+  display: inline-block;
+  width: 0.55ch;
+  text-align: center;
 }

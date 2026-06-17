@@ -2,6 +2,19 @@ export type SkillLevel = "Newbie" | "Beginner" | "Novice" | "Low Intermediate" |
 export type MatchStatus = "Queued" | "Assigned" | "InProgress" | "Completed";
 export type SyncStatus = "LocalOnly" | "PendingSync" | "Synced" | "Conflict";
 
+export type TvBroadcastKind = "message" | "court" | "overtime";
+
+export type TvBroadcast = {
+  id: string;
+  kind: TvBroadcastKind;
+  createdAt: string;
+  message?: string;
+  courtId?: string;
+  courtName?: string;
+  participantIds?: string[];
+  variant?: "active" | "reserved";
+};
+
 export type Session = {
   id: string;
   name: string;
@@ -37,6 +50,8 @@ export type Player = {
   preferredPlayStyle?: string;
   avatarUrl?: string;
   statusNote?: string;
+  isVacant?: boolean;
+  isReservedSlot?: boolean;
   version?: number;
 };
 
@@ -44,6 +59,8 @@ export type Court = {
   id: string;
   name: string;
   number: number;
+  priority?: number;
+  reservable?: boolean;
   status: "Available" | "InUse" | "Paused" | "Maintenance" | "Reserved";
   currentMatchId?: string;
   reservedFor?: string;
@@ -60,8 +77,10 @@ export type Match = {
   scoreB: number;
   status: MatchStatus;
   startedAt?: string;
+  timerPausedAt?: string;
   endedAt?: string;
   syncStatus: SyncStatus;
+  mode?: "Assigned" | "Reserved";
   version?: number;
 };
 
@@ -80,8 +99,9 @@ export type Reservation = {
   startTime: string;
   endTime: string;
   hostPlayerId: string;
+  hostDisplayName?: string;
   playerIds: string[];
-  status: "Confirmed" | "Cancelled" | "NoShow";
+  status: "Requested" | "Confirmed" | "Rejected" | "Cancelled" | "NoShow";
   paymentStatus: "Paid" | "Pending" | "Refunded";
   feeAmount: number;
   cancellationReason?: string;

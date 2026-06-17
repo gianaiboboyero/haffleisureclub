@@ -19,6 +19,26 @@ type OperationInput = {
 const blockedTypes = new Set(["Transaction", "Reservation", "User", "Testimonial", "ChatMessage"]);
 const optionalDate = (value: unknown) => typeof value === "string" && value ? new Date(value) : null;
 
+const playerProfileActions = new Set(["CREATE_PLAYER", "UPDATE_PLAYER"]);
+const playerStatusActions = new Set(["UPDATE_PLAYER_STATUS", "CHECK_IN_PLAYER", "CHECK_OUT_PLAYER"]);
+
+function buildPlayerData(payload: Record<string, unknown>) {
+  return {
+    displayName: String(payload.displayName ?? "Player"),
+    fullName: typeof payload.fullName === "string" ? payload.fullName : null,
+    nickname: typeof payload.nickname === "string" ? payload.nickname : null,
+    skillLevel: String(payload.skillLevel ?? "Beginner"),
+    rating: Number(payload.rating ?? 2),
+    avatarUrl: typeof payload.avatarUrl === "string" ? payload.avatarUrl : null,
+    phone: typeof payload.phoneNumber === "string" ? payload.phoneNumber : null,
+    tags: Array.isArray(payload.tags) ? payload.tags.map(String) : [],
+    status: payload.isActive === false ? "Inactive" : "Active",
+    totalGamesPlayed: Number(payload.totalGamesPlayed ?? 0),
+    totalDaysPlayed: Number(payload.totalDaysPlayed ?? 0),
+    lastPlayedDate: optionalDate(payload.lastPlayedDate)
+  };
+}
+
 async function applyEvent(
   event: OperationInput,
   actor: { id: string; role: string; playerId: string | null },
@@ -32,19 +52,51 @@ async function applyEvent(
   }
 
   if (event.entityType === "Player") {
+    if (event.actionType === "DELETE_PLAYER") {
+      if (!isAdmin) throw new Error("Administrator access required.");
+      await db.player.deleteMany({ where: { id: event.entityId } });
+      return { conflict: false, canonical: null };
+    }
+
     const current = await db.player.findUnique({ where: { id: event.entityId } });
+    if (!isAdmin && actor.playerId !== event.entityId) {
+      throw new Error("You can only update your own player profile.");
+    }
+
+    if (event.actionType === "CREATE_PLAYER") {
+      if (!isAdmin) throw new Error("Administrator access required.");
+      if (current) return { conflict: false, canonical: current };
+      const created = await db.player.create({
+        data: { id: event.entityId, ...buildPlayerData(event.payload) }
+      });
+      return { conflict: false, canonical: created };
+    }
+
     if (!current) throw new Error("Player not found.");
     if (event.baseVersion != null && current.version !== event.baseVersion) {
       return { conflict: true, canonical: current };
     }
-    const updated = await db.player.update({
-      where: { id: event.entityId },
-      data: {
-        status: typeof event.payload.status === "string" ? event.payload.status : current.status,
-        version: { increment: 1 }
-      }
-    });
-    return { conflict: false, canonical: updated };
+
+    if (playerProfileActions.has(event.actionType)) {
+      const updated = await db.player.update({
+        where: { id: event.entityId },
+        data: { ...buildPlayerData(event.payload), version: { increment: 1 } }
+      });
+      return { conflict: false, canonical: updated };
+    }
+
+    if (playerStatusActions.has(event.actionType)) {
+      const updated = await db.player.update({
+        where: { id: event.entityId },
+        data: {
+          status: typeof event.payload.status === "string" ? event.payload.status : current.status,
+          version: { increment: 1 }
+        }
+      });
+      return { conflict: false, canonical: updated };
+    }
+
+    throw new Error(`Unhandled player action: ${event.actionType}`);
   }
 
   if (event.entityType === "Court") {

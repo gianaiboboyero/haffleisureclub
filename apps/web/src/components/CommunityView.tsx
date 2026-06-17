@@ -1,18 +1,21 @@
 import React from "react";
+import { dicebearAvatar, isUsableAvatarUrl } from "../lib/utils";
 import { ArrowLeft, CalendarDays, Copy, Download, Eye, EyeOff, LogIn, LogOut, MessageCircle, MoreHorizontal, Send, Share2, ShieldCheck, Star, UserPlus } from "lucide-react";
 import { AiLoader } from "./ui/ai-loader";
 import { ReactionTray } from "./ui/ReactionTray";
 import { subscribeToChannel } from "../lib/realtime";
 
-type Member = {
+export type CommunityMember = {
   id: string;
   email: string;
   role: "ADMIN" | "MEMBER";
   displayName: string;
-  playerId?: string;
-  avatarUrl?: string;
-  skillLevel?: string;
+  playerId?: string | null;
+  avatarUrl?: string | null;
+  skillLevel?: string | null;
 };
+
+type Member = CommunityMember;
 
 type Message = {
   id: string;
@@ -20,7 +23,7 @@ type Message = {
   deleted: boolean;
   editedAt?: string;
   createdAt: string;
-  author: { id: string; displayName: string; avatarUrl?: string; role: string };
+  author: { id: string; displayName: string; avatarUrl?: string | null; role: string };
   replyTo?: { id: string; body: string; displayName: string };
   reactions: Array<{ emoji: string; count: number; userIds: string[] }>;
 };
@@ -39,23 +42,28 @@ const api = async (url: string, options?: RequestInit) => {
   return data;
 };
 
-export function CommunityView() {
-  const [member, setMember] = React.useState<Member | null>(null);
-  const [loading, setLoading] = React.useState(true);
+export function CommunityView({
+  member,
+  sessionReady,
+  onAuth,
+  onLogout
+}: {
+  member: CommunityMember | null;
+  sessionReady: boolean;
+  onAuth: (member: CommunityMember) => void;
+  onLogout: () => void;
+}) {
   const [mode, setMode] = React.useState<"login" | "register">(() =>
     sessionStorage.getItem("haff-auth-mode") === "register" ? "register" : "login"
   );
 
   React.useEffect(() => {
     sessionStorage.removeItem("haff-auth-mode");
-    api("/api/auth?action=me")
-      .then((data) => setMember(data.user))
-      .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <AiLoader />;
-  if (!member) return <AuthPanel mode={mode} setMode={setMode} onAuth={setMember} />;
-  return <CommunityHub member={member} onLogout={() => setMember(null)} />;
+  if (!sessionReady) return <AiLoader />;
+  if (!member) return <AuthPanel mode={mode} setMode={setMode} onAuth={onAuth} />;
+  return <CommunityHub member={member} onLogout={onLogout} />;
 }
 
 function CommunityShell({ children, actions }: { children: React.ReactNode; actions?: React.ReactNode }) {
@@ -336,9 +344,9 @@ function ChatRoom({ member }: { member: Member }) {
   );
 }
 
-function Avatar({ name, url, size = "small" }: { name: string; url?: string; size?: "small" | "large" }) {
-  const fallback = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}&backgroundColor=d9ad5b&fontFamily=Arial`;
-  return <img className={`${size === "large" ? "h-12 w-12" : "h-9 w-9"} shrink-0 rounded-full border border-ivory/15 bg-brass object-cover`} src={url || fallback} alt={`${name} avatar`} loading="lazy" />;
+function Avatar({ name, url, size = "small" }: { name: string; url?: string | null; size?: "small" | "large" }) {
+  const fallback = dicebearAvatar(name, "fun-emoji");
+  return <img className={`${size === "large" ? "h-12 w-12" : "h-9 w-9"} shrink-0 rounded-full border border-ivory/15 bg-brass object-cover`} src={isUsableAvatarUrl(url) ? url : fallback} alt={`${name} avatar`} loading="lazy" />;
 }
 
 const formatChatTime = (date: Date) => date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });

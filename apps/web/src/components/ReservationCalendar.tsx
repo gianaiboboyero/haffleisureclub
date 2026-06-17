@@ -3,86 +3,41 @@ import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   Ban,
-  CalendarDays,
-  Check,
   ChevronLeft,
   ChevronRight,
-  Clock,
-  CreditCard,
   Eye,
   EyeOff,
-  LogIn,
-  UserPlus,
-  List,
   Lock,
-  Settings,
   ShieldCheck,
   X
 } from "lucide-react";
+import { useClubStore } from "../store/useClubStore";
+import { sortCourts } from "../lib/utils";
+import type { Court, Reservation } from "../lib/types";
 
+// ── local calendar reservation shape ─────────────────────────────────────────
+type CalReservation = Reservation & { publicLabel?: string };
+
+// ── auth user type ────────────────────────────────────────────────────────────
 type Member = { id: string; role: "ADMIN" | "MEMBER"; playerId?: string; displayName: string } | null;
-type Court = {
-  id: string;
-  name: string;
-  number: number;
-  status: string;
-  reservationSetting?: {
-    reservationsEnabled: boolean;
-    openingTime: string;
-    closingTime: string;
-    minDurationMinutes: number;
-    maxDurationMinutes: number;
-  } | null;
-};
-type Reservation = {
-  id: string;
-  courtId: string;
-  requesterUserId?: string;
-  title?: string;
-  notes?: string;
-  participantPlayerIds?: string[];
-  startTime: string;
-  endTime: string;
-  approvalStatus: string;
-  paymentStatus?: string;
-  feeAmount?: number;
-  seriesId?: string;
-  rejectionReason?: string;
-  cancellationReason?: string;
-  publicLabel?: string;
-  requester?: { email: string; player?: { displayName?: string; phone?: string } };
-  court?: Court;
-  createdAt?: string;
-  queuePosition?: number;
-};
-type Allocation = { id: string; courtId: string; date: string; startTime: string; endTime: string; mode: string; note?: string };
-type Blackout = { id: string; courtId: string; startTime: string; endTime: string; reason: string };
-type WeekData = { courts: Court[]; reservations: Reservation[]; allocations: Allocation[]; blackouts: Blackout[] };
 
-const SLOT_HEIGHT = 28;
-const START_MINUTES = 6 * 60;
-const END_MINUTES = 23 * 60;
-const SLOT_COUNT = (END_MINUTES - START_MINUTES) / 30;
-const MANILA_TZ = "Asia/Manila";
+import { getCourtSetting } from "../lib/courtSettings";
+import { COURT_HOURLY_FEE, estimateCourtFee, formatPeso } from "../lib/pricing";
+import {
+  MANILA_TZ,
+  manilaDateTimeIso,
+  reservationDateKey,
+  reservationOverlapsHour,
+  reservationTimeMinutes
+} from "../lib/reservationTime";
 
-const api = async (url: string, options?: RequestInit) => {
-  const response = await fetch(url, {
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...(options?.headers ?? {}) },
-    ...options
-  });
-  const text = await response.text();
-  const data = text && response.headers.get("content-type")?.includes("application/json") ? JSON.parse(text) : {};
-  if (!response.ok) throw new Error(data.error ?? "Unable to complete request. Please verify status with the marshal at the front desk.");
-  return data;
+const isCourtBookable = (court: Court) => {
+  const setting = getCourtSetting(court.id);
+  return court.reservable !== false && setting.enabled && court.status !== "Maintenance";
 };
 
-const dateKey = (date: Date) => new Intl.DateTimeFormat("en-CA", {
-  timeZone: MANILA_TZ,
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit"
-}).format(date);
+// ── date helpers ──────────────────────────────────────────────────────────────
+const dateKey = (date: Date) => reservationDateKey(date);
 
 const startOfWeek = (date: Date) => {
   const copy = new Date(`${dateKey(date)}T12:00:00+08:00`);
@@ -90,372 +45,644 @@ const startOfWeek = (date: Date) => {
   copy.setDate(copy.getDate() - (day === 0 ? 6 : day - 1));
   return copy;
 };
-
-const addDays = (date: Date, days: number) => {
-  const copy = new Date(date);
-  copy.setDate(copy.getDate() + days);
-  return copy;
-};
-
-const timeMinutes = (dateValue: string) => {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: MANILA_TZ,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).format(new Date(dateValue)).split(":");
-  return Number(parts[0]) * 60 + Number(parts[1]);
-};
-
+const addDays = (date: Date, days: number) => { const c = new Date(date); c.setDate(c.getDate() + days); return c; };
+const timeMinutes = (v: string) => reservationTimeMinutes(v);
 const clockLabel = (minutes: number) => {
-  const hour = Math.floor(minutes / 60);
-  const minute = minutes % 60;
-  const date = new Date(Date.UTC(2026, 0, 1, hour - 8, minute));
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Manila",
-    hour: "numeric",
-    minute: "2-digit"
-  }).format(date);
+  const d = new Date(Date.UTC(2026, 0, 1, Math.floor(minutes / 60) - 8, minutes % 60));
+  return new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Manila", hour: "numeric", minute: "2-digit" }).format(d);
 };
+const parseClock = (v: string) => { const [h, m] = v.split(":").map(Number); return h * 60 + m; };
 
-const statusStyle = (status: string) => {
-  if (status === "CONFIRMED") return "border-brass/50 bg-brass text-forest";
-  if (status === "PAYMENT_ISSUE") return "border-red-400/50 bg-red-950/90 text-red-100";
-  if (status === "AWAITING_PAYMENT") return "border-amber-300/50 bg-amber-700/90 text-white";
-  return "calendar-requested border-amber-300/50 text-amber-50";
-};
+// ── Legend chip ───────────────────────────────────────────────────────────────
+function Legend({ className, label }: { className: string; label: string }) {
+  return <span className={`rounded-full px-3 py-1.5 ${className}`}>{label}</span>;
+}
 
-export function ReservationCalendar() {
-  const [member, setMember] = React.useState<Member>(null);
-  const [weekStart, setWeekStart] = React.useState(() => startOfWeek(new Date()));
-  const [data, setData] = React.useState<WeekData>({ courts: [], reservations: [], allocations: [], blackouts: [] });
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState("");
-  const [selectedDay, setSelectedDay] = React.useState(() => new Date());
-  const [drawer, setDrawer] = React.useState<{ courtId: string; date: Date; startMinutes: number; reservation?: Reservation } | null>(null);
-  const [adminReservations, setAdminReservations] = React.useState<Reservation[]>([]);
-  const [adminTab, setAdminTab] = React.useState<"requests" | "settings" | "history">("requests");
-
-  const loadWeek = React.useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    setError("");
-    try {
-      const [session, week] = await Promise.all([
-        api("/api/auth?action=me").catch(() => ({ user: null })),
-        api(`/api/reservations?action=week&start=${encodeURIComponent(dateKey(weekStart))}`)
-      ]);
-      setMember(session.user ?? null);
-      setData(week);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Calendar could not be loaded.");
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, [weekStart]);
-
-  const loadAdmin = React.useCallback(async () => {
-    const isLocalAdmin = localStorage.getItem("haff_admin_authenticated") === "true";
-    if (!isLocalAdmin && (!member || member.role !== "ADMIN")) return;
-    try {
-      const admin = await api("/api/reservations?action=admin");
-      setAdminReservations(admin.reservations ?? []);
-    } catch (reason) {
-      console.warn("Failed loading admin requests:", reason);
-    }
-  }, [member]);
-
-  React.useEffect(() => { void loadWeek(false); }, [loadWeek]);
-  React.useEffect(() => { void loadAdmin(); }, [loadAdmin]);
-
-  const load = React.useCallback(async (silent = true) => {
-    await Promise.all([loadWeek(silent), loadAdmin()]);
-  }, [loadWeek, loadAdmin]);
-
-  const days = React.useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart]);
-  const reservationsFor = (day: Date, courtId: string) =>
-    data.reservations.filter((reservation) => reservation.courtId === courtId && dateKey(new Date(reservation.startTime)) === dateKey(day));
-  const allocationFor = (day: Date, courtId: string) =>
-    data.allocations.filter((allocation) => allocation.courtId === courtId && dateKey(new Date(allocation.date)) === dateKey(day));
-  const blackoutsFor = (day: Date, courtId: string) =>
-    data.blackouts.filter((blackout) => blackout.courtId === courtId && dateKey(new Date(blackout.startTime)) === dateKey(day));
-  const moveReservation = async (reservationId: string, courtId: string, day: Date, startMinutes: number) => {
-    const reservation = data.reservations.find((item) => item.id === reservationId);
-    if (!reservation) return;
-    const duration = new Date(reservation.endTime).getTime() - new Date(reservation.startTime).getTime();
-    const start = new Date(`${dateKey(day)}T${String(Math.floor(startMinutes / 60)).padStart(2, "0")}:${String(startMinutes % 60).padStart(2, "0")}:00+08:00`);
-    
-    // Optimistic Update: move the item locally first so drag-and-drop is instant
-    const originalReservations = [...data.reservations];
-    const updatedReservations = data.reservations.map((item) => {
-      if (item.id === reservationId) {
-        return {
-          ...item,
-          courtId,
-          startTime: start.toISOString(),
-          endTime: new Date(start.getTime() + duration).toISOString()
-        };
-      }
-      return item;
-    });
-    setData((prev) => ({ ...prev, reservations: updatedReservations }));
-
-    try {
-      await api("/api/reservations?action=reschedule", {
-        method: "POST",
-        body: JSON.stringify({ id: reservationId, courtId, startTime: start.toISOString(), endTime: new Date(start.getTime() + duration).toISOString() })
-      });
-      await load(true); // silent background load
-    } catch (reason) {
-      setData((prev) => ({ ...prev, reservations: originalReservations }));
-      setError(reason instanceof Error ? reason.message : "Reservation could not be moved.");
-    }
-  };
-
+// ── Week calendar grid (shared) ───────────────────────────────────────────────
+function ReservationWeekHeader({
+  weekStart,
+  selectedDay,
+  onWeekStartChange,
+  onSelectedDayChange,
+  legend,
+  hideWeekNav = false,
+  reservationCountForDay
+}: {
+  weekStart: Date;
+  selectedDay: Date;
+  onWeekStartChange: (d: Date) => void;
+  onSelectedDayChange: (d: Date) => void;
+  legend?: React.ReactNode;
+  hideWeekNav?: boolean;
+  reservationCountForDay?: (day: Date) => number;
+}) {
+  const days = React.useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   React.useEffect(() => {
-    if (!days.some((day) => dateKey(day) === dateKey(selectedDay))) {
-      setSelectedDay(days[0]);
-    }
-  }, [days, selectedDay]);
+    if (!days.some((d) => dateKey(d) === dateKey(selectedDay))) onSelectedDayChange(days[0]);
+  }, [days, selectedDay, onSelectedDayChange]);
 
   return (
-    <section className="mx-auto max-w-[1800px] px-3 py-5 pb-32 text-ivory sm:px-5">
-      <header className="rounded-3xl border border-ivory/10 bg-[#173f32] p-5 shadow-2xl sm:p-7">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-          <div>
-            <p className="text-xs font-black uppercase tracking-[0.22em] text-brass">HAFF court schedule</p>
-            <h1 className="mt-1 font-display text-4xl font-black sm:text-5xl">Book a Court</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-linen/70">Choose a day and tap any open slot on the timeline below to book.</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button className="calendar-control" onClick={() => setWeekStart(addDays(weekStart, -7))}><ChevronLeft size={16} /> Previous Week</button>
-            <button className="calendar-control bg-brass text-forest" onClick={() => { setWeekStart(startOfWeek(new Date())); setSelectedDay(new Date()); }}>Today</button>
-            <button className="calendar-control" onClick={() => setWeekStart(addDays(weekStart, 7))}>Next Week <ChevronRight size={16} /></button>
-          </div>
+    <>
+      {!hideWeekNav && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className="calendar-control" onClick={() => onWeekStartChange(addDays(weekStart, -7))}><ChevronLeft size={16} /> Previous Week</button>
+          <button type="button" className="calendar-control bg-brass text-forest" onClick={() => { onWeekStartChange(startOfWeek(new Date())); onSelectedDayChange(new Date()); }}>Today</button>
+          <button type="button" className="calendar-control" onClick={() => onWeekStartChange(addDays(weekStart, 7))}>Next Week <ChevronRight size={16} /></button>
         </div>
+      )}
+      <div className="mt-6 overflow-x-auto pb-2 border-t border-white/5 pt-4">
+        <div className="flex min-w-max gap-2">
+          {days.map((day) => {
+            const selected = dateKey(day) === dateKey(selectedDay);
+            const count = reservationCountForDay?.(day) ?? 0;
+            return (
+              <button
+                type="button"
+                className={`relative min-w-24 rounded-2xl border px-4 py-3 text-center transition ${selected ? "border-brass bg-brass text-forest" : "border-ivory/10 bg-ivory/5 text-ivory hover:bg-ivory/10"}`}
+                key={dateKey(day)}
+                onClick={() => onSelectedDayChange(day)}
+              >
+                <span className="block text-[10px] font-black uppercase tracking-wider">{day.toLocaleDateString([], { weekday: "short" })}</span>
+                <span className="mt-1 block font-display text-2xl font-black">{day.getDate()}</span>
+                {count > 0 && (
+                  <span className={`mt-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-black ${selected ? "bg-forest/15 text-forest" : "bg-brass/20 text-brass"}`}>
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {legend}
+    </>
+  );
+}
 
-        {/* Day Picker */}
-        <div className="mt-6 overflow-x-auto pb-2 border-t border-white/5 pt-4">
-          <div className="flex min-w-max gap-2">
-            {days.map((day) => {
-              const selected = dateKey(day) === dateKey(selectedDay);
-              return (
-                <button 
-                  className={`min-w-24 rounded-2xl border px-4 py-3 text-center transition ${selected ? "border-brass bg-brass text-forest" : "border-ivory/10 bg-ivory/5 text-ivory hover:bg-ivory/10"}`} 
-                  key={dateKey(day)} 
-                  onClick={() => setSelectedDay(day)}
-                >
-                  <span className="block text-[10px] font-black uppercase tracking-wider">{day.toLocaleDateString([], { weekday: "short" })}</span>
-                  <span className="mt-1 block font-display text-2xl font-black">{day.getDate()}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+function CourtSlotGrid({
+  courts,
+  selectedDay,
+  reservationsFor,
+  playerName,
+  mode,
+  onOpenSlot
+}: {
+  courts: Court[];
+  selectedDay: Date;
+  reservationsFor: (day: Date, courtId: string) => CalReservation[];
+  playerName?: (reservation: CalReservation) => string;
+  mode: "book" | "admin";
+  onOpenSlot: (payload: { courtId: string; date: Date; startMinutes: number; reservation?: CalReservation }) => void;
+}) {
+  if (courts.length === 0) {
+    return (
+      <div className="flex h-48 flex-col items-center justify-center rounded-3xl border border-ivory/10 bg-[#071f18] text-ivory">
+        <p className="text-xs font-black uppercase tracking-[0.2em] text-brass">No courts configured</p>
+      </div>
+    );
+  }
 
-        <div className="mt-5 flex flex-wrap gap-2 text-[11px] font-black uppercase tracking-[0.12em]">
-          <Legend className="bg-brass text-forest" label="Confirmed" />
-          <Legend className="calendar-requested text-amber-50" label="Requested" />
-          <Legend className="bg-emerald-700 text-white" label="Open play" />
-          <Legend className="bg-red-900 text-red-100" label="Maintenance" />
-          <Legend className="bg-slate-600 text-white" label="Unavailable" />
-        </div>
-      </header>
-
-      {error && <div className="mt-4 rounded-2xl bg-red-950/80 p-4 font-bold text-red-100">{error}</div>}
-      
-      {loading && data.courts.length === 0 ? (
-        <div className="mt-6 flex h-96 flex-col items-center justify-center rounded-3xl border border-ivory/10 bg-[#071f18] text-ivory">
-          <div className="loader-wrapper relative scale-75 pb-16">
-            {"loading".split("").map((letter, index) => (
-              <span className="loader-letter text-brass" style={{ animationDelay: `${index * 0.08}s` }} key={`${letter}-${index}`}>
-                {letter}
-              </span>
-            ))}
-            <div className="loader" aria-hidden="true" />
-          </div>
-          <p className="mt-4 text-xs font-black uppercase tracking-[0.2em] text-brass animate-pulse">Retrieving court availability...</p>
-        </div>
-      ) : (
-        <div className="mt-6 grid gap-6 md:grid-cols-2">
-          {data.courts.map((court) => (
-            <div className="rounded-3xl border border-ivory/10 bg-[#071f18] p-5 shadow-2xl" key={court.id}>
-              <div className="border-b border-ivory/10 pb-3 mb-4 flex justify-between items-baseline">
-                <h3 className="font-display text-2xl font-black text-brass uppercase tracking-wide">{court.name}</h3>
-                <span className="text-xs text-ivory/50">1-hour slots</span>
-              </div>
+  return (
+    <div className={`grid gap-6 ${mode === "admin" ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
+      {courts.map((court) => {
+        const bookable = isCourtBookable(court);
+        const setting = getCourtSetting(court.id);
+        return (
+          <div className="rounded-3xl border border-ivory/10 bg-[#071f18] p-5 shadow-2xl" key={court.id}>
+            <div className="border-b border-ivory/10 pb-3 mb-4 flex justify-between items-baseline">
+              <h3 className="font-display text-2xl font-black text-brass uppercase tracking-wide">{court.name}</h3>
+              {mode === "book" && !bookable && (
+                <span className="text-xs font-black uppercase text-red-400 bg-red-950/40 rounded-full px-3 py-1">
+                  {court.reservable === false ? "Not Reservable" : "Bookings Closed"}
+                </span>
+              )}
+            </div>
+            {mode === "book" && !bookable ? (
+              <p className="text-ivory/40 text-sm">This court is not accepting reservations right now.</p>
+            ) : (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {Array.from({ length: 16 }, (_, i) => {
-                  const hourStart = (6 + i) * 60; // 6:00 AM to 9:00 PM (starts)
+                  const hourStart = (6 + i) * 60;
                   const hourEnd = hourStart + 60;
-                  
-                  // 1. Check court settings
-                  const setting = court.reservationSetting;
-                  const closed = !setting?.reservationsEnabled
-                    || hourStart < parseClock(setting.openingTime || "06:00")
-                    || hourStart >= parseClock(setting.closingTime || "22:00");
-                  
-                  if (closed) {
+                  const openMins = parseClock(setting.openingTime || "06:00");
+                  const closeMins = parseClock(setting.closingTime || "22:00");
+                  if (hourStart < openMins || hourStart >= closeMins) {
                     return (
                       <div className="rounded-xl border border-white/5 bg-slate-800/40 px-3 py-3 text-center text-ivory/30" key={hourStart}>
                         <span className="block text-xs font-black">{clockLabel(hourStart)}</span>
-                        <span className="mt-0.5 block truncate text-[9px] font-bold text-ivory/40">Closed</span>
+                        <span className="mt-0.5 block text-[9px] font-bold text-ivory/40">Closed</span>
                       </div>
                     );
                   }
-
-                  // 2. Check maintenance blackouts
-                  const dayBlackouts = blackoutsFor(selectedDay, court.id);
-                  const blackout = dayBlackouts.find(b => {
-                    const start = timeMinutes(b.startTime);
-                    const end = timeMinutes(b.endTime);
-                    return hourStart < end && hourEnd > start;
-                  });
-                  if (blackout) {
-                    return (
-                      <div className="rounded-xl border border-red-950/40 bg-red-950/20 px-3 py-3 text-center text-red-300/60" key={hourStart}>
-                        <span className="block text-xs font-black">{clockLabel(hourStart)}</span>
-                        <span className="mt-0.5 block truncate text-[9px] font-bold text-red-400/80" title={blackout.reason}>Maintenance</span>
-                      </div>
-                    );
-                  }
-
-                  // 3. Check open play allocations
-                  const dayAllocations = allocationFor(selectedDay, court.id);
-                  const allocation = dayAllocations.find(a => {
-                    const start = parseClock(a.startTime);
-                    const end = parseClock(a.endTime);
-                    return hourStart < end && hourEnd > start;
-                  });
-                  if (allocation) {
-                    return (
-                      <div className="rounded-xl border border-emerald-950/40 bg-emerald-950/30 px-3 py-3 text-center text-emerald-300/60" key={hourStart}>
-                        <span className="block text-xs font-black">{clockLabel(hourStart)}</span>
-                        <span className="mt-0.5 block truncate text-[9px] font-bold text-emerald-400/80" title={allocation.note}>Open Play</span>
-                      </div>
-                    );
-                  }
-
-                  // 4. Check reservations
-                  const dayReservations = reservationsFor(selectedDay, court.id);
-                  const reservation = dayReservations.find(r => {
-                    const start = timeMinutes(r.startTime);
-                    const end = timeMinutes(r.endTime);
-                    return hourStart < end && hourEnd > start;
-                  });
-
+                  const overlapping = reservationsFor(selectedDay, court.id).filter((r) =>
+                    reservationOverlapsHour(r, hourStart, hourEnd)
+                  );
+                  const reservation = overlapping[0];
                   if (reservation) {
-                    const isOwner = member?.role === "ADMIN" || localStorage.getItem("haff_admin_authenticated") === "true" || (member && reservation.requesterUserId === member.id);
-                    const isConfirmed = reservation.approvalStatus === "CONFIRMED";
-                    const requesterName = reservation.requester?.player?.displayName || reservation.requester?.email?.split("@")[0] || "Player";
-                    const label = reservation.publicLabel || (isConfirmed ? `Reserved (${requesterName})` : `Requested (${requesterName})`);
-                    
+                    const isPending = reservation.status === "Requested";
+                    const host = playerName?.(reservation) ?? reservation.hostDisplayName ?? reservation.publicLabel ?? "Reserved";
+                    const label = mode === "admin"
+                      ? (host !== "Member" ? host : (reservation.title?.trim() || "Reserved"))
+                      : (reservation.publicLabel || reservation.title || "Reserved");
+                    const extraCount = overlapping.length - 1;
                     return (
                       <button
-                        className={`rounded-xl border px-3 py-3 text-center transition ${
-                          isConfirmed 
-                            ? "border-brass/30 bg-brass/10 text-brass" 
-                            : "calendar-requested border-amber-300/30 text-amber-100"
-                        } hover:opacity-95 hover:border-brass/50`}
+                        type="button"
+                        className={`rounded-xl border px-3 py-3 text-center transition hover:opacity-95 ${
+                          isPending
+                            ? "border-amber-400/40 bg-amber-400/15 hover:border-amber-400/60"
+                            : "border-brass/30 bg-brass/10 hover:border-brass/50"
+                        }`}
                         key={hourStart}
-                        onClick={() => setDrawer({ courtId: court.id, date: selectedDay, startMinutes: hourStart, reservation })}
+                        onClick={() => onOpenSlot({ courtId: court.id, date: selectedDay, startMinutes: hourStart, reservation })}
                       >
-                        <span className="block text-xs font-black">{clockLabel(hourStart)}</span>
-                        <span className="mt-0.5 block truncate text-[9px] font-bold opacity-80" title={label}>
-                          {label}
-                        </span>
+                        <span className={`block text-xs font-black ${isPending ? "text-amber-300" : "text-brass"}`}>{clockLabel(hourStart)}</span>
+                        <span className={`mt-0.5 block truncate text-[9px] font-bold ${isPending ? "text-amber-200/80" : "text-brass/80"}`} title={label}>{label}</span>
+                        {mode === "admin" && (
+                          <span className="mt-0.5 block truncate text-[8px] uppercase tracking-wider text-ivory/50">
+                            {isPending ? "Pending" : reservation.status}
+                            {extraCount > 0 ? ` · +${extraCount}` : ""}
+                          </span>
+                        )}
                       </button>
                     );
                   }
-
-                  // 5. Block past slots — build the exact Manila datetime using +08:00 offset
-                  const slotH = String(Math.floor(hourStart / 60)).padStart(2, "0");
-                  const slotMin = String(hourStart % 60).padStart(2, "0");
-                  const slotISO = `${dateKey(selectedDay)}T${slotH}:${slotMin}:00+08:00`;
-                  const isPast = new Date(slotISO).getTime() < Date.now();
-                  const isAdmin = member?.role === "ADMIN";
-
-                  if (isPast && !isAdmin) {
+                  if (mode === "admin") {
                     return (
-                      <div className="rounded-xl border border-white/5 bg-[#0b1310] px-3 py-3 text-center text-ivory/30 flex flex-col items-center justify-center opacity-40 cursor-not-allowed select-none" key={hourStart}>
+                      <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-3 py-3 text-center text-ivory/35" key={hourStart}>
                         <span className="block text-xs font-black">{clockLabel(hourStart)}</span>
-                        <span className="mt-1 flex items-center justify-center gap-1 text-[9px] font-bold text-ivory/40">
-                          <Lock size={10} className="opacity-70" /> Passed
-                        </span>
+                        <span className="mt-0.5 block text-[9px] font-bold">Open</span>
                       </div>
                     );
                   }
-
+                  const slotH = String(Math.floor(hourStart / 60)).padStart(2, "0");
+                  const slotMin = String(hourStart % 60).padStart(2, "0");
+                  const slotDate = new Date(`${dateKey(selectedDay)}T${slotH}:${slotMin}:00+08:00`);
+                  const isPast = slotDate.getTime() < Date.now();
+                  if (isPast) {
+                    return (
+                      <div className="rounded-xl border border-white/5 bg-[#0b1310] px-3 py-3 text-center flex flex-col items-center justify-center opacity-40 cursor-not-allowed select-none" key={hourStart}>
+                        <span className="block text-xs font-black">{clockLabel(hourStart)}</span>
+                        <span className="mt-1 flex items-center gap-1 text-[9px] font-bold text-ivory/40"><Lock size={10} /> Passed</span>
+                      </div>
+                    );
+                  }
                   return (
-                    <button
-                      className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-3 py-3 text-center transition hover:border-brass hover:bg-brass/10 group"
-                      key={hourStart}
-                      onClick={() => setDrawer({ courtId: court.id, date: selectedDay, startMinutes: hourStart })}
-                    >
+                    <button type="button" className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-3 py-3 text-center transition hover:border-brass hover:bg-brass/10 group" key={hourStart} onClick={() => onOpenSlot({ courtId: court.id, date: selectedDay, startMinutes: hourStart })}>
                       <span className="block text-xs font-black text-ivory group-hover:text-brass">{clockLabel(hourStart)}</span>
                       <span className="mt-1 block text-[10px] font-bold text-emerald-400">Book Now</span>
                     </button>
                   );
                 })}
               </div>
-            </div>
-          ))}
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Admin dashboard calendar ───────────────────────────────────────────────────
+export function AdminReservationCalendar() {
+  const {
+    courts,
+    reservations,
+    players,
+    cancelReservation,
+    approveReservation,
+    rejectReservation,
+    updateReservation
+  } = useClubStore();
+  const [weekStart, setWeekStart] = React.useState(() => startOfWeek(new Date()));
+  const [selectedDay, setSelectedDay] = React.useState(() => new Date());
+  const [showAllDates, setShowAllDates] = React.useState(false);
+  const [drawer, setDrawer] = React.useState<{ courtId: string; date: Date; startMinutes: number; reservation?: CalReservation } | null>(null);
+
+  const sortedCourts = React.useMemo(() => sortCourts(courts).filter((c) => c.status !== "Maintenance"), [courts]);
+  const allReservations: CalReservation[] = reservations
+    .filter((r) => !["Cancelled", "NoShow", "Rejected"].includes(r.status))
+    .map((r) => ({
+      ...r,
+      publicLabel: r.status === "Requested" ? "Pending" : (r.title || "Reserved")
+    }));
+
+  const playerName = (reservation: CalReservation) =>
+    reservation.hostDisplayName
+    ?? players.find((p) => p.id === reservation.hostPlayerId)?.displayName
+    ?? (reservation.hostPlayerId === "admin" ? "Admin" : "Member");
+
+  const reservationsFor = (day: Date, courtId: string) =>
+    allReservations.filter((r) => r.courtId === courtId && reservationDateKey(r.startTime) === dateKey(day));
+
+  const reservationCountForDay = React.useCallback(
+    (day: Date) => allReservations.filter((r) => reservationDateKey(r.startTime) === dateKey(day)).length,
+    [allReservations]
+  );
+
+  const visibleReservations = React.useMemo(() => {
+    const scoped = showAllDates
+      ? allReservations
+      : allReservations.filter((r) => reservationDateKey(r.startTime) === dateKey(selectedDay));
+    return [...scoped].sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+  }, [allReservations, selectedDay, showAllDates]);
+
+  React.useEffect(() => {
+    const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+    const selectedInWeek = days.some((day) => dateKey(day) === dateKey(selectedDay));
+    const selectedCount = allReservations.filter((r) => reservationDateKey(r.startTime) === dateKey(selectedDay)).length;
+    if (selectedInWeek && selectedCount > 0) return;
+    const firstWithBookings = days.find((day) => allReservations.some((r) => reservationDateKey(r.startTime) === dateKey(day)));
+    if (firstWithBookings) setSelectedDay(firstWithBookings);
+    else if (!selectedInWeek) setSelectedDay(days[0]);
+  }, [weekStart, allReservations]);
+
+  return (
+    <div className="space-y-5">
+      <div className="work-surface rounded-3xl border border-white/10 bg-white/5 p-5">
+        <p className="text-xs font-black uppercase tracking-[0.2em] text-brass">Court schedule</p>
+        <h2 className="font-display text-3xl">Who reserved what</h2>
+        <p className="mt-1 text-sm text-linen/65">
+          Tap a day with a booking count, then tap any slot to view details. Showing{" "}
+          <span className="font-bold text-ivory">{selectedDay.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</span>.
+        </p>
+
+        <div className="mt-5">
+          <ReservationWeekHeader
+            weekStart={weekStart}
+            selectedDay={selectedDay}
+            onWeekStartChange={setWeekStart}
+            onSelectedDayChange={setSelectedDay}
+            reservationCountForDay={reservationCountForDay}
+            legend={
+              <div className="mt-5 flex flex-wrap gap-2 text-[11px] font-black uppercase tracking-[0.12em]">
+                <Legend className="bg-brass text-forest" label="Confirmed" />
+                <Legend className="bg-amber-500/80 text-forest" label="Pending" />
+                <Legend className="border border-dashed border-white/20 text-ivory/50" label="Open" />
+              </div>
+            }
+          />
+        </div>
+
+        <div className="mt-6">
+          <CourtSlotGrid
+            courts={sortedCourts}
+            selectedDay={selectedDay}
+            reservationsFor={reservationsFor}
+            playerName={playerName}
+            mode="admin"
+            onOpenSlot={setDrawer}
+          />
+        </div>
+      </div>
+
+      <div className="work-surface rounded-3xl border border-white/10 bg-white/5 p-5">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="font-display text-3xl">All Reservations</h2>
+            <p className="mt-1 text-sm text-linen/60">
+              {showAllDates
+                ? `${visibleReservations.length} active booking${visibleReservations.length === 1 ? "" : "s"} across all dates`
+                : `${visibleReservations.length} on ${selectedDay.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}`}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowAllDates((value) => !value)}
+            className={`rounded-full px-4 py-2 text-xs font-black uppercase tracking-wider transition ${showAllDates ? "bg-brass text-forest" : "border border-white/15 bg-white/5 text-ivory hover:bg-white/10"}`}
+          >
+            {showAllDates ? "This day only" : "Show all dates"}
+          </button>
+        </div>
+        {visibleReservations.length === 0 ? (
+          <p className="mt-6 text-sm text-linen/60">
+            {showAllDates ? "No active reservations." : "No bookings on this day — pick another date with a count badge above."}
+          </p>
+        ) : (
+          <div className="mt-5 grid gap-3 lg:grid-cols-2">
+            {visibleReservations.map((item) => {
+              const court = courts.find((c) => c.id === item.courtId);
+              const isPending = item.status === "Requested";
+              return (
+                <article className="rounded-2xl bg-white/10 p-4 border border-white/5" key={item.id}>
+                  <p className="text-xs font-black uppercase tracking-wider text-brass">{court?.name ?? "Court"} · {item.status}</p>
+                  <h3 className="mt-1 font-display text-2xl text-ivory">{playerName(item)}</h3>
+                  <p className="text-sm text-linen/75">
+                    {item.title?.trim() ? `${item.title} · ` : ""}
+                    {new Date(item.startTime).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })} ·{" "}
+                    {new Date(item.startTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–
+                    {new Date(item.endTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                  {item.notes && <p className="mt-2 text-sm text-linen/65 rounded-xl bg-black/15 p-2">{item.notes}</p>}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {isPending && (
+                      <>
+                        <button type="button" onClick={() => void approveReservation(item.id)} className="min-h-8 rounded-lg bg-brass px-3 text-xs font-black text-forest">
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const reason = window.prompt("Reason for rejection (optional):") ?? "";
+                            void rejectReservation(item.id, reason || undefined);
+                          }}
+                          className="min-h-8 rounded-lg bg-amber-100 px-3 text-xs font-black text-amber-900"
+                        >
+                          Reject
+                        </button>
+                      </>
+                    )}
+                    {item.paymentStatus === "Pending" && !isPending && (
+                      <button type="button" onClick={() => void updateReservation(item.id, { paymentStatus: "Paid" })} className="min-h-8 rounded-lg bg-emerald-500/20 px-3 text-xs font-bold text-emerald-200">
+                        Mark paid
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const reason = window.prompt("Cancellation reason (optional):") ?? "";
+                        void cancelReservation(item.id, reason || undefined);
+                      }}
+                      className="min-h-8 rounded-lg bg-red-500/15 px-3 text-xs font-bold text-red-300"
+                    >
+                      <Ban size={14} className="inline mr-1" /> Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedDay(new Date(item.startTime));
+                        setDrawer({
+                          courtId: item.courtId,
+                          date: new Date(item.startTime),
+                          startMinutes: reservationTimeMinutes(item.startTime),
+                          reservation: item
+                        });
+                      }}
+                      className="min-h-8 rounded-lg border border-white/15 px-3 text-xs font-bold text-ivory/80"
+                    >
+                      View on grid
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {drawer && (
+        <AdminReservationDrawer
+          selection={drawer}
+          courts={courts}
+          players={players}
+          close={() => setDrawer(null)}
+          onApprove={(id) => { void approveReservation(id); setDrawer(null); }}
+          onReject={(id, reason) => { void rejectReservation(id, reason); setDrawer(null); }}
+          onCancel={(id, reason) => { void cancelReservation(id, reason); setDrawer(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function AdminReservationDrawer({
+  selection,
+  courts,
+  players,
+  close,
+  onApprove,
+  onReject,
+  onCancel
+}: {
+  selection: { courtId: string; date: Date; startMinutes: number; reservation?: CalReservation };
+  courts: Court[];
+  players: ReturnType<typeof useClubStore.getState>["players"];
+  close: () => void;
+  onApprove: (id: string) => void;
+  onReject: (id: string, reason?: string) => void;
+  onCancel: (id: string, reason?: string) => void;
+}) {
+  const reservation = selection.reservation;
+  const court = courts.find((c) => c.id === selection.courtId);
+
+  if (!reservation) {
+    return createPortal(
+      <div className="fixed inset-0 z-[100000] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm" onClick={close}>
+        <aside className="w-full max-w-sm rounded-3xl bg-ivory p-6 text-forest shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <p className="text-xs font-black uppercase tracking-wider text-clay">{court?.name}</p>
+          <h2 className="mt-1 font-display text-2xl font-black">Open slot</h2>
+          <p className="mt-2 text-sm text-forest/70">No booking for this time.</p>
+          <button type="button" className="mt-4 w-full rounded-xl bg-forest py-3 text-sm font-black text-ivory" onClick={close}>Close</button>
+        </aside>
+      </div>,
+      document.body
+    );
+  }
+
+  const isPending = reservation.status === "Requested";
+  const host = players.find((p) => p.id === reservation.hostPlayerId);
+  const hostName = reservation.hostDisplayName ?? host?.displayName ?? (reservation.hostPlayerId === "admin" ? "Admin" : "Member");
+
+  return createPortal(
+    <div className="fixed inset-0 z-[100000] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm" onClick={close}>
+      <aside className="w-full max-w-lg rounded-3xl bg-ivory p-6 text-forest shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="absolute right-4 top-4 grid h-10 w-10 place-items-center rounded-full bg-forest/5" onClick={close}><X size={18} /></button>
+        <p className="text-xs font-black uppercase tracking-wider text-clay">{court?.name}</p>
+        <h2 className="mt-1 font-display text-3xl font-black">{reservation.title || "Court Booking"}</h2>
+        <p className="mt-1 text-sm font-semibold text-forest/70">
+          {selection.date.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })} ·{" "}
+          {clockLabel(selection.startMinutes)} – {clockLabel(timeMinutes(reservation.endTime))}
+        </p>
+
+        <div className="mt-5 space-y-3 rounded-2xl bg-forest/5 p-4">
+          <p className="text-[10px] font-black uppercase tracking-wider text-clay">Booked by</p>
+          <p className="text-lg font-black">{hostName}</p>
+          <p className={`text-sm font-bold ${isPending ? "text-amber-700" : "text-emerald-700"}`}>
+            {isPending ? "⏳ Pending approval" : `✓ ${reservation.status}`}
+          </p>
+          {reservation.notes && (
+            <p className="rounded-xl bg-white/60 p-3 text-sm text-forest/75">
+              <span className="block text-[10px] font-black uppercase tracking-wider text-clay mb-1">Notes</span>
+              {reservation.notes}
+            </p>
+          )}
+          <p className="text-xs font-bold text-forest/50">Fee: {formatPeso(reservation.feeAmount)} · {reservation.paymentStatus}</p>
+        </div>
+
+        <div className="mt-5 flex flex-wrap gap-2">
+          {isPending && (
+            <>
+              <button type="button" className="flex-1 min-h-11 rounded-xl bg-brass px-4 text-sm font-black text-forest" onClick={() => onApprove(reservation.id)}>
+                Approve
+              </button>
+              <button
+                type="button"
+                className="flex-1 min-h-11 rounded-xl bg-amber-100 px-4 text-sm font-black text-amber-900"
+                onClick={() => {
+                  const reason = window.prompt("Reason for rejection (optional):") ?? "";
+                  onReject(reservation.id, reason || undefined);
+                }}
+              >
+                Reject
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            className="w-full min-h-11 rounded-xl bg-red-100 px-4 text-sm font-black text-red-800"
+            onClick={() => {
+              if (!confirm(`Remove this booking for ${host?.displayName ?? "this player"}?`)) return;
+              const reason = window.prompt("Cancellation reason (optional):") ?? "";
+              onCancel(reservation.id, reason || undefined);
+            }}
+          >
+            <Ban size={14} className="inline mr-1" /> Remove booking
+          </button>
+        </div>
+      </aside>
+    </div>,
+    document.body
+  );
+}
+
+// ── Main exported component ───────────────────────────────────────────────────
+export function ReservationCalendar() {
+  const {
+    courts,
+    reservations,
+    addReservation,
+    cancelReservation,
+  } = useClubStore();
+  const [member, setMember] = React.useState<Member>(null);
+  const [weekStart, setWeekStart] = React.useState(() => startOfWeek(new Date()));
+  const [selectedDay, setSelectedDay] = React.useState(() => new Date());
+  const [drawer, setDrawer] = React.useState<{ courtId: string; date: Date; startMinutes: number; reservation?: CalReservation } | null>(null);
+  const [error, setError] = React.useState("");
+
+  const isLocalAdmin = localStorage.getItem("haff_admin_authenticated") === "true";
+  const isAdmin = isLocalAdmin || member?.role === "ADMIN";
+  const bookableCourts = React.useMemo(
+    () => sortCourts(courts).filter((c) => c.status !== "Maintenance"),
+    [courts]
+  );
+
+  React.useEffect(() => {
+    fetch("/api/auth?action=me", { credentials: "include" })
+      .then((r) => r.json())
+      .then((d) => setMember(d.user ?? null))
+      .catch(() => setMember(null));
+  }, []);
+
+  const days = React.useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
+  React.useEffect(() => {
+    if (!days.some((d) => dateKey(d) === dateKey(selectedDay))) setSelectedDay(days[0]);
+  }, [days, selectedDay]);
+
+  const weekReservations: CalReservation[] = reservations
+    .filter((r) => !["Cancelled", "NoShow", "Rejected"].includes(r.status))
+    .map((r) => ({
+      ...r,
+      publicLabel: r.status === "Requested" ? "Pending" : (r.title || "Reserved")
+    }));
+
+  const reservationsFor = (day: Date, courtId: string) =>
+    weekReservations.filter((r) => r.courtId === courtId && reservationDateKey(r.startTime) === dateKey(day));
+
+  return (
+    <section className="mx-auto max-w-[1800px] px-3 py-5 pb-36 text-ivory sm:px-5">
+      <header className="rounded-3xl border border-ivory/10 bg-white/5 backdrop-blur-xl p-5 shadow-2xl sm:p-7">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-brass">HAFF court schedule</p>
+            <h1 className="mt-1 font-display text-4xl font-black sm:text-5xl">Book a Court</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-linen/70">Choose a day and tap any open slot. Player bookings require admin approval. Court rate: {formatPeso(COURT_HOURLY_FEE)}/hr.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="calendar-control" onClick={() => setWeekStart(addDays(weekStart, -7))}><ChevronLeft size={16} /> Previous Week</button>
+            <button type="button" className="calendar-control bg-brass text-forest" onClick={() => { setWeekStart(startOfWeek(new Date())); setSelectedDay(new Date()); }}>Today</button>
+            <button type="button" className="calendar-control" onClick={() => setWeekStart(addDays(weekStart, 7))}>Next Week <ChevronRight size={16} /></button>
+          </div>
+        </div>
+        <ReservationWeekHeader
+          weekStart={weekStart}
+          selectedDay={selectedDay}
+          onWeekStartChange={setWeekStart}
+          onSelectedDayChange={setSelectedDay}
+          hideWeekNav
+        />
+        <div className="mt-5 flex flex-wrap gap-2 text-[11px] font-black uppercase tracking-[0.12em]">
+          <Legend className="bg-brass text-forest" label="Confirmed" />
+          <Legend className="bg-amber-500/80 text-forest" label="Pending" />
+          <Legend className="bg-slate-600 text-white" label="Unavailable" />
+        </div>
+      </header>
+
+      {error && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
+          <div className="w-full max-w-2xl rounded-3xl border-2 border-red-500 bg-[#150505] p-8 text-center shadow-2xl shadow-red-900/50">
+            <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-red-950 text-red-500 mb-6 animate-bounce"><AlertTriangle size={48} /></div>
+            <h2 className="font-display text-3xl font-black uppercase tracking-wider text-red-500">Action Failed</h2>
+            <p className="mt-4 text-xl font-medium leading-relaxed text-red-100">{error}</p>
+            <button onClick={() => setError("")} className="mt-8 rounded-2xl bg-red-600 px-8 py-4 text-lg font-black uppercase tracking-widest text-white transition hover:bg-red-500 active:scale-95 shadow-lg shadow-red-600/30">Dismiss</button>
+          </div>
         </div>
       )}
 
-      {(member?.role === "ADMIN" || localStorage.getItem("haff_admin_authenticated") === "true") && (
-        <AdminWorkspace
-          reservations={adminReservations}
-          courts={data.courts}
-          tab={adminTab}
-          setTab={setAdminTab}
-          reload={load}
-          weekStart={weekStart}
-        />
+      {bookableCourts.length === 0 ? (
+        <div className="mt-6 flex h-96 flex-col items-center justify-center rounded-3xl border border-ivory/10 bg-[#071f18] text-ivory">
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-brass animate-pulse">Loading courts...</p>
+        </div>
+      ) : (
+        <div className="mt-6">
+          <CourtSlotGrid
+            courts={bookableCourts}
+            selectedDay={selectedDay}
+            reservationsFor={reservationsFor}
+            mode="book"
+            onOpenSlot={setDrawer}
+          />
+        </div>
       )}
 
       {drawer && (
         <ReservationDrawer
           member={member}
           selection={drawer}
-          courts={data.courts}
+          courts={courts}
           close={() => setDrawer(null)}
-          reload={load}
           onMemberUpdate={setMember}
+          onReserve={async (data) => { await addReservation(data); setDrawer(null); }}
+          onCancel={async (id, reason) => { await cancelReservation(id, reason); setDrawer(null); }}
+          isAdmin={isAdmin}
         />
       )}
     </section>
   );
 }
 
-function Legend({ className, label }: { className: string; label: string }) {
-  return <span className={`rounded-full px-3 py-1.5 ${className}`}>{label}</span>;
-}const parseClock = (value: string) => {
-  const [hour, minute] = value.split(":").map(Number);
-  return hour * 60 + minute;
-};
-
-function ReservationDrawer({ member, selection, courts, close, reload, onMemberUpdate }: {
+// ── Reservation Drawer ─────────────────────────────────────────────────────────
+function ReservationDrawer({
+  member, selection, courts, close, onMemberUpdate, onReserve, onCancel, isAdmin
+}: {
   member: Member;
-  selection: { courtId: string; date: Date; startMinutes: number; reservation?: Reservation };
+  selection: { courtId: string; date: Date; startMinutes: number; reservation?: CalReservation };
   courts: Court[];
   close: () => void;
-  reload: () => Promise<void>;
   onMemberUpdate: (m: Member) => void;
+  onReserve: (data: Omit<Reservation, "id">) => Promise<void>;
+  onCancel: (id: string, reason?: string) => Promise<void>;
+  isAdmin: boolean;
 }) {
   const reservation = selection.reservation;
-  const court = courts.find((item) => item.id === selection.courtId);
-  const [title, setTitle] = React.useState("Court Play");
-  const [extendHours, setExtendHours] = React.useState(0); // 0 = 1 hour default, 1 = +1 hr, etc.
-  const [notes, setNotes] = React.useState("");
+  const court = courts.find((c) => c.id === selection.courtId);
+  const [title, setTitle] = React.useState(reservation?.title || "Court Play");
+  const [extendHours, setExtendHours] = React.useState(0);
+  const [notes, setNotes] = React.useState(reservation?.notes || "");
   const [error, setError] = React.useState("");
+  const [successMsg, setSuccessMsg] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
-  const isAdmin = member?.role === "ADMIN" || localStorage.getItem("haff_admin_authenticated") === "true";
-  const [publicLabel, setPublicLabel] = React.useState(reservation?.publicLabel || reservation?.title || "");
-  const requesterName = reservation?.requester?.player?.displayName || reservation?.requester?.email?.split("@")[0] || "Player";
-  const requestTimeStr = reservation?.createdAt ? new Date(reservation.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "N/A";
-  const isOwner = isAdmin || (member && reservation?.requesterUserId === member.id);
+  const [showConfirm, setShowConfirm] = React.useState(false);
 
-  // Inline Auth states and handlers
   const [authMode, setAuthMode] = React.useState<"login" | "register">("login");
   const [authForm, setAuthForm] = React.useState({ displayName: "", email: "", password: "", skillLevel: "Beginner" });
   const [authError, setAuthError] = React.useState("");
@@ -468,21 +695,13 @@ function ReservationDrawer({ member, selection, courts, close, reload, onMemberU
     setAuthError("");
     setAuthLoading(true);
     try {
-      const res = await fetch(`/api/auth?action=${authMode}`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(authForm)
-      });
+      const res = await fetch(`/api/auth?action=${authMode}`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(authForm) });
       const text = await res.text();
       const data = text ? JSON.parse(text) : {};
       if (!res.ok) throw new Error(data.error ?? "Unable to continue");
-      if (authMode === "register") {
-        setAuthSuccessMsg("Account created successfully!");
-      }
+      if (authMode === "register") setAuthSuccessMsg("Account created! You can now book courts.");
       window.dispatchEvent(new Event("haff-auth-change"));
       onMemberUpdate(data.user);
-      await reload();
     } catch (reason) {
       setAuthError(reason instanceof Error ? reason.message : "Unable to continue");
     } finally {
@@ -490,372 +709,192 @@ function ReservationDrawer({ member, selection, courts, close, reload, onMemberU
     }
   };
 
-  const submit = async () => {
-    if (!member) return setError("Sign in before requesting a reservation.");
+  const submit = async (): Promise<boolean> => {
+    if (!member && !isAdmin) {
+      setError("Sign in to book a court.");
+      return false;
+    }
+    if (!isAdmin && court && court.reservable === false) {
+      setError("This court is not available for member reservations.");
+      return false;
+    }
+    if (!isAdmin && court && !isCourtBookable(court)) {
+      setError("This court is not accepting reservations right now.");
+      return false;
+    }
+    
+    // Validate that booking doesn't extend beyond closing hours
+    if (court) {
+      const setting = getCourtSetting(court.id);
+      const closingMinutes = parseClock(setting.closingTime || "22:00");
+      const totalDurationMinutes = (1 + extendHours) * 60;
+      const endMinutes = selection.startMinutes + totalDurationMinutes;
+      
+      if (endMinutes > closingMinutes) {
+        setError(`This booking would extend beyond closing time (${clockLabel(closingMinutes)}). Please choose a shorter duration or earlier start time.`);
+        return false;
+      }
+    }
+    
     setSubmitting(true);
     setError("");
     const totalDurationMinutes = (1 + extendHours) * 60;
     try {
       const start = new Date(`${dateKey(selection.date)}T${String(Math.floor(selection.startMinutes / 60)).padStart(2, "0")}:${String(selection.startMinutes % 60).padStart(2, "0")}:00+08:00`);
-      
-      await api("/api/reservations?action=request", {
-        method: "POST",
-        body: JSON.stringify({
-          courtId: selection.courtId,
-          startTime: start.toISOString(),
-          endTime: new Date(start.getTime() + totalDurationMinutes * 60_000).toISOString(),
-          title: title.trim() || "Court Play",
-          notes: notes.trim(),
-          publicLabel: publicLabel.trim() || null,
-          feeAmount: 350 * (1 + extendHours),
-          instant: isAdmin, // If staff/admin, confirm instantly
-          recurrenceRule: null
-        })
+      await onReserve({
+        courtId: selection.courtId,
+        startTime: start.toISOString(),
+        endTime: new Date(start.getTime() + totalDurationMinutes * 60_000).toISOString(),
+        title: title.trim() || "Court Play",
+        notes: notes.trim() || undefined,
+        hostPlayerId: member?.playerId || "admin",
+        hostDisplayName: member?.displayName,
+        playerIds: [],
+        status: isAdmin ? "Confirmed" : "Requested",
+        paymentStatus: isAdmin ? "Paid" : "Pending",
+        feeAmount: estimateCourtFee(extendHours)
       });
-      await reload();
-      close();
+      setSuccessMsg(isAdmin ? "Court booked successfully!" : "Request submitted! An admin will review your booking.");
+      return true;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to complete reservation request. Please try again shortly.");
+      setError(reason instanceof Error ? reason.message : "Booking failed.");
+      return false;
     } finally {
       setSubmitting(false);
     }
   };
 
-  const savePublicLabel = async () => {
-    try {
-      await api("/api/reservations?action=update-public-label", {
-        method: "POST",
-        body: JSON.stringify({ id: reservation?.id, publicLabel })
-      });
-      await reload();
-      setError("Label updated!");
-      setTimeout(() => setError(""), 1500);
-    } catch (reasonValue) {
-      setError(reasonValue instanceof Error ? reasonValue.message : "Update failed.");
-    }
-  };
+  const estimatedFee = estimateCourtFee(extendHours);
 
-  const cancel = async (scope: "occurrence" | "future" | "series") => {
-    const reason = window.prompt("Cancellation reason:") ?? "";
-    try {
-      await api("/api/reservations?action=cancel", { method: "POST", body: JSON.stringify({ id: reservation?.id, scope, reason }) });
-      close();
-      await reload();
-    } catch (reasonValue) {
-      setError(reasonValue instanceof Error ? reasonValue.message : "Cancellation failed.");
-    }
-  };
-  
   const formattedTimeRange = `${clockLabel(selection.startMinutes)} – ${clockLabel(selection.startMinutes + (1 + extendHours) * 60)}`;
-
-  const isWideModal = isAdmin;
+  const statusLabel = reservation?.status === "Requested" ? "Pending approval" : reservation?.status === "Confirmed" ? "Confirmed" : reservation?.status;
 
   return createPortal(
     <div className="fixed inset-0 z-[100000] bg-black/65 backdrop-blur-sm flex items-center justify-center p-4" onMouseDown={close}>
-      <aside className={`relative w-full overflow-y-auto rounded-3xl bg-ivory p-6 text-forest shadow-2xl transition-all ${isWideModal ? "max-w-2xl" : "max-w-md max-h-[90vh]"}`} onMouseDown={(event) => event.stopPropagation()}>
+      <aside className={`relative w-full overflow-y-auto rounded-3xl bg-ivory p-6 text-forest shadow-2xl transition-all ${isAdmin ? "max-w-2xl" : "max-w-md max-h-[90vh]"}`} onMouseDown={(e) => e.stopPropagation()}>
         <button className="absolute right-4 top-4 grid h-10 w-10 place-items-center rounded-full bg-forest/5" onClick={close}><X size={18} /></button>
         <p className="text-xs font-black uppercase tracking-[0.2em] text-clay">{court?.name}</p>
-        <h2 className="mt-1 font-display text-3xl font-black">{reservation ? reservation.title || reservation.publicLabel || "Reservation" : "Book Court"}</h2>
+        <h2 className="mt-1 font-display text-3xl font-black">{reservation ? reservation.title || "Reservation" : "Book Court"}</h2>
         <p className="mt-1 text-sm font-semibold text-forest/70">{selection.date.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })} · {formattedTimeRange}</p>
-        
+
         {reservation ? (
-          <div className="mt-6 grid gap-4 md:grid-cols-2">
-            {/* Card 1: Reservation Info */}
-            <div className="rounded-2xl bg-forest/5 p-4 space-y-3 flex flex-col justify-between">
-              <div>
-                {isOwner ? (
-                  <>
-                    <p className="text-[10px] font-black uppercase tracking-wider text-clay mb-2">Private Renter Info (Staff view)</p>
-                    <Detail label="Status" value={reservation.approvalStatus.replaceAll("_", " ")} />
-                    {reservation.paymentStatus && <Detail label="Payment" value={reservation.paymentStatus} />}
-                    <Detail label="Player / Renter" value={requesterName} />
-                    <Detail label="Submitted At" value={requestTimeStr} />
-                    {reservation.notes && <Detail label="Private Notes" value={reservation.notes} />}
-                    {reservation.rejectionReason && <Detail label="Staff response" value={reservation.rejectionReason} />}
-                  </>
-                ) : (
-                  <>
-                    <p className="text-[10px] font-black uppercase tracking-wider text-clay mb-2">Reservation Info</p>
-                    <Detail label="Status" value={reservation.approvalStatus === "CONFIRMED" ? "Confirmed (Approved)" : "Requested (Pending Approval)"} />
-                    <Detail label="Player / Renter" value={requesterName} />
-                    <Detail label="Submitted At" value={requestTimeStr} />
-                  </>
-                )}
-              </div>
-              {member && isOwner && !["CANCELLED", "REJECTED"].includes(reservation.approvalStatus) && (
-                <button className="mt-3 w-full rounded-xl bg-red-100 px-4 py-3 font-black text-red-800 text-xs" onClick={() => void cancel("occurrence")}>Cancel booking</button>
-              )}
+          <div className="mt-6 space-y-3">
+            <div className="rounded-2xl bg-forest/5 p-4 space-y-2">
+              <p className="text-[10px] font-black uppercase tracking-wider text-clay">Reservation Details</p>
+              <p className="font-bold">{reservation.title || "Court Play"}</p>
+              {reservation.notes && <p className="text-sm text-forest/60">{reservation.notes}</p>}
+              <p className={`text-sm font-bold ${reservation.status === "Requested" ? "text-amber-700" : "text-emerald-700"}`}>
+                {reservation.status === "Requested" ? "⏳ Pending admin approval" : `✓ ${statusLabel}`}
+              </p>
             </div>
-
-            {/* Card 2: Public details */}
-            <div className="rounded-2xl border border-brass/25 bg-brass/5 p-4 flex flex-col justify-between">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-wider text-clay mb-2">Calendar Text (Players view)</p>
-                {isAdmin ? (
-                  <label className="block text-xs font-black uppercase tracking-wider mt-3">
-                    Display Label
-                    <input className="calendar-input" value={publicLabel} onChange={(event) => setPublicLabel(event.target.value)} placeholder="e.g. Reserved for Coach Alex" />
-                  </label>
-                ) : (
-                  <div className="mt-3">
-                    <p className="text-xs font-black uppercase tracking-wider text-forest/55">Display Label</p>
-                    <p className="font-bold text-lg">{reservation.publicLabel || (reservation.approvalStatus === "CONFIRMED" ? "Reserved" : "Requested")}</p>
-                  </div>
-                )}
-              </div>
-              {isAdmin && (
-                <div className="mt-4">
-                  <button className="w-full rounded-xl bg-forest px-4 py-3.5 font-black text-ivory text-xs transition active:scale-[0.98]" onClick={savePublicLabel}>Save Public Label</button>
-                </div>
-              )}
-            </div>
+            {isAdmin && (
+              <button className="w-full rounded-xl bg-red-100 px-4 py-3 font-black text-red-800 text-xs" onClick={async () => { const r = window.prompt("Cancellation reason (optional):") ?? ""; await onCancel(reservation.id, r || undefined); }}>
+                Cancel booking
+              </button>
+            )}
           </div>
-        ) : !member ? (
+        ) : !member && !isAdmin ? (
           <div className="mt-6 rounded-2xl bg-forest/5 border border-forest/10 p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <ShieldCheck className="text-clay" size={20} />
-              <p className="font-black text-sm uppercase tracking-wider text-forest">Sign in to request this court</p>
-            </div>
-            
-            {/* Mode switch */}
+            <div className="flex items-center gap-2 mb-3"><ShieldCheck className="text-clay" size={20} /><p className="font-black text-sm uppercase tracking-wider text-forest">Sign in to book this court</p></div>
             <div className="flex rounded-xl bg-forest/10 p-1 mb-4">
-              <button
-                type="button"
-                onClick={() => setAuthMode("login")}
-                className={`flex-1 py-2 text-xs font-black rounded-lg transition ${authMode === "login" ? "bg-forest text-ivory" : "text-forest/70 hover:text-forest"}`}
-              >
-                Sign In
-              </button>
-              <button
-                type="button"
-                onClick={() => setAuthMode("register")}
-                className={`flex-1 py-2 text-xs font-black rounded-lg transition ${authMode === "register" ? "bg-forest text-ivory" : "text-forest/70 hover:text-forest"}`}
-              >
-                Register
-              </button>
+              <button type="button" onClick={() => setAuthMode("login")} className={`flex-1 py-2 text-xs font-black rounded-lg transition ${authMode === "login" ? "bg-forest text-ivory" : "text-forest/70 hover:text-forest"}`}>Sign In</button>
+              <button type="button" onClick={() => setAuthMode("register")} className={`flex-1 py-2 text-xs font-black rounded-lg transition ${authMode === "register" ? "bg-forest text-ivory" : "text-forest/70 hover:text-forest"}`}>Register</button>
             </div>
-
-            {authSuccessMsg && (
-              <div className="mb-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-3 py-2 text-xs font-bold text-emerald-800">
-                {authSuccessMsg}
-              </div>
-            )}
-            {authError && (
-              <div className="mb-4 rounded-xl bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs font-bold text-red-800">
-                {authError}
-              </div>
-            )}
-
+            {authSuccessMsg && <div className="mb-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-3 py-2 text-xs font-bold text-emerald-800">{authSuccessMsg}</div>}
+            {authError && <div className="mb-4 rounded-xl bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs font-bold text-red-800">{authError}</div>}
             <form onSubmit={handleAuthSubmit} className="space-y-3">
               {authMode === "register" && (
                 <>
-                  <div>
-                    <label className="block text-[10px] font-black uppercase tracking-wider text-forest/70 mb-1">Display Name</label>
-                    <input
-                      className="w-full rounded-xl border border-forest/15 bg-white px-3 py-2 text-sm text-forest placeholder:text-forest/40 focus:outline-none focus:ring-1 focus:ring-forest"
-                      placeholder="e.g. Alex"
-                      required
-                      value={authForm.displayName}
-                      onChange={(e) => setAuthForm({ ...authForm, displayName: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-black uppercase tracking-wider text-forest/70 mb-1">Skill Level</label>
-                    <select
-                      className="w-full rounded-xl border border-forest/15 bg-white px-3 py-2 text-sm text-forest focus:outline-none focus:ring-1 focus:ring-forest appearance-none"
-                      value={authForm.skillLevel}
-                      onChange={(e) => setAuthForm({ ...authForm, skillLevel: e.target.value })}
-                    >
-                      {["Newbie", "Beginner", "Novice", "Low Intermediate", "Intermediate", "Pro"].map((lvl) => (
-                        <option key={lvl} value={lvl}>{lvl}</option>
-                      ))}
-                    </select>
-                  </div>
+                  <div><label className="block text-[10px] font-black uppercase tracking-wider text-forest/70 mb-1">Display Name</label><input className="w-full rounded-xl border border-forest/15 bg-white px-3 py-2 text-sm text-forest placeholder:text-forest/40 focus:outline-none focus:ring-1 focus:ring-forest" placeholder="e.g. Alex" required value={authForm.displayName} onChange={(e) => setAuthForm({ ...authForm, displayName: e.target.value })} /></div>
+                  <div><label className="block text-[10px] font-black uppercase tracking-wider text-forest/70 mb-1">Skill Level</label><select className="w-full rounded-xl border border-forest/15 bg-white px-3 py-2 text-sm text-forest focus:outline-none focus:ring-1 focus:ring-forest appearance-none" value={authForm.skillLevel} onChange={(e) => setAuthForm({ ...authForm, skillLevel: e.target.value })}>{["Newbie","Beginner","Novice","Low Intermediate","Intermediate","Pro"].map((lvl) => <option key={lvl} value={lvl}>{lvl}</option>)}</select></div>
                 </>
               )}
-              <div>
-                <label className="block text-[10px] font-black uppercase tracking-wider text-forest/70 mb-1">Email</label>
-                <input
-                  type="email"
-                  className="w-full rounded-xl border border-forest/15 bg-white px-3 py-2 text-sm text-forest placeholder:text-forest/40 focus:outline-none focus:ring-1 focus:ring-forest"
-                  placeholder="your@email.com"
-                  required
-                  value={authForm.email}
-                  onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
-                />
-              </div>
+              <div><label className="block text-[10px] font-black uppercase tracking-wider text-forest/70 mb-1">Email</label><input type="email" className="w-full rounded-xl border border-forest/15 bg-white px-3 py-2 text-sm text-forest placeholder:text-forest/40 focus:outline-none focus:ring-1 focus:ring-forest" placeholder="your@email.com" required value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} /></div>
               <div>
                 <label className="block text-[10px] font-black uppercase tracking-wider text-forest/70 mb-1">Password</label>
                 <div className="relative">
-                  <input
-                    type={authShowPassword ? "text" : "password"}
-                    className="w-full rounded-xl border border-forest/15 bg-white px-3 py-2 pr-10 text-sm text-forest placeholder:text-forest/40 focus:outline-none focus:ring-1 focus:ring-forest"
-                    placeholder="••••••••"
-                    required
-                    value={authForm.password}
-                    onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
-                  />
-                  <button
-                    type="button"
-                    className="absolute inset-y-0 right-0 grid w-10 place-items-center text-forest/40 hover:text-forest"
-                    onClick={() => setAuthShowPassword((v) => !v)}
-                  >
-                    {authShowPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-                  </button>
+                  <input type={authShowPassword ? "text" : "password"} className="w-full rounded-xl border border-forest/15 bg-white px-3 py-2 pr-10 text-sm text-forest placeholder:text-forest/40 focus:outline-none focus:ring-1 focus:ring-forest" placeholder="••••••••" required value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} />
+                  <button type="button" className="absolute inset-y-0 right-0 grid w-10 place-items-center text-forest/40 hover:text-forest" onClick={() => setAuthShowPassword((v) => !v)}>{authShowPassword ? <EyeOff size={15} /> : <Eye size={15} />}</button>
                 </div>
               </div>
-              <button
-                type="submit"
-                disabled={authLoading}
-                className="w-full rounded-xl bg-forest py-2.5 font-black text-ivory text-xs transition active:scale-[0.98] disabled:opacity-60"
-              >
-                {authLoading ? "Please wait…" : authMode === "register" ? "Register" : "Sign In"}
-              </button>
+              <button type="submit" disabled={authLoading} className="w-full rounded-xl bg-forest py-2.5 font-black text-ivory text-xs transition active:scale-[0.98] disabled:opacity-60">{authLoading ? "Please wait…" : authMode === "register" ? "Register" : "Sign In"}</button>
             </form>
-          </div>
-        ) : isAdmin ? (
-          <div className="mt-6 grid gap-4 md:grid-cols-2">
-            {/* Card 1: Private details */}
-            <div className="rounded-2xl bg-forest/5 p-4 space-y-3 flex flex-col justify-between">
-              <div className="space-y-3">
-                <p className="text-[10px] font-black uppercase tracking-wider text-clay">Private Renter Info (Staff view)</p>
-                <label className="block text-xs font-black uppercase tracking-wider">
-                  Reservation title
-                  <input className="calendar-input" value={title} onChange={(event) => setTitle(event.target.value)} />
-                </label>
-                <label className="block text-xs font-black uppercase tracking-wider">
-                  Renter Notes
-                  <textarea className="calendar-input min-h-16" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Player names or notes..." />
-                </label>
-                <label className="block text-xs font-black uppercase tracking-wider">
-                  Duration
-                  <select className="calendar-input" value={extendHours} onChange={(event) => setExtendHours(Number(event.target.value))}>
-                    <option value={0}>1 hour</option>
-                    <option value={1}>2 hours</option>
-                    <option value={2}>3 hours</option>
-                    <option value={3}>4 hours</option>
-                  </select>
-                </label>
-                <div className="rounded-2xl bg-brass/10 p-3">
-                  <p className="text-[10px] font-black uppercase tracking-wider text-clay">Estimated fee</p>
-                  <p className="mt-1 text-xl font-black">PHP {350 * (1 + extendHours)}</p>
-                </div>
-              </div>
-              <button 
-                className="w-full rounded-xl bg-forest px-5 py-4 font-black text-ivory text-base shadow-lg transition active:scale-[0.98] disabled:opacity-60" 
-                onClick={() => void submit()}
-                disabled={submitting}
-              >
-                {submitting ? "Booking..." : "⚡ Book Instantly (Approved)"}
-              </button>
-            </div>
-
-            {/* Card 2: Public details */}
-            <div className="rounded-2xl border border-brass/25 bg-brass/5 p-4 flex flex-col justify-between">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-wider text-clay mb-2">Calendar Text (Players view)</p>
-                <label className="block text-xs font-black uppercase tracking-wider mt-3">
-                  Display Label
-                  <input className="calendar-input" value={publicLabel} onChange={(event) => setPublicLabel(event.target.value)} placeholder="e.g. Reserved for Coach Alex" />
-                </label>
-                <p className="text-[10px] text-forest/60 mt-3 leading-relaxed">
-                  This text will be shown directly on the public court calendar display. If empty, the Reservation Title will be used.
-                </p>
-              </div>
-            </div>
           </div>
         ) : (
           <div className="mt-6 space-y-4">
+            {isAdmin && (
+              <label className="block text-xs font-black uppercase tracking-wider">Reservation title<input className="calendar-input" value={title} onChange={(e) => setTitle(e.target.value)} /></label>
+            )}
+            <label className="block text-xs font-black uppercase tracking-wider">
+              Notes for admin
+              <textarea
+                className="calendar-input min-h-16"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="e.g. beginner group, need extra balls, celebrating a birthday..."
+              />
+            </label>
             <label className="block text-xs font-black uppercase tracking-wider">
               Duration
-              <select className="calendar-input" value={extendHours} onChange={(event) => setExtendHours(Number(event.target.value))}>
-                <option value={0}>1 hour</option>
-                <option value={1}>2 hours</option>
-                <option value={2}>3 hours</option>
-                <option value={3}>4 hours</option>
+              <select className="calendar-input" value={extendHours} onChange={(e) => setExtendHours(Number(e.target.value))}>
+                <option value={0}>1 hour</option><option value={1}>2 hours</option><option value={2}>3 hours</option><option value={3}>4 hours</option>
               </select>
             </label>
-
             <div className="rounded-2xl bg-brass/20 p-4">
               <p className="text-xs font-black uppercase tracking-wider text-clay">Estimated fee</p>
-              <p className="mt-1 text-3xl font-black">PHP {350 * (1 + extendHours)}</p>
+              <p className="mt-1 text-3xl font-black">{formatPeso(estimatedFee)}</p>
+              <p className="mt-1 text-xs text-forest/60">{formatPeso(COURT_HOURLY_FEE)}/hr × {1 + extendHours} hour{extendHours > 0 ? "s" : ""}</p>
+              {!isAdmin && <p className="mt-1 text-xs text-forest/60">Payment collected after admin approves your request.</p>}
             </div>
-
-            <button 
-              className="w-full rounded-xl bg-forest px-5 py-4 font-black text-ivory text-base shadow-lg transition active:scale-[0.98] disabled:opacity-60" 
-              onClick={() => void submit()}
-              disabled={submitting}
+            {error && <p className="rounded-xl bg-red-100 border border-red-300 px-4 py-3 text-sm font-bold text-red-800">{error}</p>}
+            {successMsg && <p className="rounded-xl bg-emerald-100 border border-emerald-300 px-4 py-3 text-sm font-bold text-emerald-800">{successMsg}</p>}
+            <button
+              type="button"
+              className="w-full rounded-xl bg-forest px-5 py-4 font-black text-ivory text-base shadow-lg transition active:scale-[0.98] disabled:opacity-60"
+              onClick={() => {
+                if (isAdmin) void submit();
+                else setShowConfirm(true);
+              }}
+              disabled={submitting || !!successMsg}
             >
-              {submitting ? "Booking..." : "👍 Book Court"}
+              {submitting ? "Submitting..." : isAdmin ? "⚡ Book Instantly" : "Submit Request"}
             </button>
           </div>
         )}
-        {error && <p className="mt-4 rounded-xl bg-red-100 p-3 text-sm font-bold text-red-800">{error}</p>}
+
+        {showConfirm && !isAdmin && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-3xl bg-black/50 p-4 backdrop-blur-sm" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="w-full max-w-sm rounded-2xl border border-forest/10 bg-ivory p-5 text-forest shadow-2xl">
+              <p className="text-xs font-black uppercase tracking-wider text-clay">Confirm request</p>
+              <h3 className="mt-1 font-display text-2xl font-black">Submit reservation?</h3>
+              <p className="mt-2 text-sm text-forest/70">
+                Your booking for <strong>{court?.name}</strong> on {selection.date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })} at {formattedTimeRange} will be sent to admin for approval.
+                Estimated fee: <strong>{formatPeso(estimatedFee)}</strong>.
+              </p>
+              {notes.trim() && (
+                <p className="mt-3 rounded-xl bg-forest/5 p-3 text-sm text-forest/75">
+                  <span className="block text-[10px] font-black uppercase tracking-wider text-clay mb-1">Your notes</span>
+                  {notes.trim()}
+                </p>
+              )}
+              <div className="mt-4 flex gap-2">
+                <button type="button" className="flex-1 rounded-xl bg-forest/10 py-3 text-sm font-black text-forest" onClick={() => setShowConfirm(false)} disabled={submitting}>
+                  Go back
+                </button>
+                <button
+                  type="button"
+                  className="flex-1 rounded-xl bg-forest py-3 text-sm font-black text-ivory"
+                  onClick={() => void submit().then((ok) => { if (ok) setShowConfirm(false); })}
+                  disabled={submitting}
+                >
+                  {submitting ? "Sending…" : "Yes, submit"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </aside>
     </div>,
     document.body
-  );
-}
-
-function Detail({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-2xl bg-forest/5 p-4"><p className="text-[10px] font-black uppercase tracking-wider text-clay">{label}</p><p className="mt-1 font-bold">{value}</p></div>;
-}
-
-
-
-function AdminWorkspace({ reservations, courts, tab, setTab, reload, weekStart }: {
-  reservations: Reservation[]; courts: Court[]; tab: "requests" | "settings" | "history"; setTab: (tab: "requests" | "settings" | "history") => void; reload: () => Promise<void>; weekStart: Date;
-}) {
-  const active = reservations
-    .filter((item) => ["REQUESTED", "AWAITING_PAYMENT", "PAYMENT_ISSUE"].includes(item.approvalStatus))
-    .sort((left, right) => (left.queuePosition ?? Number.MAX_SAFE_INTEGER) - (right.queuePosition ?? Number.MAX_SAFE_INTEGER));
-  const history = reservations.filter((item) => ["REJECTED", "CANCELLED", "NO_SHOW"].includes(item.approvalStatus));
-  return (
-    <section className="mt-6 rounded-3xl border border-ivory/10 bg-[#10392d] p-5">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between"><div><p className="text-xs font-black uppercase tracking-[0.2em] text-brass">Administrator workspace</p><h2 className="font-display text-3xl font-black">Reservation Operations</h2></div><div className="flex gap-2">{(["requests", "settings", "history"] as const).map((item) => <button className={`calendar-control capitalize ${tab === item ? "bg-brass text-forest" : ""}`} key={item} onClick={() => setTab(item)}>{item === "settings" ? <Settings size={15} /> : item === "history" ? <List size={15} /> : <Clock size={15} />}{item}</button>)}</div></div>
-      {tab === "requests" && <div className="mt-5 grid gap-3 lg:grid-cols-2">{active.map((item) => <AdminRequest key={item.id} reservation={item} reload={reload} conflicts={reservations.filter((candidate) => candidate.id !== item.id && candidate.courtId === item.courtId && new Date(candidate.startTime) < new Date(item.endTime) && new Date(candidate.endTime) > new Date(item.startTime) && ["REQUESTED", "AWAITING_PAYMENT"].includes(candidate.approvalStatus)).length} />)}{!active.length && <p className="text-ivory/50">No pending requests.</p>}</div>}
-      {tab === "settings" && <CourtSettings courts={courts} weekStart={weekStart} reload={reload} />}
-      {tab === "history" && <div className="mt-5 space-y-2">{history.map((item) => <div className="rounded-xl bg-ivory/5 p-3 text-sm" key={item.id}><strong>{item.title}</strong> · {item.approvalStatus} · {new Date(item.startTime).toLocaleString()}</div>)}{!history.length && <p className="text-ivory/50">No cancelled or rejected reservations.</p>}</div>}
-    </section>
-  );
-}
-
-function AdminRequest({ reservation, reload, conflicts }: { reservation: Reservation; reload: () => Promise<void>; conflicts: number }) {
-  const [error, setError] = React.useState("");
-  const act = async (action: string, body: Record<string, unknown> = {}) => {
-    try {
-      await api(`/api/reservations?action=${action}`, { method: "POST", body: JSON.stringify({ id: reservation.id, ...body }) });
-      await reload();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Action failed."); }
-  };
-  return (
-    <article className="rounded-2xl bg-ivory p-4 text-forest">
-      <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-wider text-clay">Queue #{reservation.queuePosition ?? "—"} · {reservation.court?.name} · {reservation.approvalStatus.replaceAll("_", " ")}</p><h3 className="mt-1 font-display text-2xl font-black">{reservation.title}</h3><p className="text-sm text-forest/65">{new Date(reservation.startTime).toLocaleString()}–{new Date(reservation.endTime).toLocaleTimeString()}</p></div>{conflicts > 0 && <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-800">{conflicts} competing</span>}</div>
-      <div className="mt-3 rounded-xl bg-forest/5 p-3 text-sm"><p className="font-black">{reservation.requester?.player?.displayName || reservation.requester?.email}</p>{reservation.notes && <p className="mt-1 text-forest/60">{reservation.notes}</p>}</div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        {reservation.paymentStatus !== "PAID" && <button className="rounded-xl bg-amber-100 px-3 py-2 text-xs font-black text-amber-900" onClick={() => void act("mark-paid", { transactionId: window.prompt("Payment reference (optional):") || "" })}><CreditCard size={14} className="inline" /> Record payment</button>}
-        <button className="rounded-xl bg-forest px-3 py-2 text-xs font-black text-ivory disabled:opacity-40" disabled={reservation.paymentStatus !== "PAID"} onClick={() => void act("approve")}><Check size={14} className="inline" /> Approve</button>
-        <button className="rounded-xl bg-red-100 px-3 py-2 text-xs font-black text-red-800" onClick={() => { const reason = window.prompt("Rejection reason:"); if (reason?.trim()) void act("reject", { reason }); }}><Ban size={14} className="inline" /> Reject</button>
-      </div>
-      {error && <p className="mt-3 text-xs font-bold text-red-700">{error}</p>}
-    </article>
-  );
-}
-
-function CourtSettings({ courts, weekStart, reload }: { courts: Court[]; weekStart: Date; reload: () => Promise<void> }) {
-  const saveSetting = async (court: Court, enabled: boolean) => {
-    await api("/api/reservations?action=settings", { method: "POST", body: JSON.stringify({ courtId: court.id, reservationsEnabled: enabled, openingTime: court.reservationSetting?.openingTime || "06:00", closingTime: court.reservationSetting?.closingTime || "22:00", minDurationMinutes: 30, maxDurationMinutes: 180 }) });
-    await reload();
-  };
-  const setAllocation = async (courtId: string, day: Date, mode: "OPEN_PLAY" | "RESERVATION") => {
-    await api("/api/reservations?action=allocation", { method: "POST", body: JSON.stringify({ courtId, date: dateKey(day), startTime: "15:00", endTime: "23:00", mode, note: mode === "OPEN_PLAY" ? "Open play allocation" : "Private reservations continue" }) });
-    await reload();
-  };
-  return (
-    <div className="mt-5 space-y-5">
-      <div className="grid gap-3 md:grid-cols-2">{courts.map((court) => <div className="rounded-2xl bg-ivory p-4 text-forest" key={court.id}><div className="flex items-center justify-between"><div><p className="font-display text-2xl font-black">{court.name}</p><p className="text-xs text-forest/55">6:00 AM–10:00 PM · 30 minute intervals</p></div><button className={`rounded-full px-4 py-2 text-xs font-black ${court.reservationSetting?.reservationsEnabled ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-700"}`} onClick={() => void saveSetting(court, !court.reservationSetting?.reservationsEnabled)}>{court.reservationSetting?.reservationsEnabled ? "Reservable" : "Disabled"}</button></div></div>)}</div>
-      <div><h3 className="font-display text-2xl font-black">3 PM Court Allocation</h3><p className="text-sm text-ivory/55">Choose whether each court serves open play or private reservations for each day.</p><div className="mt-3 overflow-x-auto"><table className="min-w-full text-sm"><thead><tr><th className="p-2 text-left">Court</th>{Array.from({ length: 7 }, (_, index) => <th className="p-2" key={index}>{addDays(weekStart, index).toLocaleDateString([], { weekday: "short" })}</th>)}</tr></thead><tbody>{courts.map((court) => <tr className="border-t border-ivory/10" key={court.id}><td className="p-2 font-black">{court.name}</td>{Array.from({ length: 7 }, (_, index) => <td className="p-2" key={index}><select className="rounded-lg bg-ivory/10 p-2 text-xs" defaultValue="OPEN_PLAY" onChange={(event) => void setAllocation(court.id, addDays(weekStart, index), event.target.value as "OPEN_PLAY" | "RESERVATION")}><option className="text-forest" value="OPEN_PLAY">Open play</option><option className="text-forest" value="RESERVATION">Reservation</option></select></td>)}</tr>)}</tbody></table></div></div>
-      <button className="rounded-xl bg-red-900 px-4 py-3 text-sm font-black text-red-100" onClick={async () => { const courtId = window.prompt(`Court ID:\n${courts.map((court) => `${court.name}: ${court.id}`).join("\n")}`); const startTime = window.prompt("Blackout start (YYYY-MM-DDTHH:mm):"); const endTime = window.prompt("Blackout end (YYYY-MM-DDTHH:mm):"); const reason = window.prompt("Reason:"); if (courtId && startTime && endTime && reason) { await api("/api/reservations?action=blackout", { method: "POST", body: JSON.stringify({ courtId, startTime: new Date(`${startTime}:00+08:00`).toISOString(), endTime: new Date(`${endTime}:00+08:00`).toISOString(), reason }) }); await reload(); } }}><AlertTriangle size={16} className="inline" /> Add maintenance blackout</button>
-    </div>
   );
 }

@@ -16,8 +16,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         { teamBPlayerIds: { has: user.playerId } }
       ]
     },
-    orderBy: { endedAt: "desc" },
-    include: false
+    orderBy: { endedAt: "desc" }
   });
   let wins = 0;
   const people = new Set<string>();

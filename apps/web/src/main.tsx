@@ -51,15 +51,31 @@ import {
   Bell,
   Zap,
   BarChart2,
-  ArrowLeft
+  Ban,
+  ArrowLeft,
+  RotateCcw
 } from "lucide-react";
 import { Button, Card, Badge } from "./components/ui";
 import { Chip } from "./components/ui/heroui-chip";
 import { AiLoader } from "./components/ui/ai-loader";
-import { useClubStore } from "./store/useClubStore";
+import { ProfilePhotoCropper } from "./components/ProfilePhotoCropper";
+import { readProfileImageFile } from "./lib/profilePhoto";
+import { COURT_HOURLY_FEE } from "./lib/pricing";
+import { manilaDateTimeIso, reservationDateKey } from "./lib/reservationTime";
+import { useClubStore, subscribeClubStateBroadcast } from "./store/useClubStore";
 import { db } from "./lib/db";
+import { sortCourts, getPlayerAvatar, getActiveCourtMatch, getTvStackGroups, getStackDisplayGroups, reconcileStackOrder, createTvVacantSlot, resolveMatchTeamPlayers, resolvePlayerById, getPlayerStatusNote, getPlayerDisplayLabel, AVATAR_PRESETS, dicebearAvatar, isUsableAvatarUrl } from "./lib/utils";
+import { getCourtSetting, getCourtSettings, saveCourtSettings, type CourtSettings } from "./lib/courtSettings";
+import {
+  PLAY_KUDOS_PILLS,
+  getMatchOpponentIds,
+  kudosForMatch,
+  kudosForPlayer,
+  tallyKudosPills,
+} from "./lib/playerKudos";
 import { getVoiceStyle, isSoundEnabled, playSound, setSoundEnabled, setVoiceStyle, speakAnnouncement, unlockAudio } from "./lib/sound";
 import type { VoiceStyle } from "./lib/sound";
+import type { Court, Match, Player } from "./lib/types";
 import "./styles/globals.css";
 import { Analytics } from "@vercel/analytics/react";
 
@@ -69,6 +85,22 @@ const LandingView = React.lazy(() =>
 const ReservationCalendar = React.lazy(() =>
   import("./components/ReservationCalendar").then((module) => ({ default: module.ReservationCalendar }))
 );
+const AdminReservationCalendar = React.lazy(() =>
+  import("./components/ReservationCalendar").then((module) => ({ default: module.AdminReservationCalendar }))
+);
+const CommunityView = React.lazy(() =>
+  import("./components/CommunityView").then((module) => ({ default: module.CommunityView }))
+);
+
+type SessionMember = {
+  id: string;
+  email: string;
+  role: "ADMIN" | "MEMBER";
+  displayName: string;
+  playerId?: string | null;
+  avatarUrl?: string | null;
+  skillLevel?: string | null;
+};
 
 // Vercel runs the production API as serverless functions, so live refreshes use
 // the existing lightweight polling path instead of opening a dead WebSocket.
@@ -77,7 +109,7 @@ const socket: any = null;
 function App() {
   const { hydrate, hydrated, view, setView, online, setOnline, pendingSyncCount, refreshPendingSyncCount } = useClubStore();
   const [socketConnected, setSocketConnected] = React.useState(false);
-  const [sessionMember, setSessionMember] = React.useState<{ displayName: string; avatarUrl?: string } | null>(null);
+  const [sessionMember, setSessionMember] = React.useState<SessionMember | null>(null);
   const [sessionReady, setSessionReady] = React.useState(false);
 
   const refreshSession = React.useCallback(() => {
@@ -162,9 +194,11 @@ function App() {
       } else if (path === "landing" || hash === "landing") {
         window.history.replaceState(null, "", "/home");
         targetView = "landing";
-      } else if (["admin", "player", "parking", "tv", "calendar", "finance"].includes(path)) {
+      } else if (path === "play" || hash === "play") {
+        targetView = "player";
+      } else if (["admin", "player", "parking", "tv", "calendar", "finance", "community"].includes(path)) {
         targetView = path as ViewMode;
-      } else if (["admin", "player", "parking", "tv", "calendar", "finance"].includes(hash)) {
+      } else if (["admin", "player", "parking", "tv", "calendar", "finance", "community"].includes(hash)) {
         targetView = hash as ViewMode;
       } else if (path === "display" || hash === "display") {
         targetView = "tv";
@@ -193,6 +227,7 @@ function App() {
     let prevMatches = useClubStore.getState().matches;
     let prevPlayers = useClubStore.getState().players;
     let prevStackOrder = useClubStore.getState().stackOrder;
+    let prevReservations = useClubStore.getState().reservations;
     let sharedStateInitialized = useClubStore.getState().hydrated;
     let sharedPublishTimer: number | undefined;
 
@@ -201,12 +236,14 @@ function App() {
         state.courts !== prevCourts ||
         state.matches !== prevMatches ||
         state.players !== prevPlayers ||
-        state.stackOrder !== prevStackOrder;
+        state.stackOrder !== prevStackOrder ||
+        state.reservations !== prevReservations;
       if (operationalStateChanged) {
         prevCourts = state.courts;
         prevMatches = state.matches;
         prevPlayers = state.players;
         prevStackOrder = state.stackOrder;
+        prevReservations = state.reservations;
         if (!sharedStateInitialized) {
           if (state.hydrated) {
             sharedStateInitialized = true;
@@ -216,10 +253,11 @@ function App() {
         }
         state.suppressRefresh();
         window.clearTimeout(sharedPublishTimer);
-        sharedPublishTimer = window.setTimeout(() => void state.publishSharedState(), 250);
-        if (socket && socket.connected) {
-          socket.emit("state_changed");
-        }
+        sharedPublishTimer = window.setTimeout(() => {
+          void state.publishSharedState().then(() => {
+            if (socket?.connected) socket.emit("state_changed");
+          });
+        }, 250);
       }
     });
 
@@ -228,7 +266,42 @@ function App() {
       if (!socket || !socket.connected) {
         void useClubStore.getState().refreshSharedState();
       }
-    }, 30000);
+    }, 5000);
+
+    const applyIncomingStackOrder = (incoming: string[]) => {
+      if (useClubStore.getState().isRefreshSuppressed()) return;
+      const state = useClubStore.getState();
+      const stackOrder = reconcileStackOrder(incoming, state.players, state.matches, state.courts);
+      if (stackOrder.join("|") !== state.stackOrder.join("|")) {
+        localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+        useClubStore.setState({ stackOrder });
+      }
+    };
+
+    const unsubscribeClubBroadcast = subscribeClubStateBroadcast(
+      () => { void useClubStore.getState().refreshSharedState(); },
+      (stackOrder) => {
+        applyIncomingStackOrder(stackOrder);
+      },
+      (playerProfiles) => {
+        useClubStore.getState().applyBroadcastPlayerProfiles(playerProfiles);
+      },
+      (broadcast) => {
+        useClubStore.setState({ tvBroadcast: broadcast });
+      }
+    );
+
+    const onStackStorage = (event: StorageEvent) => {
+      if (event.key !== "haff-stack-order" || !event.newValue) return;
+      try {
+        const parsed = JSON.parse(event.newValue);
+        if (!Array.isArray(parsed)) return;
+        applyIncomingStackOrder(parsed.map(String));
+      } catch {
+        // Ignore malformed stack snapshots.
+      }
+    };
+    window.addEventListener("storage", onStackStorage);
 
     // Socket.IO Connection Event Handlers
     if (socket) {
@@ -239,8 +312,7 @@ function App() {
         hydrate();
       };
       const onStateChanged = () => {
-        console.log("Received state change broadcast event, syncing local state...");
-        hydrate();
+        void useClubStore.getState().refreshSharedState();
       };
 
       socket.on("connect", onConnect);
@@ -257,6 +329,8 @@ function App() {
         window.clearInterval(sharedStateTimer);
         window.clearTimeout(sharedPublishTimer);
         unsubscribe();
+        unsubscribeClubBroadcast();
+        window.removeEventListener("storage", onStackStorage);
         socket.off("connect", onConnect);
         socket.off("disconnect", onDisconnect);
         socket.off("sync_update", onSyncUpdate);
@@ -273,6 +347,8 @@ function App() {
       window.clearInterval(sharedStateTimer);
       window.clearTimeout(sharedPublishTimer);
       unsubscribe();
+      unsubscribeClubBroadcast();
+      window.removeEventListener("storage", onStackStorage);
     };
   }, [refreshPendingSyncCount, setOnline, hydrate]);
 
@@ -281,6 +357,9 @@ function App() {
   return (
     <main className="min-h-screen bg-forest text-ivory">
       <div className="fixed inset-0 z-0 texture pointer-events-none" />
+      {/* Global Background aesthetics */}
+      <div className="fixed inset-0 z-0 bg-[linear-gradient(to_right,#fff8ea0c_1px,transparent_1px),linear-gradient(to_bottom,#fff8ea0c_1px,transparent_1px)] bg-[size:4rem_4rem] pointer-events-none" />
+      <div className="fixed inset-0 z-0 bg-[radial-gradient(circle_at_50%_0%,rgba(244,201,93,0.18),transparent_50%),radial-gradient(circle_at_100%_40%,rgba(127,182,154,0.15),transparent_40%),linear-gradient(180deg,rgba(14,90,67,0.1),rgba(6,36,27,0.9))] pointer-events-none" />
       {view === "landing" && (
         <AccountMenu member={sessionMember} setView={setView} onSignedOut={() => setSessionMember(null)} />
       )}
@@ -292,6 +371,7 @@ function App() {
           pendingSyncCount={pendingSyncCount} 
           socketConnected={socketConnected}
           member={sessionMember}
+          sessionReady={sessionReady}
           onSignedOut={() => setSessionMember(null)}
         />
       )}
@@ -299,7 +379,7 @@ function App() {
         <AnimatePresence>
           {view === "landing" && (
             <React.Suspense fallback={<LoadingScreen />}>
-              <LandingView key="landing" setView={setView} signedIn={Boolean(sessionMember)} />
+              <LandingView key="landing" setView={setView} signedIn={sessionReady && Boolean(sessionMember)} />
             </React.Suspense>
           )}
           {view === "admin" && <AdminView key="admin" />}
@@ -308,9 +388,20 @@ function App() {
           {view === "tv" && <DisplayView key="tv" setView={setView} />}
           {view === "calendar" && <React.Suspense fallback={<LoadingScreen />}><ReservationCalendar key="calendar" /></React.Suspense>}
           {view === "finance" && <FinanceView key="finance" />}
+          {view === "community" && (
+            <React.Suspense fallback={<LoadingScreen />}>
+              <CommunityView
+                key="community"
+                member={sessionMember}
+                sessionReady={sessionReady}
+                onAuth={setSessionMember}
+                onLogout={() => setSessionMember(null)}
+              />
+            </React.Suspense>
+          )}
         </AnimatePresence>
       </div>
-      {view !== "tv" && <FloatingDock view={view} setView={setView} />}
+      {view !== "tv" && <FloatingDock view={view} setView={setView} isAdmin={sessionMember?.role === "ADMIN"} />}
       <Toasts />
     </main>
   );
@@ -321,13 +412,13 @@ function AccountMenu({
   setView,
   onSignedOut
 }: {
-  member: { displayName: string; avatarUrl?: string } | null;
+  member: SessionMember | null;
   setView: (view: ViewMode) => void;
   onSignedOut: () => void;
 }) {
   const [open, setOpen] = React.useState(false);
   if (!member) return null;
-  const avatar = member.avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(member.displayName)}&backgroundColor=d9ad5b`;
+  const avatar = isUsableAvatarUrl(member.avatarUrl) ? member.avatarUrl : dicebearAvatar(member.displayName, "fun-emoji");
   return (
     <div
       className="fixed"
@@ -401,13 +492,35 @@ function PasswordField({
 function useNow() {
   const [now, setNow] = React.useState(() => Date.now());
   React.useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 500);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
   return now;
 }
 
-type ViewMode = "landing" | "admin" | "player" | "parking" | "tv" | "calendar" | "finance";
+/** requestAnimationFrame clock for live countdowns; pauses when enabled is false. */
+function useSmoothNow(enabled = true) {
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (!enabled) return;
+    let frame = 0;
+    let lastCentisecond = -1;
+    const tick = () => {
+      const t = Date.now();
+      const centisecond = Math.floor(t / 10);
+      if (centisecond !== lastCentisecond) {
+        lastCentisecond = centisecond;
+        setNow(t);
+      }
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [enabled]);
+  return now;
+}
+
+type ViewMode = "landing" | "admin" | "player" | "parking" | "tv" | "calendar" | "finance" | "community";
 
 function TopBar({ 
   view, 
@@ -416,6 +529,7 @@ function TopBar({
   pendingSyncCount,
   socketConnected,
   member,
+  sessionReady,
   onSignedOut
 }: { 
   view: string; 
@@ -423,7 +537,8 @@ function TopBar({
   online: boolean; 
   pendingSyncCount: number;
   socketConnected: boolean;
-  member: { displayName: string; avatarUrl?: string } | null;
+  member: SessionMember | null;
+  sessionReady: boolean;
   onSignedOut: () => void;
 }) {
   const [soundOn, setSoundOn] = React.useState(isSoundEnabled);
@@ -487,7 +602,7 @@ function TopBar({
             {online ? <Wifi size={16} /> : <WifiOff size={16} />}
             <span className="hidden lg:inline">{online ? "Online" : "Offline"} - {pendingSyncCount ? `${pendingSyncCount} pending` : "all saved"}</span>
           </div>
-          <InlineAccountMenu member={member} setView={setView} onSignedOut={onSignedOut} />
+          <InlineAccountMenu member={member} setView={setView} onSignedOut={onSignedOut} sessionReady={sessionReady} />
         </div>
       </div>
     </header>
@@ -497,15 +612,43 @@ function TopBar({
 function InlineAccountMenu({
   member,
   setView,
-  onSignedOut
+  onSignedOut,
+  sessionReady
 }: {
-  member: { displayName: string; avatarUrl?: string } | null;
+  member: SessionMember | null;
   setView: (view: ViewMode) => void;
   onSignedOut: () => void;
+  sessionReady: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
-  if (!member) return null;
-  const avatar = member.avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(member.displayName)}&backgroundColor=d9ad5b`;
+  if (!sessionReady) return null;
+  if (!member) {
+    return (
+      <div className="flex shrink-0 items-center gap-2">
+        <button
+          className="hidden min-h-10 items-center gap-2 rounded-full bg-ivory/10 px-4 text-xs font-black text-ivory transition hover:bg-ivory/15 sm:flex"
+          onClick={() => {
+            sessionStorage.setItem("haff-auth-mode", "login");
+            setView("player");
+          }}
+          type="button"
+        >
+          <LogIn size={15} /> Sign in
+        </button>
+        <button
+          className="flex min-h-10 items-center gap-2 rounded-full bg-brass px-4 text-xs font-black text-forest transition hover:bg-linen"
+          onClick={() => {
+            sessionStorage.setItem("haff-auth-mode", "register");
+            setView("player");
+          }}
+          type="button"
+        >
+          <UserPlus size={15} /> Register
+        </button>
+      </div>
+    );
+  }
+  const avatar = isUsableAvatarUrl(member.avatarUrl) ? member.avatarUrl : dicebearAvatar(member.displayName, "fun-emoji");
   const signOut = async () => {
     await fetch("/api/auth?action=logout", { method: "POST", credentials: "include" });
     localStorage.removeItem("haff-player-account-id");
@@ -542,30 +685,19 @@ function InlineAccountMenu({
   );
 }
 
-function FloatingDock({ view, setView }: { view: string; setView: (view: ViewMode) => void }) {
-  const [isAdmin, setIsAdmin] = React.useState(false);
-  React.useEffect(() => {
-    const checkRole = () => {
-      fetch("/api/auth?action=me", { credentials: "include" })
-        .then((response) => response.json())
-        .then((data) => setIsAdmin(data.user?.role === "ADMIN"))
-        .catch(() => setIsAdmin(false));
-    };
-    checkRole();
-    window.addEventListener("haff-auth-change", checkRole);
-    return () => window.removeEventListener("haff-auth-change", checkRole);
-  }, []);
+function FloatingDock({ view, setView, isAdmin }: { view: string; setView: (view: ViewMode) => void; isAdmin: boolean }) {
   const publicItems = [
     { key: "landing", label: "Home", icon: Home },
-    { key: "calendar", label: "Reserve", icon: CalendarDays },
     { key: "player", label: "Players", icon: UserRound },
+    { key: "calendar", label: "Reserve", icon: Calendar },
     { key: "parking", label: "Parking", icon: Coffee },
+    { key: "tv", label: "TV", icon: Monitor },
   ];
   const adminItems = [
     { key: "landing", label: "Home", icon: Home },
-    { key: "calendar", label: "Reserve", icon: CalendarDays },
     { key: "admin", label: "Admin", icon: Sliders },
     { key: "player", label: "Players", icon: UserRound },
+    { key: "calendar", label: "Calendar", icon: Calendar },
     { key: "parking", label: "Parking", icon: Coffee },
     { key: "finance", label: "Finance", icon: DollarSign },
     { key: "tv", label: "TV Display", icon: Monitor },
@@ -620,10 +752,49 @@ function LogoMark({ size = "small" }: { size?: "small" | "large" }) {
   );
 }
 
+function PlayerProfileSheet({
+  player,
+  onClose
+}: {
+  player: ReturnType<typeof useClubStore.getState>["players"][number];
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[120] flex items-end justify-center bg-black/70 p-4 backdrop-blur-sm sm:items-center" onClick={onClose}>
+      <motion.div
+        initial={{ opacity: 0, y: 24 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0f2e24] p-6 text-ivory shadow-2xl max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-4">
+          <img src={getPlayerAvatar(player)} alt="" className="h-20 w-20 rounded-2xl object-cover bg-white/10" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-black uppercase tracking-[0.2em] text-brass">Player profile</p>
+            <h2 className="font-display text-3xl font-black">{player.displayName}</h2>
+            <RankBadge skillLevel={player.skillLevel} compact />
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full bg-white/10 p-2 text-ivory/70 hover:text-ivory"><X size={18} /></button>
+        </div>
+
+        {player.statusNote && (
+          <div className="mt-4 rounded-2xl border border-brass/30 bg-brass/10 p-4">
+            <p className="text-[10px] font-black uppercase tracking-wider text-brass">Status note</p>
+            <p className="mt-1 text-sm font-semibold leading-relaxed">{player.statusNote}</p>
+          </div>
+        )}
+
+        <PlayerHistoryPanel player={player} className="mt-4" />
+      </motion.div>
+    </div>
+  );
+}
+
 function ParkingView() {
   const { players, courts, matches, setPlayerParked, setView, refreshSharedState } = useClubStore();
   const [member, setMember] = React.useState<{ role: string; playerId?: string; displayName: string } | null>(null);
   const [checking, setChecking] = React.useState(true);
+  const [profilePlayerId, setProfilePlayerId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     Promise.all([
@@ -637,11 +808,16 @@ function ParkingView() {
       .finally(() => setChecking(false));
   }, [refreshSharedState]);
 
+  React.useEffect(() => {
+    const timer = window.setInterval(() => { void refreshSharedState(); }, 15000);
+    return () => window.clearInterval(timer);
+  }, [refreshSharedState]);
+
   if (checking) return <LoadingScreen />;
   if (!member) {
     return (
       <section className="mx-auto max-w-xl px-4 py-12 pb-32 text-center text-ivory">
-        <div className="rounded-3xl border border-ivory/10 bg-[#0b3a2c] p-8 shadow-2xl">
+        <div className="rounded-3xl border border-ivory/20 bg-white/5 backdrop-blur-xl p-8 shadow-2xl">
           <Coffee className="mx-auto text-brass" size={34} />
           <h1 className="mt-4 font-display text-4xl font-black">Parking Area</h1>
           <p className="mt-2 text-sm leading-6 text-ivory/65">Sign in to see your paid check-in status and control your rotation availability.</p>
@@ -659,13 +835,15 @@ function ParkingView() {
   const getPlayingMatch = (playerId: string) => activeMatches.find(m => m.teamAPlayerIds.includes(playerId) || m.teamBPlayerIds.includes(playerId));
   const getCourt = (matchId: string) => courts.find(c => c.currentMatchId === matchId);
 
+  const profilePlayer = profilePlayerId ? players.find((p) => p.id === profilePlayerId) : null;
+
   return (
     <motion.section
       initial={{ opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0 }}
       className="mx-auto max-w-6xl px-4 py-5 pb-32 text-ivory"
     >
-      <div className="relative overflow-hidden rounded-3xl bg-[#173f32] p-6 shadow-[0_18px_46px_rgba(0,0,0,0.22)] sm:p-8">
+      <div className="relative overflow-hidden rounded-3xl bg-white/5 backdrop-blur-xl border border-white/10 p-6 shadow-[0_18px_46px_rgba(0,0,0,0.22)] sm:p-8">
         <Coffee className="absolute -right-5 -top-7 h-40 w-40 text-brass opacity-[0.07]" />
         <p className="text-xs font-black uppercase tracking-[0.22em] text-brass">Paid and checked in</p>
         <h1 className="mt-2 font-display text-4xl font-black sm:text-5xl">Parking Area</h1>
@@ -679,34 +857,48 @@ function ParkingView() {
       </div>
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
-        <Card className="bg-ivory text-forest">
+        <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-clay">Cleared lounge</p>
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-brass">Cleared lounge</p>
               <h2 className="font-display text-3xl font-black">Parked Players</h2>
             </div>
             <Coffee className="text-brass" size={26} />
           </div>
           <div className="mt-5 space-y-3">
             {parkedPlayers.map((player) => (
-              <div className="flex items-center gap-3 rounded-2xl bg-forest/[0.06] p-3" key={player.id}>
+              <button
+                type="button"
+                key={player.id}
+                onClick={() => setProfilePlayerId(player.id)}
+                className="flex w-full items-center gap-3 rounded-2xl bg-ivory/[0.06] p-3 text-left transition hover:bg-ivory/[0.1]"
+              >
                 <img className="h-11 w-11 rounded-full bg-white object-cover" src={getPlayerAvatar(player)} alt="" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-black">{player.displayName}</p>
-                  <p className="text-xs text-forest/55">Paid · checked in · outside rotation</p>
+                  <p className="text-xs text-linen/70">{player.skillLevel} · {player.totalGamesPlayed} games · Paid · outside rotation</p>
+                  {player.statusNote && (
+                    <p className="mt-1 truncate text-[11px] font-bold text-brass/90">💬 {player.statusNote}</p>
+                  )}
                 </div>
                 {canManage(player.id) && (
-                  <button className="min-h-10 rounded-full bg-forest px-4 text-xs font-black text-ivory" onClick={() => void setPlayerParked(player.id, false)}>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => { e.stopPropagation(); void setPlayerParked(player.id, false); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); void setPlayerParked(player.id, false); } }}
+                    className="min-h-10 rounded-full bg-brass px-4 text-xs font-black text-forest hover:bg-linen transition"
+                  >
                     Join rotation
-                  </button>
+                  </span>
                 )}
-              </div>
+              </button>
             ))}
-            {parkedPlayers.length === 0 && <p className="rounded-2xl bg-forest/[0.04] p-6 text-center text-sm text-forest/55">No players are parked right now.</p>}
+            {parkedPlayers.length === 0 && <p className="rounded-2xl bg-ivory/[0.04] p-6 text-center text-sm text-linen/60">No players are parked right now.</p>}
           </div>
         </Card>
 
-        <Card className="bg-[#0b3a2c] text-ivory">
+        <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory">
           <p className="text-xs font-black uppercase tracking-[0.18em] text-brass">Active queue</p>
           <h2 className="font-display text-3xl font-black">In Rotation</h2>
           <div className="mt-5 space-y-3">
@@ -715,43 +907,64 @@ function ParkingView() {
               const court = match ? getCourt(match.id) : null;
               
               return (
-                <div className="flex items-center gap-3 rounded-2xl bg-ivory/[0.08] p-3" key={player.id}>
+                <button
+                  type="button"
+                  key={player.id}
+                  onClick={() => setProfilePlayerId(player.id)}
+                  className="flex w-full items-center gap-3 rounded-2xl bg-ivory/[0.08] p-3 text-left transition hover:bg-ivory/[0.12]"
+                >
                   {match ? (
-                    <span className="h-2.5 w-2.5 rounded-full bg-amber-400 animate-pulse" title="Playing" />
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-amber-400 animate-pulse" title="Playing" />
                   ) : (
-                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" title="Waiting" />
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-400" title="Waiting" />
                   )}
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-bold">{player.displayName}</p>
                     {court && <p className="text-xs text-amber-200 mt-0.5">Playing on {court.name}</p>}
+                    {!court && <p className="text-xs text-linen/60 mt-0.5">{player.skillLevel} · {player.totalGamesPlayed} games</p>}
+                    {player.statusNote && (
+                      <p className="mt-1 truncate text-[11px] font-bold text-brass/90">💬 {player.statusNote}</p>
+                    )}
                   </div>
                   {canManage(player.id) && !match && (
-                    <button className="min-h-9 rounded-full bg-brass px-3 text-xs font-black text-forest" onClick={() => void setPlayerParked(player.id, true)}>
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => { e.stopPropagation(); void setPlayerParked(player.id, true); }}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); void setPlayerParked(player.id, true); } }}
+                      className="min-h-9 rounded-full bg-brass px-3 text-xs font-black text-forest"
+                    >
                       Park
-                    </button>
+                    </span>
                   )}
-                </div>
+                </button>
               );
             })}
             {readyPlayers.length === 0 && <p className="text-sm text-ivory/50">Nobody is in the rotation yet.</p>}
           </div>
         </Card>
       </div>
+      {profilePlayer && (
+        <PlayerProfileSheet
+          player={profilePlayer}
+          onClose={() => setProfilePlayerId(null)}
+        />
+      )}
     </motion.section>
   );
 }
 
-type AdminTab = "control" | "players" | "courts" | "history" | "settings";
+type AdminTab = "control" | "players" | "lounge" | "reservations" | "history" | "settings";
 
 function AdminView() {
-  const { players, courts, matches, sessions, currentSessionId, clubStatus } = useClubStore();
+  const { players, courts, matches, sessions, currentSessionId, clubStatus, reservations } = useClubStore();
   const [activeTab, setActiveTab] = React.useState<AdminTab>("control");
   const [isQrOpen, setIsQrOpen] = React.useState(false);
 
   React.useEffect(() => {
     const openAdminTab = (event: Event) => {
       const tab = (event as CustomEvent<AdminTab>).detail;
-      if (["control", "players", "courts", "history", "settings"].includes(tab)) {
+      if (["control", "players", "lounge", "reservations", "history", "settings"].includes(tab)) {
         setActiveTab(tab);
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
@@ -760,25 +973,19 @@ function AdminView() {
     return () => window.removeEventListener("haff-admin-tab", openAdminTab);
   }, []);
 
-  // Admin Portal Authentication
-  const [isAuthenticated, setIsAuthenticated] = React.useState(false);
-  const [checkingAuth, setCheckingAuth] = React.useState(true);
+  // Admin Portal Authentication — use localStorage (set on login, cleared on sign-out)
+  const [isAuthenticated, setIsAuthenticated] = React.useState(
+    () => localStorage.getItem("haff_admin_authenticated") === "true"
+  );
   const [email, setEmail] = React.useState("gianaibo.dev@gmail.com");
   const [password, setPassword] = React.useState("");
   const [authError, setAuthError] = React.useState("");
 
-  React.useEffect(() => {
-    fetch("/api/auth?action=me", { credentials: "include" })
-      .then((response) => response.json())
-      .then((data) => setIsAuthenticated(data.user?.role === "ADMIN"))
-      .finally(() => setCheckingAuth(false));
-  }, []);
-
   const checkedIn = players.filter((player) => player.checkedIn);
   const activeSession = sessions.find((s) => s.id === currentSessionId);
   const waiting = checkedIn.length - matches.filter((match) => match.status === "InProgress").length * 4;
+  const pendingReservations = reservations.filter((r) => r.status === "Requested").length;
 
-  if (checkingAuth) return <LoadingScreen />;
   if (!isAuthenticated) {
     const handleLogin = async (e: React.FormEvent) => {
       e.preventDefault();
@@ -791,6 +998,7 @@ function AdminView() {
       });
       const data = await response.json();
       if (response.ok && data.user?.role === "ADMIN") {
+        localStorage.setItem("haff_admin_authenticated", "true");
         setIsAuthenticated(true);
         window.dispatchEvent(new Event("haff-auth-change"));
         playSound("checkin");
@@ -806,14 +1014,14 @@ function AdminView() {
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ type: "spring", stiffness: 300, damping: 24 }}
-          className="max-w-md w-full bg-white border border-forest/10 rounded-[2.5rem] shadow-[0_24px_80px_rgba(19,36,29,0.12)] p-8 text-forest relative overflow-hidden"
+          className="max-w-md w-full bg-ivory border border-white/10 rounded-[2.5rem] shadow-[0_24px_80px_rgba(0,0,0,0.3)] p-8 text-forest relative overflow-hidden"
         >
-          <div className="absolute -right-12 -top-12 opacity-[0.03] pointer-events-none">
+          <div className="absolute -right-12 -top-12 opacity-[0.03] pointer-events-none text-forest">
             <LogoMark size="large" />
           </div>
 
           <div className="flex flex-col items-center text-center">
-            <div className="h-16 w-16 rounded-2xl bg-forest/5 flex items-center justify-center border border-forest/10 shadow-inner">
+            <div className="h-16 w-16 rounded-2xl bg-forest flex items-center justify-center border border-white/10 shadow-inner">
               <LogoMark />
             </div>
             <h2 className="font-display text-3xl font-black mt-5 leading-none tracking-tight">HAFF Leisure Club - Cadiz City</h2>
@@ -822,41 +1030,41 @@ function AdminView() {
 
           <form onSubmit={handleLogin} className="mt-8 space-y-4">
             {authError && (
-              <div className="p-3.5 bg-red-50 border border-red-100 text-red-600 rounded-2xl text-xs font-semibold text-center">
+              <div className="p-3.5 bg-red-500/10 border border-red-500/20 text-red-300 rounded-2xl text-xs font-semibold text-center">
                 {authError}
               </div>
             )}
 
             <div className="space-y-1">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-forest/60">Administrator Email</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-forest/70">Administrator Email</label>
               <input
                 type="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="email@example.com"
-                className="w-full rounded-2xl bg-forest/5 text-forest border-forest/10 px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-forest text-sm shadow-inner transition"
+                className="w-full rounded-2xl bg-forest/5 text-forest border-none px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-forest text-sm shadow-inner transition placeholder:text-forest/30"
               />
             </div>
 
             <div className="space-y-1">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-forest/60">Password</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-forest/70">Password</label>
               <PasswordField
                 value={password}
                 onChange={setPassword}
-                className="w-full rounded-2xl bg-forest/5 text-forest border-forest/10 px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-forest text-sm shadow-inner transition"
+                className="w-full rounded-2xl bg-forest/5 text-forest border-none px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-forest text-sm shadow-inner transition placeholder:text-forest/30"
               />
             </div>
 
             <Button
               type="submit"
-              className="w-full bg-forest text-ivory hover:bg-forest/90 font-black py-4 rounded-2xl shadow-xl transition-all hover:scale-[1.01] active:scale-95 border-none mt-6 flex items-center justify-center gap-2"
+              className="w-full bg-brass text-forest hover:bg-linen font-black py-4 rounded-2xl shadow-xl transition-all hover:scale-[1.01] active:scale-95 border-none mt-6 flex items-center justify-center gap-2"
             >
               <Lock size={16} /> Sign In
             </Button>
           </form>
 
-          <p className="text-[10px] text-center text-forest/40 mt-8 leading-relaxed px-4">
+          <p className="text-[10px] text-center text-linen/40 mt-8 leading-relaxed px-4">
             Unauthorized access is restricted. Data transactions are logged and encrypted.
           </p>
         </motion.div>
@@ -867,7 +1075,7 @@ function AdminView() {
   return (
     <section className="mx-auto max-w-7xl px-4 py-4">
       {/* Header Panel */}
-      <section className="relative overflow-hidden rounded-2xl bg-[#173f32] p-5 text-ivory shadow-[0_18px_46px_rgba(0,0,0,0.2)] sm:p-6">
+      <section className="relative overflow-hidden rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10 p-5 text-ivory shadow-[0_18px_46px_rgba(0,0,0,0.2)] sm:p-6">
         <div className="absolute -right-8 -top-12 opacity-[0.06]"><LogoMark size="large" /></div>
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-linen/80">
           {activeSession ? `${activeSession.name} (${activeSession.location || "HAFF Leisure Club"})` : "No active session"}
@@ -936,7 +1144,8 @@ function AdminView() {
           {[
             { id: "control", label: "Play Rotation" },
             { id: "players", label: "Manage Players" },
-            { id: "courts", label: "Manage Courts" },
+            { id: "lounge", label: "Park Lounge" },
+            { id: "reservations", label: pendingReservations > 0 ? `Reservations (${pendingReservations})` : "Reservations" },
             { id: "history", label: "History" },
             { id: "settings", label: "Backup & Settings" }
           ].map((tab) => (
@@ -959,7 +1168,8 @@ function AdminView() {
       <div key={activeTab}>
         {activeTab === "control" && <PlayRotationTab />}
         {activeTab === "players" && <PlayersCrudTab />}
-        {activeTab === "courts" && <CourtsCrudTab />}
+        {activeTab === "lounge" && <ParkLoungeTab />}
+        {activeTab === "reservations" && <AdminReservationsTab />}
         {activeTab === "history" && <HistoryTab />}
         {activeTab === "settings" && <SettingsTab />}
       </div>
@@ -997,23 +1207,322 @@ function AdminView() {
   );
 }
 
-// Court elapsed-time timer badge (live)
-function CourtElapsedTimer({ startedAt, matchDurationMinutes }: { startedAt: string; matchDurationMinutes: number }) {
-  const now = useNow();
-  const elapsedSeconds = Math.floor((now.getTime() - new Date(startedAt).getTime()) / 1000);
-  const elapsedMin = Math.floor(elapsedSeconds / 60);
-  const elapsedSec = elapsedSeconds % 60;
-  const isOver = elapsedMin >= matchDurationMinutes;
-  const isNearing = elapsedMin >= matchDurationMinutes - 2;
+// Court countdown badge (live, smooth centisecond tick)
+function CourtElapsedTimer({ startedAt, matchDurationMinutes, timerPausedAt }: { startedAt: string; matchDurationMinutes: number; timerPausedAt?: string }) {
+  const now = useSmoothNow(!timerPausedAt);
+  const remainingMs = getRemainingMilliseconds(startedAt, matchDurationMinutes, now, timerPausedAt);
+  const overtime = remainingMs < 0;
+  const isNearing = !overtime && remainingMs <= 120_000;
   return (
-    <span className={`ml-1 inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-black tabular-nums ${
-      isOver ? "bg-red-500/20 text-red-300 animate-pulse" :
+    <span className={`ml-1 inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-black tabular-nums countdown-digits ${
+      overtime ? "bg-red-500/20 text-red-300 animate-pulse" :
       isNearing ? "bg-amber-500/20 text-amber-300" :
       "bg-ivory/10 text-ivory/70"
     }`}>
       <Clock size={10} />
-      {elapsedMin}:{String(elapsedSec).padStart(2, "0")}
+      <CountdownClock totalMs={Math.abs(remainingMs)} prefix={overtime ? "-" : ""} />
     </span>
+  );
+}
+
+function AdminCourtCard({
+  court,
+  match,
+  matches,
+  matchDurationMinutes,
+  assignPlayerToCourt,
+  startReservedCourt,
+  returnReservedToQueue,
+  clearCourt,
+  reserveCourt,
+}: {
+  court: Court;
+  match: Match | undefined;
+  matches: Match[];
+  matchDurationMinutes: number;
+  assignPlayerToCourt: (playerId: string, courtId: string) => Promise<void>;
+  startReservedCourt: (courtId: string) => Promise<void>;
+  returnReservedToQueue: (courtId: string) => Promise<void>;
+  clearCourt: (courtId: string) => Promise<void>;
+  reserveCourt: (courtId: string) => Promise<void>;
+}) {
+  const now = useNow();
+  const finishCourt = useClubStore((state) => state.finishCourt);
+  const players = useClubStore((state) => state.players);
+  const activeMatch = match ?? getActiveCourtMatch(court, matches);
+
+  const announceCourtPlayers = () => {
+    const participantIds = activeMatch
+      ? [...activeMatch.teamAPlayerIds, ...activeMatch.teamBPlayerIds]
+      : court.reservedPlayerIds ?? [];
+    void useClubStore.getState().broadcastTvAnnouncement({
+      kind: "court",
+      courtId: court.id,
+      courtName: court.name,
+      participantIds,
+      variant: court.status === "Reserved" ? "reserved" : "active"
+    });
+  };
+
+  const canAnnounce = Boolean(
+    activeMatch ||
+    (court.status === "Reserved" && (court.reservedPlayerIds?.length ?? 0) > 0)
+  );
+
+  const startedTime = match?.startedAt ? new Date(match.startedAt).getTime() : 0;
+  const effectiveNow = match?.timerPausedAt ? new Date(match.timerPausedAt).getTime() : now;
+  const elapsedSeconds = startedTime ? Math.floor((effectiveNow - startedTime) / 1000) : 0;
+  const isOvertime = court.status === "InUse" && elapsedSeconds >= matchDurationMinutes * 60;
+  const isTimerPaused = Boolean(match?.timerPausedAt);
+
+  const persistMatch = async (updatedMatch: Match) => {
+    await db.matches.put(updatedMatch);
+    useClubStore.setState({
+      matches: useClubStore.getState().matches.map((item) => (item.id === updatedMatch.id ? updatedMatch : item)),
+    });
+    await useClubStore.getState().publishSharedState();
+  };
+
+  const toggleReservedStatus = async () => {
+    const isReserved = court.status === "Reserved";
+    if (isReserved) {
+      await useClubStore.getState().updateCourt({
+        ...court,
+        status: "Available",
+        reservedFor: undefined,
+        reservedPlayerIds: undefined
+      });
+      return;
+    }
+
+    const heldNames = (court.reservedPlayerIds ?? [])
+      .map((id) => players.find((player) => player.id === id)?.displayName.split(" ")[0])
+      .filter(Boolean)
+      .join(" / ");
+
+    await useClubStore.getState().updateCourt({
+      ...court,
+      status: "Reserved",
+      reservedFor: court.reservedFor ?? (heldNames || "Reserved game"),
+      reservedPlayerIds: court.reservedPlayerIds ?? []
+    });
+  };
+
+  const handleStartReservedCourt = () => {
+    const count = court.reservedPlayerIds?.length ?? 0;
+    if (count === 0) {
+      window.alert("Add players first — drag from the queue or tap Assign stack.");
+      return;
+    }
+    void startReservedCourt(court.id);
+  };
+
+  const toggleCourtPause = async () => {
+    const nextStatus: Court["status"] = court.status === "Paused" ? "Available" : "Paused";
+    await useClubStore.getState().updateCourt({ ...court, status: nextStatus });
+  };
+
+  const adjustCourtTime = async (seconds: number) => {
+    if (!match?.startedAt) return;
+    const currentStart = new Date(match.startedAt).getTime();
+    const newStart = new Date(currentStart - seconds * 1000).toISOString();
+    await persistMatch({ ...match, startedAt: newStart, timerPausedAt: undefined });
+  };
+
+  const resetWarmUp = async () => {
+    if (!match) return;
+    await persistMatch({ ...match, startedAt: new Date().toISOString(), timerPausedAt: undefined });
+  };
+
+  const toggleTimerPause = async () => {
+    if (!match?.startedAt) return;
+    if (match.timerPausedAt) {
+      const pauseDuration = Date.now() - new Date(match.timerPausedAt).getTime();
+      const newStart = new Date(new Date(match.startedAt).getTime() + pauseDuration).toISOString();
+      await persistMatch({ ...match, startedAt: newStart, timerPausedAt: undefined });
+      return;
+    }
+    await persistMatch({ ...match, timerPausedAt: new Date().toISOString() });
+  };
+
+  return (
+    <Card
+      className={`admin-court min-h-48 transition-all duration-300 relative overflow-hidden p-4 border flex flex-col justify-between border-l-[4px] ${
+        court.status === "InUse"
+          ? "bg-white/[0.04] backdrop-blur-xl text-ivory border-l-amber-400"
+          : court.status === "Reserved"
+            ? "bg-purple-900/20 backdrop-blur-xl text-ivory border-l-purple-500 shadow-[0_4px_30px_rgba(168,85,247,0.15)] border-white/5"
+            : court.status === "Maintenance"
+              ? "bg-red-900/20 backdrop-blur-xl text-ivory border-l-red-500 border-white/5"
+              : court.status === "Paused"
+                ? "bg-amber-900/20 backdrop-blur-xl text-ivory border-l-amber-600 border-white/5"
+                : "bg-white/[0.02] backdrop-blur-xl text-ivory border-l-emerald-600 hover:border-l-emerald-400 border-white/5"
+      } ${isOvertime ? "animate-overtime" : ""}`}
+      onDragOver={(event) => {
+        const activeMatch = matches.find((item) => item.id === court.currentMatchId && item.status === "InProgress");
+        const hasVacant = activeMatch && [...activeMatch.teamAPlayerIds, ...activeMatch.teamBPlayerIds].some((id) => id.startsWith("vacant"));
+        if (court.status !== "Maintenance" && court.status !== "Paused" && (court.status !== "InUse" || hasVacant)) {
+          event.preventDefault();
+        }
+      }}
+      onDrop={async (event) => {
+        event.preventDefault();
+        const playerId = event.dataTransfer.getData("text/plain") || event.dataTransfer.getData("text/player-id");
+        if (!playerId) return;
+
+        if (court.status === "InUse") {
+          await useClubStore.getState().joinActiveMatch(playerId, court.id);
+        } else if (court.status !== "Maintenance" && court.status !== "Paused") {
+          await assignPlayerToCourt(playerId, court.id);
+        }
+      }}
+    >
+      <div>
+        <div className="flex items-center justify-between border-b border-white/5 pb-2 mb-3">
+          <div className="flex items-center gap-2">
+            <h2 className="font-display text-xl text-brass font-black uppercase tracking-wide">{court.name}</h2>
+            {(court.status === "Available" || court.status === "Reserved") && (
+              <button
+                type="button"
+                onClick={toggleReservedStatus}
+                className={`h-5 min-h-0 px-2 text-[8px] font-black uppercase tracking-wider rounded transition border ${
+                  court.status === "Reserved"
+                    ? "bg-purple-500/20 border-purple-500/40 text-purple-200"
+                    : "bg-white/5 border-white/10 text-ivory/60 hover:bg-white/10"
+                }`}
+                title="Mark court as reserved game (you can still assign players and start)"
+              >
+                {court.status === "Reserved" ? "★ Reserved" : "☆ Reserve"}
+              </button>
+            )}
+          </div>
+
+          <Chip
+            color={
+              court.status === "InUse" ? "warning" :
+              court.status === "Reserved" ? "accent" :
+              court.status === "Maintenance" ? "danger" : "success"
+            }
+            variant="soft"
+            className="font-black text-[11px] px-3 py-1.5 uppercase tracking-wider rounded-lg"
+          >
+            {court.status === "InUse" ? "IN USE" : court.status}
+          </Chip>
+        </div>
+
+        <div className="min-h-12">
+          {court.status === "InUse" && match?.startedAt && (
+            <div className="flex items-center justify-between gap-2 bg-[#051812]/50 rounded-xl p-2 border border-white/5 mb-3">
+              <span className="text-xs text-linen/75">{isTimerPaused ? "Timer paused" : "Time remaining"}</span>
+              <CourtElapsedTimer startedAt={match.startedAt} matchDurationMinutes={matchDurationMinutes} timerPausedAt={match.timerPausedAt} />
+            </div>
+          )}
+
+          {match ? (
+            <MatchLine matchId={match.id} />
+          ) : court.status === "Reserved" ? (
+            <ReservedStack courtId={court.id} />
+          ) : court.status === "Maintenance" ? (
+            <p className="mt-2 text-[10px] text-red-400 font-bold uppercase tracking-wider">Under Maintenance.</p>
+          ) : court.status === "Paused" ? (
+            <p className="mt-2 text-[10px] text-amber-400 font-bold uppercase tracking-wider">Temporarily paused.</p>
+          ) : (
+            <p className="mt-2 rounded-lg bg-forest/20 border border-forest/10 px-3 py-1.5 text-[10px] font-semibold text-ivory/80">
+              Available for play rotation.
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 pt-3 border-t border-white/5 space-y-3">
+        {court.status === "InUse" && match?.startedAt && (
+          <div className="flex flex-col gap-1.5 bg-black/20 p-1.5 rounded-xl border border-white/5">
+            <div className="flex items-center justify-between gap-1.5">
+              <span className="text-[9px] font-black uppercase text-linen/60 ml-1">Adjust time</span>
+              <button
+                type="button"
+                onClick={toggleTimerPause}
+                className={`h-6 px-2 rounded text-[9px] font-black uppercase transition ${
+                  isTimerPaused
+                    ? "bg-emerald-500/20 text-emerald-200 border border-emerald-500/40"
+                    : "bg-amber-500/20 text-amber-200 border border-amber-500/40"
+                }`}
+              >
+                {isTimerPaused ? "Resume" : "Pause"}
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-1">
+              <button type="button" onClick={() => adjustCourtTime(-600)} className="h-6 px-1.5 rounded bg-white/5 hover:bg-white/10 text-[9px] font-bold text-ivory transition" title="Subtract 10 minutes">-10m</button>
+              <button type="button" onClick={() => adjustCourtTime(-60)} className="h-6 px-1.5 rounded bg-white/5 hover:bg-white/10 text-[9px] font-bold text-ivory transition" title="Subtract 1 minute">-1m</button>
+              <button type="button" onClick={() => adjustCourtTime(-10)} className="h-6 px-1.5 rounded bg-white/5 hover:bg-white/10 text-[9px] font-bold text-ivory transition" title="Subtract 10 seconds">-10s</button>
+              <button type="button" onClick={() => adjustCourtTime(10)} className="h-6 px-1.5 rounded bg-white/5 hover:bg-white/10 text-[9px] font-bold text-ivory transition" title="Add 10 seconds">+10s</button>
+              <button type="button" onClick={() => adjustCourtTime(60)} className="h-6 px-1.5 rounded bg-white/5 hover:bg-white/10 text-[9px] font-bold text-ivory transition" title="Add 1 minute">+1m</button>
+              <button type="button" onClick={() => adjustCourtTime(600)} className="h-6 px-1.5 rounded bg-white/5 hover:bg-white/10 text-[9px] font-bold text-ivory transition" title="Add 10 minutes">+10m</button>
+              <button type="button" onClick={resetWarmUp} className="h-6 px-2 rounded bg-brass text-forest hover:bg-linen text-[9px] font-black uppercase transition flex items-center gap-0.5 ml-1" title="Reset timer to 0">
+                Reset
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-1.5">
+          {canAnnounce && (
+            <Button
+              onClick={announceCourtPlayers}
+              className="h-8 min-h-0 bg-emerald-500/20 hover:bg-emerald-500/35 px-3 text-[10px] text-emerald-100 font-black uppercase tracking-wider rounded-lg border border-emerald-500/35 flex items-center gap-1 shadow-sm"
+              title="Replay walk-up announcement for these players"
+            >
+              <Megaphone size={12} /> Announce
+            </Button>
+          )}
+          {activeMatch ? (
+            <Button type="button" onClick={() => { playSound("complete"); void finishCourt(court.id); }} className="h-8 min-h-0 bg-brass hover:bg-brass/90 px-3 text-[10px] text-forest font-black uppercase tracking-wider rounded-lg flex items-center gap-1 shadow-sm">
+              <CheckCircle2 size={12} /> Finish
+            </Button>
+          ) : court.status === "Reserved" ? (
+            <>
+              <Button
+                onClick={handleStartReservedCourt}
+                className="h-8 min-h-0 bg-brass hover:bg-brass/90 px-3 text-[10px] text-forest font-black uppercase tracking-wider rounded-lg shadow-sm"
+              >
+                Start Match
+              </Button>
+              <Button
+                onClick={() => reserveCourt(court.id)}
+                className="h-8 min-h-0 bg-ivory/15 hover:bg-ivory/25 px-3 text-[10px] font-black text-ivory uppercase tracking-wider rounded-lg border border-white/10"
+              >
+                Assign stack
+              </Button>
+              <Button onClick={() => returnReservedToQueue(court.id)} className="h-8 min-h-0 bg-white/10 hover:bg-white/20 px-2.5 text-[10px] text-white rounded-lg">
+                Return
+              </Button>
+              <Button onClick={() => clearCourt(court.id)} className="h-8 min-h-0 bg-white/5 hover:bg-white/10 px-2.5 text-[10px] text-white/70 rounded-lg">
+                Clear
+              </Button>
+            </>
+          ) : court.status === "Available" ? (
+            <>
+              <Button
+                onClick={toggleReservedStatus}
+                className="h-8 min-h-0 bg-purple-500/20 hover:bg-purple-500/30 px-3 text-[10px] font-black text-purple-100 uppercase tracking-wider rounded-lg border border-purple-500/30"
+              >
+                Mark reserved
+              </Button>
+              <Button onClick={() => reserveCourt(court.id)} className="h-8 min-h-0 bg-brass hover:bg-brass/90 px-3 text-[10px] font-black text-forest uppercase tracking-wider rounded-lg flex items-center gap-1 shadow-sm">
+                <Lock size={11} /> Hold court
+              </Button>
+              <Button onClick={toggleCourtPause} className="h-8 min-h-0 bg-amber-500/20 hover:bg-amber-500/30 px-2.5 text-[10px] text-amber-100 rounded-lg border border-amber-500/30">
+                Pause court
+              </Button>
+            </>
+          ) : court.status === "Paused" ? (
+            <Button onClick={toggleCourtPause} className="h-8 min-h-0 bg-emerald-500/20 hover:bg-emerald-500/30 px-2.5 text-[10px] text-emerald-100 rounded-lg border border-emerald-500/30">
+              Resume court
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    </Card>
   );
 }
 
@@ -1032,7 +1541,6 @@ function PlayRotationTab() {
     generateMatches, 
     reserveCourt, 
     startReservedCourt, 
-    clearCourt, 
     finishCourt, 
     matchDurationMinutes, 
     setMatchDurationMinutes,
@@ -1040,7 +1548,8 @@ function PlayRotationTab() {
     startNewSession,
     returnReservedToQueue,
     assignPlayerToCourt,
-    removePlayerFromCourt
+    removePlayerFromCourt,
+    clearCourt,
   } = useClubStore();
   const [sessionName, setSessionName] = React.useState("");
   const [announcementMessage, setAnnouncementMessage] = React.useState("");
@@ -1075,6 +1584,20 @@ function PlayRotationTab() {
 
   return (
     <div className="space-y-4">
+      <style dangerouslySetInnerHTML={{ __html: `
+        @keyframes overtimeJiggle {
+          0% { transform: translate(0, 0) scale(1); }
+          25% { transform: translate(-1.5px, 1px) rotate(-0.3deg); }
+          50% { transform: translate(1.5px, -1px) scale(1.01) rotate(0.3deg); }
+          75% { transform: translate(-1.5px, -1px) rotate(-0.3deg); }
+          100% { transform: translate(0, 0) scale(1); }
+        }
+        .animate-overtime {
+          animation: overtimeJiggle 0.8s ease-in-out infinite;
+          box-shadow: 0 0 25px rgba(239, 68, 68, 0.45) !important;
+          border: 1.5px solid rgba(239, 68, 68, 0.6) !important;
+        }
+      `}} />
       {/* Quick-action sticky bar */}
       <div className="sticky top-16 z-30 -mx-1 rounded-2xl border border-white/10 bg-[#0a1f18]/95 px-4 py-3 backdrop-blur-xl shadow-[0_8px_32px_rgba(0,0,0,0.3)]">
         <div className="flex flex-wrap items-center gap-2">
@@ -1122,104 +1645,21 @@ function PlayRotationTab() {
         <div className="space-y-4">
           <StackBuilder players={players} courts={courts} matches={matches} stackOrder={stackOrder} />
         <div className="grid gap-4 md:grid-cols-2">
-          {courts.map((court) => {
-            const match = matches.find((item) => item.id === court.currentMatchId);
+          {sortCourts(courts).map((court) => {
+            const match = getActiveCourtMatch(court, matches);
             return (
-              <Card 
-                key={court.id} 
-                className={`admin-court min-h-48 transition relative overflow-hidden ${
-                  court.status === "Reserved" 
-                    ? "bg-white/5 grayscale opacity-80 border-white/5" 
-                    : court.status === "Maintenance" || court.status === "Paused" || court.status === "InUse" 
-                      ? "text-ivory" 
-                      : "text-ivory hover:border-white/30"
-                }`}
-                onDragOver={(event) => {
-                  const match = matches.find((m) => m.id === court.currentMatchId && m.status === "InProgress");
-                  const hasVacant = match && [...match.teamAPlayerIds, ...match.teamBPlayerIds].some(id => id.startsWith("vacant"));
-                  if (court.status !== "Maintenance" && court.status !== "Paused" && (court.status !== "InUse" || hasVacant)) {
-                    event.preventDefault();
-                  }
-                }}
-                onDrop={async (event) => {
-                  event.preventDefault();
-                  const playerId = event.dataTransfer.getData("text/player-id");
-                  if (!playerId) return;
-
-                  if (court.status === "InUse") {
-                    await useClubStore.getState().joinActiveMatch(playerId, court.id);
-                  } else if (court.status !== "Maintenance" && court.status !== "Paused") {
-                    await assignPlayerToCourt(playerId, court.id);
-                  }
-                }}
-              >
-                <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                  <h2 className="font-display text-3xl text-ivory font-bold">{court.name}</h2>
-                  <Chip
-                    color={
-                      court.status === "InUse" ? "warning" :
-                      court.status === "Reserved" ? "accent" :
-                      court.status === "Maintenance" ? "danger" : "success"
-                    }
-                    variant="soft"
-                    size="sm"
-                    className="font-bold"
-                  >
-                    {court.status === "InUse" ? "IN USE" : court.status}
-                  </Chip>
-                  {court.status === "InUse" && match?.startedAt && (
-                    <CourtElapsedTimer startedAt={match.startedAt} matchDurationMinutes={matchDurationMinutes} />
-                  )}
-                </div>
-                {match ? (
-                  <MatchLine matchId={match.id} />
-                ) : court.status === "Reserved" ? (
-                  <ReservedStack courtId={court.id} />
-                ) : court.status === "Maintenance" ? (
-                  <p className="mt-8 text-sm text-red-400 font-semibold">Under Maintenance. Players cannot be assigned.</p>
-                ) : court.status === "Paused" ? (
-                  <p className="mt-8 text-sm text-amber-400 font-semibold">Temporarily paused by admin.</p>
-                ) : (
-                  <p className="mt-8 rounded-lg bg-forest px-3 py-2 text-sm font-semibold text-ivory">
-                    Available for the next balanced rotation.
-                  </p>
-                )}
-                <div className="mt-5 flex flex-wrap gap-2 pt-2">
-                  {match ? (
-                    <Button onClick={() => { playSound("complete"); finishCourt(court.id); }} className="min-h-10 bg-brass hover:bg-brass/90 px-4 text-xs text-forest font-black">
-                      <CheckCircle2 size={14} /> Finish
-                    </Button>
-                  ) : court.status === "Reserved" ? (
-                    <>
-                      <Button 
-                        onClick={() => {
-                          const count = court.reservedPlayerIds?.length ?? 0;
-                          if (count < 4) {
-                            if (confirm(`This stack has only ${count} players. Start anyway?`)) {
-                              startReservedCourt(court.id);
-                            }
-                          } else {
-                            startReservedCourt(court.id);
-                          }
-                        }} 
-                        className="min-h-10 bg-brass px-4 text-xs text-forest font-black"
-                      >
-                        Start Stack
-                      </Button>
-                      <Button onClick={() => returnReservedToQueue(court.id)} className="min-h-10 bg-white/10 hover:bg-white/20 px-4 text-xs text-white">
-                        Return to Queue
-                      </Button>
-                      <Button onClick={() => clearCourt(court.id)} className="min-h-10 bg-white/5 hover:bg-white/10 px-4 text-xs text-white/80">
-                        Clear Hold
-                      </Button>
-                    </>
-                  ) : court.status === "Available" ? (
-                    <Button onClick={() => reserveCourt(court.id)} className="min-h-10 bg-brass hover:bg-brass/90 px-4 text-xs font-black text-ink shadow-md">
-                      <Lock size={14} /> Assign Next Stack
-                    </Button>
-                  ) : null}
-                </div>
-              </Card>
+              <AdminCourtCard
+                key={court.id}
+                court={court}
+                match={match}
+                matches={matches}
+                matchDurationMinutes={matchDurationMinutes}
+                assignPlayerToCourt={assignPlayerToCourt}
+                startReservedCourt={startReservedCourt}
+                returnReservedToQueue={returnReservedToQueue}
+                clearCourt={clearCourt}
+                reserveCourt={reserveCourt}
+              />
             );
           })}
         </div>
@@ -1229,12 +1669,37 @@ function PlayRotationTab() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-clay">Quick action</p>
-              <h2 className="font-display text-3xl text-forest">Open play rotation</h2>
+              <h2 className="font-display text-3xl text-ivory">Open play rotation</h2>
             </div>
             <Button onClick={() => { playSound("complete"); generateMatches(); }} className="bg-forest text-ivory hover:bg-forest/90">Assign Courts</Button>
           </div>
         </Card>
-        <Card className="bg-[#0b3a2c] text-ivory border border-white/10 shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem] p-5">
+        <Card className="work-surface">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-clay">Bookings</p>
+              <h2 className="font-display text-3xl text-ivory">Court Reservations</h2>
+              {useClubStore.getState().reservations.filter((r) => r.status === "Requested").length > 0 && (
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="flex h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                  <span className="text-xs font-bold text-amber-400">
+                    {useClubStore.getState().reservations.filter((r) => r.status === "Requested").length} pending approval
+                  </span>
+                </div>
+              )}
+            </div>
+            <Button 
+              onClick={() => {
+                playSound("complete");
+                window.dispatchEvent(new CustomEvent("haff-admin-tab", { detail: "reservations" }));
+              }} 
+              className="bg-brass text-forest hover:bg-linen font-black"
+            >
+              <Calendar size={14} /> View Calendar
+            </Button>
+          </div>
+        </Card>
+        <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem] p-5">
           <div className="flex flex-col gap-4">
             {/* Top row: Duration adjustment & Voice Toggle */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
@@ -1264,6 +1729,7 @@ function PlayRotationTab() {
               <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brass mb-2">Voice Style</p>
               <div className="flex flex-wrap gap-1">
                 {[
+                  ["british", "British (fast)"],
                   ["warm", "Warm"],
                   ["clear", "Clear"],
                   ["bright", "Bright"],
@@ -1299,15 +1765,18 @@ function PlayRotationTab() {
                 <Button
                   disabled={!announcementMessage.trim()}
                   onClick={() => {
-                    speakAnnouncement(announcementMessage.trim());
+                    void useClubStore.getState().broadcastTvAnnouncement({
+                      kind: "message",
+                      message: announcementMessage.trim()
+                    });
                     setAnnouncementMessage("");
                   }}
                   className="bg-brass hover:bg-brass/90 text-forest font-black px-4 py-2 text-xs rounded-lg min-h-0"
                 >
-                  Speak
+                  Broadcast
                 </Button>
               </div>
-              <p className="text-[9px] text-ivory/50">Broadcasting will use the selected club speaker system configuration.</p>
+              <p className="text-[9px] text-ivory/50">Sends to every TV display screen — voice and on-screen alert.</p>
             </div>
           </div>
         </Card>
@@ -1324,8 +1793,8 @@ function PlayRotationTab() {
         >
           <div className="flex items-end justify-between gap-3">
             <div>
-              <h2 className="font-display text-3xl text-forest">Check-in lounge</h2>
-              <p className="mt-1 text-xs font-semibold text-forest/60">
+              <h2 className="font-display text-3xl text-ivory">Check-in lounge</h2>
+              <p className="mt-1 text-xs font-semibold text-linen/60">
                 {loungePlayers.length} of {activePlayers.length} players
               </p>
             </div>
@@ -1343,11 +1812,11 @@ function PlayRotationTab() {
             )}
           </div>
           <div className="relative mt-4">
-            <Search aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-forest/45" size={17} />
+            <Search aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ivory/45" size={17} />
             <label className="sr-only" htmlFor="lounge-search">Search check-in lounge players</label>
             <input
               id="lounge-search"
-              className="control-field w-full rounded-xl py-3 pl-10 pr-10 text-sm text-forest placeholder:text-forest/45 focus:outline-none"
+              className="control-field w-full rounded-xl py-3 pl-10 pr-10 text-sm text-ivory placeholder:text-ivory/45 focus:outline-none"
               onChange={(event) => setLoungeSearch(event.target.value)}
               placeholder="Search by player name, rank, or tag"
               type="search"
@@ -1356,7 +1825,7 @@ function PlayRotationTab() {
             {loungeSearch && (
               <button
                 aria-label="Clear lounge search"
-                className="absolute right-2 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-lg text-forest/55 hover:bg-forest/10 hover:text-forest"
+                className="absolute right-2 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-lg text-ivory/55 hover:bg-forest/10 hover:text-ivory"
                 onClick={() => setLoungeSearch("")}
                 type="button"
               >
@@ -1364,15 +1833,15 @@ function PlayRotationTab() {
               </button>
             )}
           </div>
-          <div className="flex items-center gap-2 mt-2 px-1 text-xs text-forest/75 font-semibold">
+          <div className="flex items-center gap-2 mt-2 px-1 text-xs text-linen/75 font-semibold">
             <input
               type="checkbox"
               id="auto-log-payment"
               checked={autoLogPayment}
               onChange={(e) => setAutoLogPayment(e.target.checked)}
-              className="rounded text-forest focus:ring-forest bg-white/50 border-white/10"
+              className="rounded text-forest focus:ring-forest bg-white/10 border-white/10"
             />
-            <label htmlFor="auto-log-payment" className="cursor-pointer select-none">
+            <label htmlFor="auto-log-payment" className="cursor-pointer select-none text-ivory">
               Auto-log 150 PHP payment on check-in
             </label>
           </div>
@@ -1391,15 +1860,15 @@ function PlayRotationTab() {
                   onDragStart={(event) => {
                     event.dataTransfer.setData("text/player-id", player.id);
                   }}
-                  className={`flex min-h-16 items-center justify-between gap-3 rounded-xl px-3.5 border border-forest/5 ${
-                    !player.checkedIn ? "bg-white/30" : "bg-white/55"
+                  className={`flex min-h-16 items-center justify-between gap-3 rounded-xl px-3.5 border border-white/5 ${
+                    !player.checkedIn ? "bg-white/5" : "bg-white/12"
                   } ${
-                    isDraggable ? "cursor-grab active:cursor-grabbing hover:bg-forest/5 transition" : ""
+                    isDraggable ? "cursor-grab active:cursor-grabbing hover:bg-white/5 transition" : ""
                   }`}
                   title={isDraggable ? "Drag player into a stack or court" : !player.checkedIn ? "Check in player to assign them" : undefined}
                 >
                   <div className="flex items-center gap-2.5">
-                    {isDraggable && <GripVertical size={16} className="text-forest/30 shrink-0" />}
+                    {isDraggable && <GripVertical size={16} className="text-ivory/30 shrink-0" />}
                     <div className="relative shrink-0">
                       <div className="h-10 w-10 rounded-full overflow-hidden bg-forest/10 border border-forest/10">
                         <img 
@@ -1410,12 +1879,12 @@ function PlayRotationTab() {
                       </div>
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="font-semibold text-forest">{player.displayName}</p>
-                      <p className="text-xs text-forest/75">
+                      <p className="font-semibold text-ivory">{player.displayName}</p>
+                      <p className="text-xs text-linen/75">
                         {isPlaying ? "Playing" : player.parked ? "Parked" : player.skillLevel} · {player.totalGamesPlayed} games
                       </p>
                       {player.statusNote && (
-                        <p className="mt-1 max-w-full truncate text-[10px] font-bold text-forest/70" title={player.statusNote}>
+                        <p className="mt-1 max-w-full truncate text-[10px] font-bold text-linen/70" title={player.statusNote}>
                           Note: {player.statusNote}
                         </p>
                       )}
@@ -1430,7 +1899,7 @@ function PlayRotationTab() {
                         Check In
                       </Button>
                     ) : isPlaying ? (
-                      <span className="inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">
+                      <span className="inline-flex items-center rounded-full bg-amber-100/10 px-3 py-1 text-xs font-bold text-amber-300">
                         Playing
                       </span>
                     ) : (
@@ -1440,7 +1909,7 @@ function PlayRotationTab() {
                           className={`min-h-10 px-3 text-xs font-bold transition ${
                             player.parked
                               ? "bg-brass text-forest hover:bg-brass/90"
-                              : "bg-linen text-forest hover:bg-linen/90"
+                              : "bg-[#0b3a2c] text-ivory hover:bg-[#0b3a2c]/90"
                           }`}
                         >
                           {player.parked ? "Resume" : "Park"}
@@ -1458,14 +1927,14 @@ function PlayRotationTab() {
               );
             })}
             {loungePlayers.length === 0 && (
-              <div className="rounded-xl bg-white/35 px-4 py-8 text-center">
-                <p className="font-semibold text-forest">No players found</p>
-                <p className="mt-1 text-xs text-forest/60">Try another name, rank, or tag.</p>
+              <div className="rounded-xl bg-white/5 px-4 py-8 text-center">
+                <p className="font-semibold text-ivory">No players found</p>
+                <p className="mt-1 text-xs text-linen/60">Try another name, rank, or tag.</p>
               </div>
             )}
           </div>
         </Card>
-        <Card className="bg-[#173f32] text-ivory">
+        <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-xs font-black uppercase tracking-[0.16em] text-brass">Live club status</p>
@@ -1516,35 +1985,6 @@ function normalizePhoneNumber(value: string) {
   return value.replace(/\D/g, "");
 }
 
-async function prepareProfileImage(file: File) {
-  if (!file.type.startsWith("image/")) throw new Error("Choose a JPG, PNG, or WebP image.");
-  if (file.size > 8 * 1024 * 1024) throw new Error("Choose an image smaller than 8 MB.");
-
-  const source = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("The image could not be read."));
-    reader.readAsDataURL(file);
-  });
-  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const next = new Image();
-    next.onload = () => resolve(next);
-    next.onerror = () => reject(new Error("The image could not be opened."));
-    next.src = source;
-  });
-  const size = Math.min(640, Math.max(image.naturalWidth, image.naturalHeight));
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Photo processing is unavailable.");
-  const crop = Math.min(image.naturalWidth, image.naturalHeight);
-  const sourceX = (image.naturalWidth - crop) / 2;
-  const sourceY = (image.naturalHeight - crop) / 2;
-  context.drawImage(image, sourceX, sourceY, crop, crop, 0, 0, size, size);
-  return canvas.toDataURL("image/jpeg", 0.82);
-}
-
 function validatePlayerRegistration(
   players: ReturnType<typeof useClubStore.getState>["players"],
   displayName: string,
@@ -1566,17 +2006,143 @@ function validatePlayerRegistration(
   return "";
 }
 
+function PlayerHistoryPanel({
+  player,
+  maxMatches = 12,
+  className = "",
+}: {
+  player: ReturnType<typeof useClubStore.getState>["players"][number];
+  maxMatches?: number;
+  className?: string;
+}) {
+  const allPlayers = useClubStore((state) => state.players);
+  const matches = useClubStore((state) => state.matches);
+  const courts = useClubStore((state) => state.courts);
+  const playerKudos = useClubStore((state) => state.playerKudos);
+  const receivedKudos = kudosForPlayer(playerKudos, player.id);
+  const pillTallies = tallyKudosPills(receivedKudos);
+  const recentNotes = receivedKudos
+    .filter((entry) => entry.note || entry.pills.length > 0)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 6);
+
+  const playerMatches = matches
+    .filter((match) => match.status === "Completed" && [...match.teamAPlayerIds, ...match.teamBPlayerIds].includes(player.id))
+    .sort((a, b) => new Date(b.endedAt ?? 0).getTime() - new Date(a.endedAt ?? 0).getTime())
+    .slice(0, maxMatches);
+
+  return (
+    <div className={className}>
+      <div className="grid grid-cols-3 gap-2">
+        <div className="rounded-xl bg-white/5 p-3 text-center">
+          <p className="text-xl font-black text-brass">{player.totalGamesPlayed}</p>
+          <p className="text-[9px] font-bold uppercase tracking-wider text-linen/60">Games</p>
+        </div>
+        <div className="rounded-xl bg-white/5 p-3 text-center">
+          <p className="text-xl font-black text-brass">{player.totalDaysPlayed}</p>
+          <p className="text-[9px] font-bold uppercase tracking-wider text-linen/60">Days</p>
+        </div>
+        <div className="rounded-xl bg-white/5 p-3 text-center">
+          <p className="text-xl font-black text-brass">{player.rating.toFixed(1)}</p>
+          <p className="text-[9px] font-bold uppercase tracking-wider text-linen/60">Rating</p>
+        </div>
+      </div>
+
+      {pillTallies.length > 0 && (
+        <div className="mt-4">
+          <p className="text-[10px] font-black uppercase tracking-wider text-brass">Kudos received</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {pillTallies.map(([pill, count]) => (
+              <span key={pill} className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] font-bold text-ivory">
+                {pill}
+                <span className="ml-1.5 rounded-full bg-brass px-1.5 text-[9px] font-black text-forest">{count}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {recentNotes.length > 0 && (
+        <div className="mt-4">
+          <p className="text-[10px] font-black uppercase tracking-wider text-brass">Partner notes</p>
+          <div className="mt-2 max-h-36 space-y-2 overflow-y-auto pr-1">
+            {recentNotes.map((entry) => (
+              <div key={entry.id} className="rounded-xl bg-white/5 px-3 py-2 text-xs">
+                <p className="font-bold text-brass">{entry.fromPlayerName}</p>
+                {entry.pills.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {entry.pills.map((pill) => (
+                      <span key={pill} className="rounded-full bg-brass/15 px-2 py-0.5 text-[9px] font-bold text-brass">{pill}</span>
+                    ))}
+                  </div>
+                )}
+                {entry.note && <p className="mt-1 italic text-linen/75">“{entry.note}”</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="mt-4">
+        <p className="text-[10px] font-black uppercase tracking-wider text-brass">Match history</p>
+        {playerMatches.length === 0 ? (
+          <p className="mt-2 text-sm text-linen/55">No completed games logged yet.</p>
+        ) : (
+          <div className="mt-2 max-h-64 space-y-2 overflow-y-auto pr-1">
+            {playerMatches.map((match) => {
+              const court = courts.find((c) => c.id === match.courtId);
+              const onTeamA = match.teamAPlayerIds.includes(player.id);
+              const partners = getMatchOpponentIds(match, player.id)
+                .map((id) => allPlayers.find((item) => item.id === id))
+                .filter((item): item is NonNullable<typeof item> => Boolean(item && !item.isVacant));
+              const matchKudos = kudosForMatch(playerKudos, match.id).filter((entry) => entry.toPlayerId === player.id);
+              return (
+                <div key={match.id} className="rounded-xl bg-white/5 px-3 py-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-brass">{court?.name ?? "Court"}</span>
+                    <span className="font-mono">{onTeamA ? match.scoreA : match.scoreB}–{onTeamA ? match.scoreB : match.scoreA}</span>
+                  </div>
+                  {partners.length > 0 && (
+                    <p className="mt-1 text-[10px] text-linen/65">With {partners.map((item) => item.displayName).join(", ")}</p>
+                  )}
+                  {matchKudos.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {matchKudos.flatMap((entry) => entry.pills).map((pill) => (
+                        <span key={`${match.id}-${pill}`} className="rounded-full bg-brass/15 px-2 py-0.5 text-[9px] font-bold text-brass">{pill}</span>
+                      ))}
+                    </div>
+                  )}
+                  {match.endedAt && (
+                    <span className="mt-1 block text-[10px] text-linen/50">
+                      {new Date(match.endedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PlayersCrudTab() {
   const { players, addPlayer, updatePlayer, deletePlayer, checkIn, checkOut } = useClubStore();
   const [search, setSearch] = React.useState("");
   const [showArchived, setShowArchived] = React.useState(false);
   const [editingPlayer, setEditingPlayer] = React.useState<any>(null);
+  const [historyPlayer, setHistoryPlayer] = React.useState<any>(null);
   const [isAdding, setIsAdding] = React.useState(false);
 
   // Form states
   const [displayName, setDisplayName] = React.useState("");
+  const [fullName, setFullName] = React.useState("");
   const [skillLevel, setSkillLevel] = React.useState<any>("Beginner");
   const [rating, setRating] = React.useState("2.0");
+  const [totalGamesPlayed, setTotalGamesPlayed] = React.useState("0");
+  const [totalDaysPlayed, setTotalDaysPlayed] = React.useState("0");
+  const [statusNote, setStatusNote] = React.useState("");
   const [tags, setTags] = React.useState("");
   const [membership, setMembership] = React.useState<"MEMBER" | "NON-MEMBER">("NON-MEMBER");
   const [phoneNumber, setPhoneNumber] = React.useState("");
@@ -1587,7 +2153,7 @@ function PlayersCrudTab() {
   const [avatarUrl, setAvatarUrl] = React.useState("");
   const [formError, setFormError] = React.useState("");
   const [isSaving, setIsSaving] = React.useState(false);
-  const [isProcessingPhoto, setIsProcessingPhoto] = React.useState(false);
+  const [photoCropSource, setPhotoCropSource] = React.useState<string | null>(null);
 
   const filtered = players.filter((p) => {
     const matchesSearch = p.displayName.toLowerCase().includes(search.toLowerCase());
@@ -1597,8 +2163,12 @@ function PlayersCrudTab() {
 
   const resetForm = () => {
     setDisplayName("");
+    setFullName("");
     setSkillLevel("Beginner");
     setRating("2.0");
+    setTotalGamesPlayed("0");
+    setTotalDaysPlayed("0");
+    setStatusNote("");
     setTags("");
     setMembership("NON-MEMBER");
     setPhoneNumber("");
@@ -1610,6 +2180,7 @@ function PlayersCrudTab() {
     setFormError("");
     setIsSaving(false);
     setEditingPlayer(null);
+    setHistoryPlayer(null);
     setIsAdding(false);
   };
 
@@ -1663,8 +2234,12 @@ function PlayersCrudTab() {
       await updatePlayer({
         ...editingPlayer,
         displayName: displayName.trim(),
+        fullName: fullName.trim() || undefined,
         skillLevel,
         rating: parseFloat(rating) || 2.0,
+        totalGamesPlayed: Math.max(0, parseInt(totalGamesPlayed, 10) || 0),
+        totalDaysPlayed: Math.max(0, parseInt(totalDaysPlayed, 10) || 0),
+        statusNote: statusNote.trim() || undefined,
         tags: finalTags,
         phoneNumber: normalizePhoneNumber(phoneNumber),
         accessCode: accessCode.trim(),
@@ -1681,10 +2256,15 @@ function PlayersCrudTab() {
   };
 
   const startEdit = (player: any) => {
+    setHistoryPlayer(null);
     setEditingPlayer(player);
     setDisplayName(player.displayName);
+    setFullName(player.fullName ?? "");
     setSkillLevel(player.skillLevel);
     setRating(player.rating.toString());
+    setTotalGamesPlayed(String(player.totalGamesPlayed ?? 0));
+    setTotalDaysPlayed(String(player.totalDaysPlayed ?? 0));
+    setStatusNote(player.statusNote ?? "");
     const isMember = player.tags?.includes("Member") ?? false;
     setMembership(isMember ? "MEMBER" : "NON-MEMBER");
     const cleanTags = (player.tags ?? []).filter((t: string) => t !== "Member" && t !== "Non-Member").join(", ");
@@ -1698,32 +2278,46 @@ function PlayersCrudTab() {
     setIsAdding(false);
   };
 
+  const startHistory = (player: any) => {
+    setEditingPlayer(null);
+    setIsAdding(false);
+    setHistoryPlayer(player);
+  };
+
   const handleAdminPhoto = async (file?: File) => {
     if (!file) return;
-    setIsProcessingPhoto(true);
     setFormError("");
     try {
-      setAvatarUrl(await prepareProfileImage(file));
+      setPhotoCropSource(await readProfileImageFile(file));
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "The photo could not be added.");
-    } finally {
-      setIsProcessingPhoto(false);
     }
   };
 
   return (
+    <>
+    {photoCropSource && (
+      <ProfilePhotoCropper
+        imageSrc={photoCropSource}
+        onCancel={() => setPhotoCropSource(null)}
+        onComplete={(dataUrl) => {
+          setAvatarUrl(dataUrl);
+          setPhotoCropSource(null);
+        }}
+      />
+    )}
     <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
       {/* Player List */}
       <Card className="work-surface">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="font-display text-3xl">Player Roster ({filtered.length})</h2>
           <div className="flex items-center gap-4">
-            <label className="flex items-center gap-2 text-xs font-semibold text-forest/75 cursor-pointer">
+            <label className="flex items-center gap-2 text-xs font-semibold text-linen/75 cursor-pointer">
               <input 
                 type="checkbox" 
                 checked={showArchived} 
                 onChange={(e) => setShowArchived(e.target.checked)} 
-                className="rounded border-forest/20 text-forest focus:ring-forest"
+                className="rounded border-white/10 text-brass focus:ring-brass bg-white/10"
               />
               Show archived
             </label>
@@ -1735,13 +2329,13 @@ function PlayersCrudTab() {
 
         {/* Search */}
         <div className="relative mt-4 flex items-center">
-          <Search size={16} className="absolute left-4 text-forest/40" />
+          <Search size={16} className="absolute left-4 text-ivory/40" />
           <input
             type="text"
             placeholder="Search players..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="control-field w-full rounded-xl pl-11 pr-4 py-3 text-sm text-forest placeholder:text-forest/45 focus:outline-none"
+            className="control-field w-full rounded-xl pl-11 pr-4 py-3 text-sm text-ivory placeholder:text-ivory/45 focus:outline-none"
           />
         </div>
 
@@ -1750,8 +2344,8 @@ function PlayersCrudTab() {
           {filtered.map((player) => (
             <div 
               key={player.id} 
-              className={`flex items-center justify-between gap-3 rounded-xl border border-forest/5 p-3.5 transition-colors hover:bg-white/55 ${
-                player.isActive === false ? "bg-white/20 opacity-70" : "bg-white/35"
+              className={`flex items-center justify-between gap-3 rounded-xl border border-white/5 p-3.5 transition-colors hover:bg-white/10 ${
+                player.isActive === false ? "bg-white/5 opacity-70" : "bg-white/10"
               }`}
             >
               <div className="flex min-w-0 items-center gap-3">
@@ -1761,13 +2355,13 @@ function PlayersCrudTab() {
                   src={getPlayerAvatar(player)}
                 />
                 <div className="min-w-0">
-                 <p className="font-semibold text-forest text-lg leading-tight flex items-center gap-2 flex-wrap">
+                 <p className="font-semibold text-ivory text-lg leading-tight flex items-center gap-2 flex-wrap">
                    {player.displayName}
                    {player.tags?.includes("Member") && (
-                     <span className="text-[9px] bg-brass/25 text-[#6b5a24] border border-brass/35 px-1.5 py-0.5 rounded-full font-black uppercase tracking-wider">Member</span>
+                     <span className="text-[9px] bg-brass/25 text-brass border border-brass/35 px-1.5 py-0.5 rounded-full font-black uppercase tracking-wider">Member</span>
                    )}
                    {player.tags?.includes("Non-Member") && (
-                     <span className="text-[9px] bg-forest/10 text-forest/70 border border-forest/20 px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider">Non-Member</span>
+                     <span className="text-[9px] bg-white/10 text-linen border border-white/20 px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider">Non-Member</span>
                    )}
                    {player.isActive === false && (
                      <span className="text-[10px] bg-clay/10 text-clay border border-clay/20 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Archived</span>
@@ -1775,12 +2369,12 @@ function PlayersCrudTab() {
                  </p>
                 <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                   <RankBadge skillLevel={player.skillLevel} compact />
-                  <span className="text-xs text-forest/50">· Rating: {player.rating} · {player.totalGamesPlayed} games</span>
+                  <span className="text-xs text-linen/50">· Rating: {player.rating} · {player.totalGamesPlayed} games</span>
                   {player.preferredPlayStyle && (
-                    <span className="text-xs text-forest/60">· Style: {player.preferredPlayStyle}</span>
+                    <span className="text-xs text-linen/60">· Style: {player.preferredPlayStyle}</span>
                   )}
                   {player.tags.filter((tag) => tag !== "Member" && tag !== "Non-Member").map((tag) => (
-                    <span key={tag} className="text-[10px] bg-forest/5 text-forest/70 border border-forest/10 px-1.5 py-0.2 rounded font-medium">{tag}</span>
+                    <span key={tag} className="text-[10px] bg-white/5 text-linen/70 border border-white/10 px-1.5 py-0.2 rounded font-medium">{tag}</span>
                   ))}
                 </div>
                 </div>
@@ -1797,7 +2391,7 @@ function PlayersCrudTab() {
                   <>
                     {!player.checkedIn ? (
                       <button
-                        onClick={() => checkIn(player.id, autoLogPayment, true)}
+                        onClick={() => checkIn(player.id, true, true)}
                         className="px-3 py-1.5 rounded-lg bg-brass text-forest font-black text-xs hover:bg-brass/90 transition shadow-sm mr-1"
                         title="Check In Player"
                       >
@@ -1813,8 +2407,15 @@ function PlayersCrudTab() {
                       </button>
                     )}
                     <button 
+                      onClick={() => startHistory(player)} 
+                      className="p-2 rounded-full hover:bg-white/5 text-ivory/60 hover:text-brass transition"
+                      title="View history & kudos"
+                    >
+                      <Activity size={16} />
+                    </button>
+                    <button 
                       onClick={() => startEdit(player)} 
-                      className="p-2 rounded-full hover:bg-forest/5 text-forest/60 hover:text-forest transition"
+                      className="p-2 rounded-full hover:bg-white/5 text-ivory/60 hover:text-ivory transition"
                       title="Edit Player"
                     >
                       <Edit2 size={16} />
@@ -1823,7 +2424,7 @@ function PlayersCrudTab() {
                       onClick={() => {
                         if (confirm(`Are you sure you want to archive ${player.displayName}?`)) {
                           deletePlayer(player.id);
-                          if (editingPlayer?.id === player.id) resetForm();
+                          if (editingPlayer?.id === player.id || historyPlayer?.id === player.id) resetForm();
                         }
                       }} 
                       className="p-2 rounded-full hover:bg-red-50 text-red-500/60 hover:text-red-500 transition"
@@ -1842,9 +2443,23 @@ function PlayersCrudTab() {
         </div>
       </Card>
 
-      {/* Editor Panel */}
-      <Card className="bg-[#173f32] text-ivory h-fit">
-        {isAdding || editingPlayer ? (
+      {/* Editor / History Panel */}
+      <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory h-fit max-h-[calc(100vh-8rem)] overflow-y-auto">
+        {historyPlayer && !isAdding && !editingPlayer ? (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider text-brass">Player history</p>
+                <h3 className="font-display text-2xl">{historyPlayer.displayName}</h3>
+              </div>
+              <button type="button" onClick={resetForm} className="p-1 rounded-full hover:bg-white/10 text-ivory/80"><X size={18} /></button>
+            </div>
+            <PlayerHistoryPanel player={historyPlayer} maxMatches={20} />
+            <Button onClick={() => startEdit(historyPlayer)} className="w-full min-h-11 bg-brass text-forest font-black border-none">
+              <Edit2 size={16} /> Edit player info & stats
+            </Button>
+          </div>
+        ) : isAdding || editingPlayer ? (
           <form onSubmit={isAdding ? handleAdd : handleUpdate} className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-display text-2xl">{isAdding ? "Create Player" : "Edit Player"}</h3>
@@ -1856,18 +2471,18 @@ function PlayersCrudTab() {
                 <img
                   alt="Player photo preview"
                   className="h-20 w-20 shrink-0 rounded-full bg-ivory object-cover"
-                  src={avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName || "Player")}`}
+                  src={avatarUrl || dicebearAvatar(displayName || "Player", "fun-emoji")}
                 />
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-bold uppercase tracking-wider text-brass">Profile photo</p>
-                  <p className="mt-1 text-xs leading-5 text-linen/65">Choose a clear square or portrait photo. It will appear in the lounge, player page, and TV queue.</p>
+                  <p className="mt-1 text-xs leading-5 text-linen/65">Upload a photo, then drag and zoom to crop before saving.</p>
                   <label className="mt-2 inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full bg-ivory px-4 text-xs font-bold text-forest hover:bg-linen">
                     <ImagePlus size={16} />
-                    {isProcessingPhoto ? "Preparing..." : "Upload Photo"}
+                    Upload Photo
                     <input
                       accept="image/jpeg,image/png,image/webp"
                       className="sr-only"
-                      disabled={isProcessingPhoto}
+                      disabled={Boolean(photoCropSource)}
                       onChange={(event) => void handleAdminPhoto(event.target.files?.[0])}
                       type="file"
                     />
@@ -1889,6 +2504,17 @@ function PlayersCrudTab() {
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder="e.g. John Doe"
+                className="w-full rounded-2xl bg-white/10 text-ivory border-none px-4 py-3 placeholder:text-ivory/30 focus:outline-none focus:ring-2 focus:ring-brass text-sm shadow-inner"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-bold uppercase tracking-wider text-brass">Full Name (optional)</label>
+              <input
+                type="text"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Legal / roster name"
                 className="w-full rounded-2xl bg-white/10 text-ivory border-none px-4 py-3 placeholder:text-ivory/30 focus:outline-none focus:ring-2 focus:ring-brass text-sm shadow-inner"
               />
             </div>
@@ -1931,6 +2557,42 @@ function PlayersCrudTab() {
                 />
               </div>
             </div>
+
+            {!isAdding && (
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-brass">Games played</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={totalGamesPlayed}
+                    onChange={(e) => setTotalGamesPlayed(e.target.value)}
+                    className="w-full rounded-2xl bg-white/10 text-ivory border-none px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brass text-sm shadow-inner"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-brass">Days played</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={totalDaysPlayed}
+                    onChange={(e) => setTotalDaysPlayed(e.target.value)}
+                    className="w-full rounded-2xl bg-white/10 text-ivory border-none px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brass text-sm shadow-inner"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-brass">Status note</label>
+                  <input
+                    type="text"
+                    maxLength={40}
+                    value={statusNote}
+                    onChange={(e) => setStatusNote(e.target.value)}
+                    placeholder="Lounge / TV note"
+                    className="w-full rounded-2xl bg-white/10 text-ivory border-none px-4 py-3 placeholder:text-ivory/30 focus:outline-none focus:ring-2 focus:ring-brass text-sm shadow-inner"
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
@@ -2019,196 +2681,186 @@ function PlayersCrudTab() {
                 Cancel
               </Button>
             </div>
+
+            {editingPlayer && (
+              <div className="border-t border-white/10 pt-4">
+                <p className="text-xs font-black uppercase tracking-wider text-brass mb-3">Play history & kudos</p>
+                <PlayerHistoryPanel player={editingPlayer} maxMatches={12} />
+              </div>
+            )}
           </form>
         ) : (
           <div className="text-center py-8">
             <UserRound className="mx-auto text-brass mb-3" size={32} />
             <h3 className="font-display text-2xl">No Player Selected</h3>
-            <p className="text-sm text-linen/75 mt-1">Select a player from the list to edit, or click Add Player to create a new one.</p>
+            <p className="text-sm text-linen/75 mt-1">Select a player to edit, view history (activity icon), or add a new player.</p>
           </div>
         )}
       </Card>
     </div>
+    </>
   );
 }
 
 // ----------------------------------------------------
-// COURTS CRUD TAB
+// ADMIN RESERVATIONS TAB
 // ----------------------------------------------------
-function CourtsCrudTab() {
-  const { courts, addCourt, updateCourt, deleteCourt } = useClubStore();
-  const [editingCourt, setEditingCourt] = React.useState<any>(null);
-  const [isAdding, setIsAdding] = React.useState(false);
+function AdminReservationsTab() {
+  return (
+    <React.Suspense fallback={<LoadingScreen />}>
+      <AdminReservationCalendar />
+    </React.Suspense>
+  );
+}
 
-  // Form states
-  const [name, setName] = React.useState("");
-  const [number, setNumber] = React.useState("1");
+// ----------------------------------------------------
+// PARK LOUNGE TAB (admin)
+// ----------------------------------------------------
+function CourtSchedulePanel({ courts }: { courts: ReturnType<typeof useClubStore.getState>["courts"] }) {
+  const { updateCourt } = useClubStore();
+  const [settings, setSettings] = React.useState<CourtSettings>(getCourtSettings);
+  const sortedCourts = React.useMemo(() => sortCourts(courts), [courts]);
 
-  const resetForm = () => {
-    setName("");
-    setNumber("1");
-    setEditingCourt(null);
-    setIsAdding(false);
-  };
-
-  const handleAdd = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) return;
-    await addCourt({
-      name: name.trim(),
-      number: parseInt(number) || 1
-    });
-    resetForm();
-  };
-
-  const handleUpdate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingCourt || !name.trim()) return;
-    await updateCourt({
-      ...editingCourt,
-      name: name.trim(),
-      number: parseInt(number) || 1
-    });
-    resetForm();
-  };
-
-  const startEdit = (court: any) => {
-    setEditingCourt(court);
-    setName(court.name);
-    setNumber(court.number.toString());
-    setIsAdding(false);
-  };
-
-  const toggleCourtMaintenance = async (court: any) => {
-    const nextStatus = court.status === "Maintenance" ? "Available" : "Maintenance";
-    await updateCourt({
-      ...court,
-      status: nextStatus
-    });
+  const updateSetting = (courtId: string, patch: Partial<{ enabled: boolean; openingTime: string; closingTime: string }>) => {
+    const next = { ...settings, [courtId]: { ...getCourtSetting(courtId), ...patch } };
+    setSettings(next);
+    saveCourtSettings(next);
   };
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
-      {/* Court List */}
-      <Card className="work-surface">
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-3xl">Court Configurations ({courts.length})</h2>
-          <Button onClick={() => { resetForm(); setIsAdding(true); }} className="min-h-10 bg-forest text-ivory text-xs px-4">
-            <Plus size={14} /> Add Court
-          </Button>
-        </div>
-
-        <div className="mt-6 grid gap-4 md:grid-cols-2 max-h-[550px] overflow-y-auto pr-1">
-          {courts.map((court) => (
-            <div 
-              key={court.id}
-              className="flex flex-col justify-between rounded-2xl bg-white/55 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] hover:bg-white/75 transition"
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="font-display text-2xl text-forest">{court.name}</h3>
-                  <p className="text-xs text-forest/65">Court Number: {court.number}</p>
-                </div>
-                <Chip
-                  color={
-                    court.status === "InUse" ? "warning" :
-                    court.status === "Reserved" ? "accent" :
-                    court.status === "Maintenance" ? "danger" : "success"
-                  }
-                  variant="soft"
-                  size="sm"
-                  className="font-bold"
-                >
+    <Card className="work-surface">
+      <p className="text-xs font-black uppercase tracking-[0.2em] text-brass">Court schedule</p>
+      <h2 className="font-display text-3xl">Hours &amp; booking ({sortedCourts.length} courts)</h2>
+      <p className="mt-1 text-xs text-linen/60">Set open/close times and whether each court accepts reservations.</p>
+      <div className="mt-5 grid gap-3 md:grid-cols-3">
+        {sortedCourts.map((court) => {
+          const s = settings[court.id] ?? getCourtSetting(court.id);
+          return (
+            <div className="rounded-2xl bg-white/10 p-4 border border-white/5" key={court.id}>
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <h3 className="font-display text-xl font-black text-ivory">{court.name}</h3>
+                <Chip color={court.status === "InUse" ? "warning" : court.status === "Maintenance" ? "danger" : "success"} variant="soft" size="sm">
                   {court.status}
                 </Chip>
               </div>
-
-              <div className="mt-6 flex items-center justify-between border-t border-forest/10 pt-3">
-                <Button 
-                  onClick={() => toggleCourtMaintenance(court)} 
-                  className={`min-h-8 text-[11px] px-3 font-bold ${court.status === "Maintenance" ? "bg-emerald-500 text-white" : "bg-red-100 text-red-700"}`}
+              <div className="flex flex-wrap gap-2 mb-3">
+                <Button
+                  onClick={() => void updateCourt({ ...court, reservable: court.reservable === false })}
+                  className={`min-h-8 text-[11px] px-3 font-bold ${court.reservable !== false ? "bg-brass/20 text-brass" : "bg-slate-500/20 text-slate-300"}`}
                 >
-                  {court.status === "Maintenance" ? "Make Available" : "Set Maintenance"}
+                  {court.reservable !== false ? "Reservable" : "Not Reservable"}
                 </Button>
-                <div className="flex gap-1">
-                  <button 
-                    onClick={() => startEdit(court)} 
-                    className="p-1.5 rounded-full hover:bg-forest/5 text-forest/60 hover:text-forest transition"
-                  >
-                    <Edit2 size={15} />
-                  </button>
-                  <button 
-                    onClick={() => {
-                      if (confirm(`Are you sure you want to delete ${court.name}?`)) {
-                        deleteCourt(court.id);
-                        if (editingCourt?.id === court.id) resetForm();
-                      }
-                    }} 
-                    className="p-1.5 rounded-full hover:bg-red-50 text-red-500/60 hover:text-red-500 transition"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
+                <Button
+                  onClick={() => void updateCourt({ ...court, status: court.status === "Maintenance" ? "Available" : "Maintenance" })}
+                  className={`min-h-8 text-[11px] px-3 font-bold ${court.status === "Maintenance" ? "bg-emerald-500 text-white" : "bg-red-500/10 text-red-300"}`}
+                >
+                  {court.status === "Maintenance" ? "Available" : "Maintenance"}
+                </Button>
               </div>
+              <label className="block text-[10px] font-black uppercase tracking-wider text-brass mb-1">
+                Opens
+                <input type="time" value={s.openingTime} onChange={(e) => updateSetting(court.id, { openingTime: e.target.value })} className="mt-1 w-full rounded-xl bg-forest/40 border border-white/10 px-3 py-2 text-sm text-ivory" />
+              </label>
+              <label className="mt-2 block text-[10px] font-black uppercase tracking-wider text-brass mb-1">
+                Closes
+                <input type="time" value={s.closingTime} onChange={(e) => updateSetting(court.id, { closingTime: e.target.value })} className="mt-1 w-full rounded-xl bg-forest/40 border border-white/10 px-3 py-2 text-sm text-ivory" />
+              </label>
+              <button
+                type="button"
+                onClick={() => updateSetting(court.id, { enabled: !s.enabled })}
+                className={`mt-3 w-full rounded-xl px-3 py-2 text-xs font-black ${s.enabled ? "bg-emerald-500/20 text-emerald-200" : "bg-slate-500/20 text-slate-300"}`}
+              >
+                {s.enabled ? "Bookings open" : "Bookings closed"}
+              </button>
             </div>
-          ))}
-          {courts.length === 0 && (
-            <p className="text-center py-10 text-forest/50 col-span-2">No courts configured.</p>
-          )}
-        </div>
-      </Card>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
 
-      {/* Editor Panel */}
-      <Card className="bg-[#173f32] text-ivory h-fit">
-        {isAdding || editingCourt ? (
-          <form onSubmit={isAdding ? handleAdd : handleUpdate} className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-display text-2xl">{isAdding ? "Create Court" : "Edit Court"}</h3>
-              <button type="button" onClick={resetForm} className="p-1 rounded-full hover:bg-white/10 text-ivory/80"><X size={18} /></button>
-            </div>
+function ParkLoungeTab() {
+  const { players, courts, matches, setPlayerParked } = useClubStore();
+  const [profilePlayerId, setProfilePlayerId] = React.useState<string | null>(null);
 
-            <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-wider text-brass">Court Display Name</label>
-              <input
-                type="text"
-                required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Court 5 or Center Court"
-                className="w-full rounded-2xl bg-white/10 text-ivory border-none px-4 py-3 placeholder:text-ivory/30 focus:outline-none focus:ring-2 focus:ring-brass text-sm shadow-inner"
-              />
-            </div>
+  const checkedIn = players.filter((p) => p.isActive !== false && p.checkedIn);
+  const parkedPlayers = checkedIn.filter((p) => p.parked);
+  const inRotation = checkedIn.filter((p) => !p.parked);
+  const profilePlayer = profilePlayerId ? players.find((p) => p.id === profilePlayerId) : null;
 
-            <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-wider text-brass">Court Position/Number</label>
-              <input
-                type="number"
-                required
-                min="1"
-                max="50"
-                value={number}
-                onChange={(e) => setNumber(e.target.value)}
-                className="w-full rounded-2xl bg-white/10 text-ivory border-none px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brass text-sm shadow-inner"
-              />
-            </div>
+  const activeMatches = matches.filter((m) => m.status === "InProgress");
+  const getPlayingMatch = (playerId: string) =>
+    activeMatches.find((m) => m.teamAPlayerIds.includes(playerId) || m.teamBPlayerIds.includes(playerId));
+  const getCourt = (matchId: string) => courts.find((c) => c.currentMatchId === matchId);
 
-            <div className="pt-2 flex gap-2">
-              <Button type="submit" className="w-full bg-brass text-forest min-h-11">
-                <Save size={16} /> Save Court
-              </Button>
-              <Button type="button" onClick={resetForm} className="bg-white/10 text-ivory min-h-11 px-4">
-                Cancel
-              </Button>
-            </div>
-          </form>
-        ) : (
-          <div className="text-center py-8">
-            <Database className="mx-auto text-brass mb-3" size={32} />
-            <h3 className="font-display text-2xl">No Court Selected</h3>
-            <p className="text-sm text-linen/75 mt-1">Select a court from the list to edit, or click Add Court to create a new one.</p>
+  const renderPlayerRow = (player: (typeof players)[number], parked: boolean) => {
+    const match = getPlayingMatch(player.id);
+    const court = match ? getCourt(match.id) : null;
+    return (
+      <div
+        key={player.id}
+        className="flex items-center gap-3 rounded-2xl bg-white/8 p-3 transition hover:bg-white/12"
+      >
+        <button type="button" onClick={() => setProfilePlayerId(player.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+          <img src={getPlayerAvatar(player)} alt="" className="h-11 w-11 rounded-full object-cover bg-white/10" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-black text-ivory">{player.displayName}</p>
+            <p className="text-xs text-linen/70">
+              {match ? `Playing on ${court?.name}` : `${player.skillLevel} · ${player.totalGamesPlayed} games`}
+            </p>
+            {player.statusNote && (
+              <p className="mt-1 truncate text-[11px] font-bold text-brass">💬 {player.statusNote}</p>
+            )}
           </div>
-        )}
-      </Card>
+        </button>
+        <Button
+          onClick={() => void setPlayerParked(player.id, !parked)}
+          className={`min-h-9 shrink-0 px-3 text-xs font-black ${parked ? "bg-brass text-forest" : "bg-white/10 text-ivory"}`}
+        >
+          {parked ? "Resume" : "Park"}
+        </Button>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card className="work-surface">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.2em] text-brass">Cleared lounge</p>
+              <h2 className="font-display text-3xl">Parked ({parkedPlayers.length})</h2>
+            </div>
+            <Coffee className="text-brass" size={26} />
+          </div>
+          <div className="mt-4 space-y-2 max-h-[420px] overflow-y-auto pr-1">
+            {parkedPlayers.map((p) => renderPlayerRow(p, true))}
+            {parkedPlayers.length === 0 && <p className="text-sm text-linen/55 py-6 text-center">Nobody is parked right now.</p>}
+          </div>
+        </Card>
+
+        <Card className="work-surface">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.2em] text-brass">Active queue</p>
+            <h2 className="font-display text-3xl">In Rotation ({inRotation.length})</h2>
+          </div>
+          <div className="mt-4 space-y-2 max-h-[420px] overflow-y-auto pr-1">
+            {inRotation.map((p) => renderPlayerRow(p, false))}
+            {inRotation.length === 0 && <p className="text-sm text-linen/55 py-6 text-center">No players in rotation.</p>}
+          </div>
+        </Card>
+      </div>
+
+      <CourtSchedulePanel courts={courts} />
+
+      {profilePlayer && (
+        <PlayerProfileSheet
+          player={profilePlayer}
+          onClose={() => setProfilePlayerId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2312,11 +2964,11 @@ function HistoryTab() {
             return (
               <div 
                 key={match.id}
-                className="rounded-2xl p-4 bg-white/60 border border-forest/10 hover:bg-white transition flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                className="rounded-2xl p-4 bg-white/10 border border-white/5 hover:bg-white/15 transition flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
               >
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-black bg-forest/15 text-forest px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                    <span className="text-xs font-black bg-white/15 text-linen px-2.5 py-0.5 rounded-full uppercase tracking-wider">
                       {court?.name ?? "Court"}
                     </span>
                     <span className="text-[10px] font-bold text-clay uppercase tracking-widest flex items-center gap-1">
@@ -2324,30 +2976,30 @@ function HistoryTab() {
                     </span>
                   </div>
                   
-                  <div className="mt-2.5 text-base font-semibold text-ink">
-                    <span className="text-forest font-black">{teamANames || "Vacant"}</span>
-                    <span className="text-xs text-forest/60 mx-2 uppercase">vs</span>
-                    <span className="text-forest font-black">{teamBNames || "Vacant"}</span>
+                  <div className="mt-2.5 text-base font-semibold text-ivory">
+                    <span className="text-brass font-black">{teamANames || "Vacant"}</span>
+                    <span className="text-xs text-linen/60 mx-2 uppercase">vs</span>
+                    <span className="text-brass font-black">{teamBNames || "Vacant"}</span>
                   </div>
                 </div>
 
-                <div className="text-left sm:text-right shrink-0 border-t sm:border-t-0 border-forest/5 pt-2 sm:pt-0">
-                  <p className="text-xs font-black text-forest/55 uppercase tracking-wider">Match Logged</p>
-                  <p className="text-sm font-bold text-ink mt-0.5">{timeStr || "Just now"}</p>
+                <div className="text-left sm:text-right shrink-0 border-t sm:border-t-0 border-white/5 pt-2 sm:pt-0">
+                  <p className="text-xs font-black text-linen/55 uppercase tracking-wider">Match Logged</p>
+                  <p className="text-sm font-bold text-ivory mt-0.5">{timeStr || "Just now"}</p>
                 </div>
               </div>
             );
           })}
           {completedMatches.length === 0 && (
-            <div className="text-center py-12 text-forest/40">
-              <Calendar className="mx-auto text-forest/30 mb-2" size={36} />
+            <div className="text-center py-12 text-linen/40">
+              <Calendar className="mx-auto text-linen/30 mb-2" size={36} />
               <p className="text-sm italic">No completed matches in history yet. Start play from active courts and tap Finish to log games.</p>
             </div>
           )}
         </div>
       </Card>
 
-      <Card className="bg-[#173f32] text-ivory h-fit p-5 rounded-2xl">
+      <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory h-fit p-5 rounded-2xl">
         <h3 className="font-display text-2xl text-brass border-b border-ivory/10 pb-3">Open Play Statistics</h3>
         <div className="mt-5 space-y-4">
           <div className="rounded-xl bg-ivory/8 p-4">
@@ -2358,7 +3010,7 @@ function HistoryTab() {
 
           <div className="rounded-xl bg-ivory/8 p-4 space-y-3">
             <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-linen/70">Top Active Courts</span>
-            {courts.map(court => {
+            {sortCourts(courts).map(court => {
               const courtCount = completedMatches.filter(m => m.courtId === court.id).length;
               return (
                 <div key={court.id} className="flex items-center justify-between text-xs">
@@ -2419,14 +3071,14 @@ function CalendarView() {
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ type: "spring", stiffness: 300, damping: 24 }}
-          className="max-w-md w-full bg-white border border-forest/10 rounded-[2.5rem] shadow-[0_24px_80px_rgba(19,36,29,0.12)] p-8 text-forest relative overflow-hidden"
+          className="max-w-md w-full bg-[#173f32] border border-white/10 rounded-[2.5rem] shadow-[0_24px_80px_rgba(0,0,0,0.3)] p-8 text-ivory relative overflow-hidden"
         >
           <div className="absolute -right-12 -top-12 opacity-[0.03] pointer-events-none">
             <LogoMark size="large" />
           </div>
 
           <div className="flex flex-col items-center text-center">
-            <div className="h-16 w-16 rounded-2xl bg-forest/5 flex items-center justify-center border border-forest/10 shadow-inner">
+            <div className="h-16 w-16 rounded-2xl bg-forest flex items-center justify-center border border-white/10 shadow-inner">
               <LogoMark />
             </div>
             <h2 className="font-display text-3xl font-black mt-5 leading-none tracking-tight">HAFF Leisure Club - Cadiz City</h2>
@@ -2435,35 +3087,35 @@ function CalendarView() {
 
           <form onSubmit={handleLogin} className="mt-8 space-y-4">
             {authError && (
-              <div className="p-3.5 bg-red-50 border border-red-100 text-red-600 rounded-2xl text-xs font-semibold text-center">
+              <div className="p-3.5 bg-red-500/10 border border-red-500/20 text-red-300 rounded-2xl text-xs font-semibold text-center">
                 {authError}
               </div>
             )}
 
             <div className="space-y-1">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-forest/60">Administrator Email</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-forest/70">Administrator Email</label>
               <input
                 type="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="email@example.com"
-                className="w-full rounded-2xl bg-forest/5 text-forest border-forest/10 px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-forest text-sm shadow-inner transition"
+                className="w-full rounded-2xl bg-forest/5 text-forest border-none px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-forest text-sm shadow-inner transition placeholder:text-forest/30"
               />
             </div>
 
             <div className="space-y-1">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-forest/60">Password</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-forest/70">Password</label>
               <PasswordField
                 value={password}
                 onChange={setPassword}
-                className="w-full rounded-2xl bg-forest/5 text-forest border-forest/10 px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-forest text-sm shadow-inner transition"
+                className="w-full rounded-2xl bg-forest/5 text-forest border-none px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-forest text-sm shadow-inner transition placeholder:text-forest/30"
               />
             </div>
 
             <Button
               type="submit"
-              className="w-full bg-forest text-ivory hover:bg-forest/90 font-black py-4 rounded-2xl shadow-xl transition-all hover:scale-[1.01] active:scale-95 border-none mt-6 flex items-center justify-center gap-2"
+              className="w-full bg-brass text-forest hover:bg-linen font-black py-4 rounded-2xl shadow-xl transition-all hover:scale-[1.01] active:scale-95 border-none mt-6 flex items-center justify-center gap-2"
             >
               <Lock size={16} /> Sign In
             </Button>
@@ -2475,7 +3127,7 @@ function CalendarView() {
 
   return (
     <section className="mx-auto max-w-7xl px-4 py-6 pb-32">
-      <div className="relative overflow-hidden rounded-2xl bg-[#173f32] p-5 text-ivory shadow-[0_18px_46px_rgba(0,0,0,0.2)] sm:p-6 mb-6">
+      <div className="relative overflow-hidden rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10 p-5 text-ivory shadow-[0_18px_46px_rgba(0,0,0,0.2)] sm:p-6 mb-6">
         <div className="absolute -right-8 -top-12 opacity-[0.06]"><LogoMark size="large" /></div>
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-linen/80">HAFF Leisure Club</p>
         <h1 className="font-display text-4xl font-semibold leading-tight tracking-normal sm:text-5xl mt-1">
@@ -2532,14 +3184,14 @@ function FinanceView() {
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ type: "spring", stiffness: 300, damping: 24 }}
-          className="max-w-md w-full bg-white border border-forest/10 rounded-[2.5rem] shadow-[0_24px_80px_rgba(19,36,29,0.12)] p-8 text-forest relative overflow-hidden"
+          className="max-w-md w-full bg-[#173f32] border border-white/10 rounded-[2.5rem] shadow-[0_24px_80px_rgba(0,0,0,0.3)] p-8 text-ivory relative overflow-hidden"
         >
           <div className="absolute -right-12 -top-12 opacity-[0.03] pointer-events-none">
             <LogoMark size="large" />
           </div>
 
           <div className="flex flex-col items-center text-center">
-            <div className="h-16 w-16 rounded-2xl bg-forest/5 flex items-center justify-center border border-forest/10 shadow-inner">
+            <div className="h-16 w-16 rounded-2xl bg-forest flex items-center justify-center border border-white/10 shadow-inner">
               <LogoMark />
             </div>
             <h2 className="font-display text-3xl font-black mt-5 leading-none tracking-tight">HAFF Leisure Club - Cadiz City</h2>
@@ -2548,35 +3200,35 @@ function FinanceView() {
 
           <form onSubmit={handleLogin} className="mt-8 space-y-4">
             {authError && (
-              <div className="p-3.5 bg-red-50 border border-red-100 text-red-600 rounded-2xl text-xs font-semibold text-center">
+              <div className="p-3.5 bg-red-500/10 border border-red-500/20 text-red-300 rounded-2xl text-xs font-semibold text-center">
                 {authError}
               </div>
             )}
 
             <div className="space-y-1">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-forest/60">Administrator Email</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-forest/70">Administrator Email</label>
               <input
                 type="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="email@example.com"
-                className="w-full rounded-2xl bg-forest/5 text-forest border-forest/10 px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-forest text-sm shadow-inner transition"
+                className="w-full rounded-2xl bg-forest/5 text-forest border-none px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-forest text-sm shadow-inner transition placeholder:text-forest/30"
               />
             </div>
 
             <div className="space-y-1">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-forest/60">Password</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-forest/70">Password</label>
               <PasswordField
                 value={password}
                 onChange={setPassword}
-                className="w-full rounded-2xl bg-forest/5 text-forest border-forest/10 px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-forest text-sm shadow-inner transition"
+                className="w-full rounded-2xl bg-forest/5 text-forest border-none px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-forest text-sm shadow-inner transition placeholder:text-forest/30"
               />
             </div>
 
             <Button
               type="submit"
-              className="w-full bg-forest text-ivory hover:bg-forest/90 font-black py-4 rounded-2xl shadow-xl transition-all hover:scale-[1.01] active:scale-95 border-none mt-6 flex items-center justify-center gap-2"
+              className="w-full bg-brass text-forest hover:bg-linen font-black py-4 rounded-2xl shadow-xl transition-all hover:scale-[1.01] active:scale-95 border-none mt-6 flex items-center justify-center gap-2"
             >
               <Lock size={16} /> Sign In
             </Button>
@@ -2588,7 +3240,7 @@ function FinanceView() {
 
   return (
     <section className="mx-auto max-w-7xl px-4 py-6 pb-32">
-      <div className="relative overflow-hidden rounded-2xl bg-[#173f32] p-5 text-ivory shadow-[0_18px_46px_rgba(0,0,0,0.2)] sm:p-6 mb-6">
+      <div className="relative overflow-hidden rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10 p-5 text-ivory shadow-[0_18px_46px_rgba(0,0,0,0.2)] sm:p-6 mb-6">
         <div className="absolute -right-8 -top-12 opacity-[0.06]"><LogoMark size="large" /></div>
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-linen/80">HAFF Leisure Club</p>
         <h1 className="font-display text-4xl font-semibold leading-tight tracking-normal sm:text-5xl mt-1">
@@ -2630,31 +3282,36 @@ function CalendarTab() {
       setBookingError("Select both a court and a host player.");
       return;
     }
-    const start = new Date(`${reservationDate}T${startHour}:00`);
-    const end = new Date(`${reservationDate}T${endHour}:00`);
-    if (end <= start) {
+    const [startH, startM] = startHour.split(":").map(Number);
+    const [endH, endM] = endHour.split(":").map(Number);
+    const startIso = manilaDateTimeIso(reservationDate, startH, startM);
+    const endIso = manilaDateTimeIso(reservationDate, endH, endM);
+    if (new Date(endIso).getTime() <= new Date(startIso).getTime()) {
       setBookingError("End time must be after the start time.");
       return;
     }
+    const hostPlayer = players.find((player) => player.id === selectedPlayerId);
     const count = Math.max(1, Math.min(12, Number(repeatWeeks) || 1));
     const seriesId = count > 1 ? crypto.randomUUID() : undefined;
     const occurrences = Array.from({ length: count }, (_, index) => {
-      const occurrenceStart = new Date(start);
-      const occurrenceEnd = new Date(end);
-      occurrenceStart.setDate(occurrenceStart.getDate() + index * 7);
-      occurrenceEnd.setDate(occurrenceEnd.getDate() + index * 7);
-      return { start: occurrenceStart, end: occurrenceEnd };
+      const day = new Date(`${reservationDate}T12:00:00+08:00`);
+      day.setDate(day.getDate() + index * 7);
+      const dayKey = reservationDateKey(day);
+      return {
+        start: manilaDateTimeIso(dayKey, startH, startM),
+        end: manilaDateTimeIso(dayKey, endH, endM)
+      };
     });
     const conflictingOccurrence = occurrences.find(({ start: occurrenceStart, end: occurrenceEnd }) =>
       reservations.some((reservation) =>
-        reservation.status === "Confirmed"
+        ["Confirmed", "Requested"].includes(reservation.status)
         && reservation.courtId === selectedCourtId
-        && occurrenceStart.getTime() < new Date(reservation.endTime).getTime()
-        && occurrenceEnd.getTime() > new Date(reservation.startTime).getTime()
+        && new Date(occurrenceStart).getTime() < new Date(reservation.endTime).getTime()
+        && new Date(occurrenceEnd).getTime() > new Date(reservation.startTime).getTime()
       )
     );
     if (conflictingOccurrence) {
-      setBookingError(`This court is already booked on ${conflictingOccurrence.start.toLocaleDateString()} during that time.`);
+      setBookingError(`This court is already booked on ${new Date(conflictingOccurrence.start).toLocaleDateString()} during that time.`);
       return;
     }
     try {
@@ -2664,12 +3321,13 @@ function CalendarTab() {
           notes: notes.trim(),
           courtId: selectedCourtId,
           hostPlayerId: selectedPlayerId,
-          startTime: occurrence.start.toISOString(),
-          endTime: occurrence.end.toISOString(),
+          hostDisplayName: hostPlayer?.displayName,
+          startTime: occurrence.start,
+          endTime: occurrence.end,
           playerIds: [selectedPlayerId],
           status: "Confirmed",
           paymentStatus,
-          feeAmount: 350,
+          feeAmount: COURT_HOURLY_FEE,
           seriesId
         });
       }
@@ -2681,7 +3339,7 @@ function CalendarTab() {
 
   return (
     <div className="grid gap-5 md:grid-cols-[1fr_2fr]">
-      <Card className="p-5 bg-[#0b3a2c] text-ivory border border-white/10 shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem]">
+      <Card className="p-5 bg-white/5 backdrop-blur-xl border border-white/10 text-ivory shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem]">
         <h3 className="font-display text-2xl text-brass border-b border-white/10 pb-2">Book Court</h3>
         <div className="mt-4 space-y-4">
           <div>
@@ -2695,7 +3353,7 @@ function CalendarTab() {
               onChange={(e) => setSelectedCourtId(e.target.value)}
               className="w-full rounded-xl bg-forest/50 text-white border border-white/10 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-brass"
             >
-              {courts.map(c => (
+              {sortCourts(courts).map(c => (
                 <option key={c.id} value={c.id} className="text-forest">{c.name}</option>
               ))}
             </select>
@@ -2772,7 +3430,7 @@ function CalendarTab() {
         </div>
       </Card>
 
-      <Card className="p-5 bg-[#0b3a2c] text-ivory border border-white/10 shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem]">
+      <Card className="p-5 bg-white/5 backdrop-blur-xl border border-white/10 text-ivory shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem]">
         <h3 className="font-display text-2xl text-brass border-b border-white/10 pb-2">Active Schedule Blocks</h3>
         <div className="mt-4 space-y-3">
           {reservations.filter(r => r.status === "Confirmed").map((res) => {
@@ -2850,7 +3508,7 @@ function PaymentsTab() {
 
   return (
     <div className="grid gap-5 md:grid-cols-3">
-      <Card className="p-5 bg-[#0b3a2c] text-ivory border border-white/10 shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem] h-fit">
+      <Card className="p-5 bg-white/5 backdrop-blur-xl border border-white/10 text-ivory shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem] h-fit">
         <h3 className="font-display text-2xl text-brass border-b border-white/10 pb-2">Log Payment</h3>
         <div className="mt-4 space-y-4">
           <div>
@@ -2899,7 +3557,7 @@ function PaymentsTab() {
         </div>
       </Card>
 
-      <Card className="p-5 bg-[#0b3a2c] text-ivory border border-white/10 shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem] md:col-span-2 space-y-5">
+      <Card className="p-5 bg-white/5 backdrop-blur-xl border border-white/10 text-ivory shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem] md:col-span-2 space-y-5">
         <div>
           <div className="flex justify-between items-center border-b border-white/10 pb-2">
             <h3 className="font-display text-2xl text-brass font-bold">Revenue Ledger</h3>
@@ -3022,19 +3680,19 @@ function SettingsTab() {
     <div className="grid gap-5 md:grid-cols-2">
       <Card className="work-surface">
         <h2 className="font-display text-3xl">System Configurations</h2>
-        <p className="text-sm text-forest/75 mt-1">Global timers and rotation settings for court assignments.</p>
+        <p className="text-sm text-linen/70 mt-1">Global timers and rotation settings for court assignments.</p>
 
         <div className="mt-6 space-y-4">
           <div>
             <label className="text-xs font-bold uppercase tracking-wider text-clay">Default Match Duration</label>
             <div className="mt-2 flex items-center gap-3">
-              <Button onClick={() => setMatchDurationMinutes(matchDurationMinutes - 1)} className="bg-linen hover:bg-forest/5 text-forest min-h-10 px-4">-</Button>
+              <Button onClick={() => setMatchDurationMinutes(matchDurationMinutes - 1)} className="bg-white/10 hover:bg-white/15 text-ivory min-h-10 px-4">-</Button>
               <span className="text-xl font-bold font-display w-24 text-center">{matchDurationMinutes} mins</span>
               <Button onClick={() => setMatchDurationMinutes(matchDurationMinutes + 1)} className="bg-forest text-ivory min-h-10 px-4">+</Button>
             </div>
-            <p className="text-xs text-forest/50 mt-1.5">Determines the threshold before match cards transition to overtime on the display boards.</p>
+            <p className="text-xs text-linen/50 mt-1.5">Determines the threshold before match cards transition to overtime on the display boards.</p>
           </div>
-          <div className="mt-6 border-t border-forest/10 pt-4">
+          <div className="mt-6 border-t border-white/10 pt-4">
             <label className="text-xs font-bold uppercase tracking-wider text-clay block mb-2">Queuing Simulation</label>
             <Button 
               onClick={async () => {
@@ -3046,12 +3704,12 @@ function SettingsTab() {
             >
               Seed 12 Active Demo Players
             </Button>
-            <p className="text-[10px] text-forest/50 mt-1.5">Populates the queue stack with 12 mock players with Beginner/Intermediate/Pro skill levels to test court rotation.</p>
+            <p className="text-[10px] text-linen/50 mt-1.5">Populates the queue stack with 12 mock players with Beginner/Intermediate/Pro skill levels to test court rotation.</p>
           </div>
         </div>
       </Card>
 
-      <Card className="bg-[#173f32] text-ivory">
+      <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory">
         <h2 className="font-display text-3xl">Offline Safety & Backup</h2>
         <p className="text-sm text-linen/75 mt-1">Export local IndexedDB content to a file, or restore from a previous backup.</p>
 
@@ -3078,23 +3736,6 @@ function SettingsTab() {
     </div>
   );
 }
-
-const AVATAR_OPTIONS = [
-  { name: "Pixel Aibo", url: "https://api.dicebear.com/7.x/pixel-art/svg?seed=Aibo" },
-  { name: "Pixel Whipslash", url: "https://api.dicebear.com/7.x/pixel-art/svg?seed=Whipslash" },
-  { name: "Pixel Spike", url: "https://api.dicebear.com/7.x/pixel-art/svg?seed=Spike" },
-  { name: "Pixel Ace", url: "https://api.dicebear.com/7.x/pixel-art/svg?seed=Ace" },
-  { name: "Pixel Dink", url: "https://api.dicebear.com/7.x/pixel-art/svg?seed=Dink" },
-  { name: "Dancing Pickle", url: "https://media.giphy.com/media/vJelP799L51pq2p5QC/giphy.gif" },
-  { name: "Bouncing Ball", url: "https://media.giphy.com/media/kZzXYwUv94s4B1E9Yv/giphy.gif" },
-  { name: "Snoopy Play", url: "https://media.giphy.com/media/H4948mpxL2g706b8tH/giphy.gif" },
-  { name: "Cool Smash", url: "https://media.giphy.com/media/7Y3tHSuG80c43sI7pS/giphy.gif" },
-  { name: "Happy Win", url: "https://media.giphy.com/media/vJ5B32EaXyS5KkW9P5/giphy.gif" }
-];
-
-const getPlayerAvatar = (player: any) => {
-  return player?.avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(player?.displayName || "PL")}`;
-};
 
 // ----------------------------------------------------
 // INLINE AUTH MODAL (replaces community redirect)
@@ -3141,7 +3782,7 @@ function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void }) {
       animate={{ opacity: 1, y: 0 }}
       className="mx-auto mt-6 max-w-lg"
     >
-      <div className="overflow-hidden rounded-3xl border border-ivory/10 bg-[#0b3a2c] shadow-[0_24px_60px_rgba(0,0,0,0.4)] backdrop-blur-xl">
+      <div className="overflow-hidden rounded-3xl border border-ivory/10 bg-white/5 backdrop-blur-xl shadow-[0_24px_60px_rgba(0,0,0,0.4)]">
         {/* Header */}
         <div className="flex border-b border-ivory/10">
           <button
@@ -3246,12 +3887,26 @@ function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void }) {
 // PLAYER VIEW SCREEN (QR/PHONE LOGIN INCLUDED)
 // ----------------------------------------------------
 function PlayerView() {
-  const { players, courts, matches, stackOrder, checkIn, setPlayerParked, movePlayerToIndex, matchDurationMinutes, currentSessionId, updatePlayer, setView } = useClubStore();
+  const {
+    players,
+    courts,
+    matches,
+    stackOrder,
+    setPlayerParked,
+    matchDurationMinutes,
+    updatePlayer,
+    submitMatchFeedback,
+    playerKudos,
+    matchReviews,
+    setView,
+    hydrated,
+    refreshSharedState,
+  } = useClubStore();
   const [selectedPlayerId, setSelectedPlayerId] = React.useState<string | null>(() => localStorage.getItem("haff-player-account-id"));
   const [sessionMember, setSessionMember] = React.useState<{ playerId?: string; displayName: string } | null>(null);
   const [checkingSession, setCheckingSession] = React.useState(true);
+  const [rosterSynced, setRosterSynced] = React.useState(false);
   const now = useNow();
-  const autoLogPayment = true;
 
   const activePlayers = players.filter((p) => p.isActive !== false);
   const player = activePlayers.find((item) => item.id === selectedPlayerId);
@@ -3273,36 +3928,28 @@ function PlayerView() {
   // Edit Profile state
   const [isEditingProfile, setIsEditingProfile] = React.useState(false);
   const [editDisplayName, setEditDisplayName] = React.useState("");
-  const [editFullName, setEditFullName] = React.useState("");
-  const [editPhone, setEditPhone] = React.useState("");
-  const [editEmergencyNote, setEditEmergencyNote] = React.useState("");
-  const [editPlayStyle, setEditPlayStyle] = React.useState("");
   const [editSkillLevel, setEditSkillLevel] = React.useState("Beginner");
   const [editAvatarUrl, setEditAvatarUrl] = React.useState("");
+  const [editStatusNote, setEditStatusNote] = React.useState("");
+  const [statusNoteDraft, setStatusNoteDraft] = React.useState("");
+  const [isSavingStatusNote, setIsSavingStatusNote] = React.useState(false);
   const [profilePhotoError, setProfilePhotoError] = React.useState("");
-  const [isProcessingProfilePhoto, setIsProcessingProfilePhoto] = React.useState(false);
+  const [photoCropSource, setPhotoCropSource] = React.useState<string | null>(null);
 
-  // Match Review & Feedback state
-  const [reviews, setReviews] = React.useState<Record<string, any>>(() => {
-    try {
-      const saved = localStorage.getItem("haff-match-reviews");
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
-
-  const [reviewingMatch, setReviewingMatch] = React.useState<any | null>(null);
+  const [reviewingMatch, setReviewingMatch] = React.useState<ReturnType<typeof useClubStore.getState>["matches"][number] | null>(null);
   const [feedbackScores, setFeedbackScores] = React.useState({ scoreA: 0, scoreB: 0 });
-  const [feedbackRecs, setFeedbackRecs] = React.useState<Record<string, { chat: string; endorsements: string[] }>>({});
+  const [feedbackRecs, setFeedbackRecs] = React.useState<Record<string, { note: string; pills: string[] }>>({});
   
-  // Custom trigger for updating endorsements
   const [endorsementTrigger, setEndorsementTrigger] = React.useState(0);
   React.useEffect(() => {
-    const handleUpdate = () => setEndorsementTrigger(prev => prev + 1);
+    const handleUpdate = () => setEndorsementTrigger((prev) => prev + 1);
     window.addEventListener("haff-endorsements-updated", handleUpdate);
     return () => window.removeEventListener("haff-endorsements-updated", handleUpdate);
   }, []);
+
+  React.useEffect(() => {
+    void refreshSharedState().finally(() => setRosterSynced(true));
+  }, [refreshSharedState]);
 
   React.useEffect(() => {
     fetch("/api/auth?action=me", { credentials: "include" })
@@ -3319,30 +3966,33 @@ function PlayerView() {
   }, []);
 
   React.useEffect(() => {
+    if (!player) return;
+    setStatusNoteDraft(player.statusNote ?? "");
+  }, [player?.id, player?.statusNote]);
+
+  React.useEffect(() => {
     if (!assignedMatch || assignedMatch.id === dismissedTurnMatchId) return;
     playSound("complete");
     if ("vibrate" in navigator) navigator.vibrate([300, 150, 300, 150, 600]);
   }, [assignedMatch?.id, dismissedTurnMatchId]);
 
   React.useEffect(() => {
+    if (!rosterSynced || !hydrated) return;
     if (selectedPlayerId && !player) {
       localStorage.removeItem("haff-player-account-id");
       setSelectedPlayerId(null);
       setLoginMethod(null);
     }
-  }, [player, selectedPlayerId]);
+  }, [player, selectedPlayerId, rosterSynced, hydrated]);
   
-  if (checkingSession) return <LoadingScreen />;
+  if (checkingSession || !hydrated || (Boolean(selectedPlayerId) && !rosterSynced)) return <LoadingScreen />;
 
   const startEditing = () => {
     if (!player) return;
     setEditDisplayName(player.displayName);
-    setEditFullName(player.fullName || player.displayName);
-    setEditPhone(player.phoneNumber || "");
-    setEditEmergencyNote(player.emergencyNote || "");
-    setEditPlayStyle(player.preferredPlayStyle || "");
     setEditSkillLevel(player.skillLevel);
     setEditAvatarUrl(player.avatarUrl || "");
+    setEditStatusNote(player.statusNote || "");
     setIsEditingProfile(true);
   };
 
@@ -3350,28 +4000,36 @@ function PlayerView() {
     if (!player) return;
     const updated = {
       ...player,
-      displayName: editDisplayName || player.displayName,
-      fullName: editFullName,
-      phoneNumber: editPhone,
-      emergencyNote: editEmergencyNote,
-      preferredPlayStyle: editPlayStyle,
-      skillLevel: editSkillLevel as any,
-      avatarUrl: editAvatarUrl,
+      displayName: editDisplayName.trim() || player.displayName,
+      skillLevel: editSkillLevel as typeof player.skillLevel,
+      avatarUrl: editAvatarUrl.trim() || undefined,
+      statusNote: editStatusNote.trim() || undefined,
     };
     await updatePlayer(updated);
+    setStatusNoteDraft(editStatusNote.trim());
     setIsEditingProfile(false);
+  };
+
+  const handleSaveStatusNote = async () => {
+    if (!player) return;
+    setIsSavingStatusNote(true);
+    try {
+      const trimmed = statusNoteDraft.trim();
+      await updatePlayer({ ...player, statusNote: trimmed || undefined });
+      setStatusNoteDraft(trimmed);
+      playSound("checkin");
+    } finally {
+      setIsSavingStatusNote(false);
+    }
   };
 
   const handlePlayerPhoto = async (file?: File) => {
     if (!file) return;
-    setIsProcessingProfilePhoto(true);
     setProfilePhotoError("");
     try {
-      setEditAvatarUrl(await prepareProfileImage(file));
+      setPhotoCropSource(await readProfileImageFile(file));
     } catch (error) {
       setProfilePhotoError(error instanceof Error ? error.message : "The photo could not be added.");
-    } finally {
-      setIsProcessingProfilePhoto(false);
     }
   };
 
@@ -3442,12 +4100,22 @@ function PlayerView() {
       exit={{ opacity: 0 }} 
       className="mx-auto max-w-5xl px-4 py-4 pb-32"
     >
+      {photoCropSource && (
+        <ProfilePhotoCropper
+          imageSrc={photoCropSource}
+          onCancel={() => setPhotoCropSource(null)}
+          onComplete={(dataUrl) => {
+            setEditAvatarUrl(dataUrl);
+            setPhotoCropSource(null);
+          }}
+        />
+      )}
       {assignedMatch && assignedMatch.id !== dismissedTurnMatchId && (
         <div className="fixed inset-0 z-[120] grid place-items-center bg-[#06241b] p-5 text-center text-ivory">
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="w-full max-w-xl rounded-[2rem] border border-brass/40 bg-[#0b3a2c] p-7 shadow-2xl sm:p-10"
+            className="w-full max-w-xl rounded-[2rem] border border-white/10 bg-white/5 backdrop-blur-xl p-7 shadow-2xl sm:p-10"
           >
             <div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-brass text-forest">
               <Megaphone size={38} />
@@ -3516,7 +4184,7 @@ function PlayerView() {
 
       {/* PHONE LOGIN MODAL/PANEL */}
       {false && loginMethod === "phone" && (
-        <Card className="bg-[#0b3a2c] text-ivory mt-4 max-w-md mx-auto p-5 border border-white/10 shadow-2xl animate-fade-in">
+        <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory mt-4 max-w-md mx-auto p-5 shadow-2xl animate-fade-in">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="font-display text-2xl text-brass font-bold">Player Login</h2>
             <button onClick={() => setLoginMethod(null)} className="p-1.5 rounded-full hover:bg-white/10 text-ivory/60 transition"><X size={18} /></button>
@@ -3554,7 +4222,7 @@ function PlayerView() {
 
       {/* QR CODE SCAN SIMULATION */}
       {false && loginMethod === "qr" && (
-        <Card className="bg-[#0b3a2c] text-ivory mt-4 max-w-md mx-auto p-5 text-center border border-white/10 shadow-2xl">
+        <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory mt-4 max-w-md mx-auto p-5 text-center shadow-2xl">
           <div className="mb-4 flex items-center justify-between text-left">
             <h2 className="font-display text-2xl text-brass font-bold">Scan QR Member Pass</h2>
             <button onClick={() => setLoginMethod(null)} className="p-1.5 rounded-full hover:bg-white/10 text-ivory/60 transition"><X size={18} /></button>
@@ -3595,7 +4263,7 @@ function PlayerView() {
 
       {/* ROSTER PICKER LOGIN */}
       {false && loginMethod === "list" && (
-        <Card className="bg-[#0b3a2c] text-ivory border border-white/10 shadow-2xl mt-4 max-w-xl mx-auto p-5">
+        <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory shadow-2xl mt-4 max-w-xl mx-auto p-5">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="font-display text-2xl font-bold text-brass">Select Your Roster Name</h2>
             <button onClick={() => setLoginMethod(null)} className="p-1.5 rounded-full hover:bg-white/10 text-ivory/60 transition"><X size={18} /></button>
@@ -3627,7 +4295,7 @@ function PlayerView() {
       {/* LOGGED IN PLAYER BOARD */}
       {selectedPlayerId && player && status && (
         <div className="mt-4 max-w-xl mx-auto">
-          <Card className="bg-[#0b3a2c] text-ivory p-4 sm:p-5 rounded-2xl shadow-[0_18px_46px_rgba(2,20,15,0.28)] relative">
+          <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory p-4 sm:p-5 rounded-2xl shadow-[0_18px_46px_rgba(2,20,15,0.28)] relative">
             {/* Top Row */}
             <div className="flex items-center justify-between border-b border-ivory/10 pb-3">
               <div>
@@ -3653,33 +4321,53 @@ function PlayerView() {
               </div>
             </div>
 
-            {/* Instagram Note Editor */}
-            <div className="mt-4 rounded-xl bg-ivory/10 p-3 flex items-center gap-2 border border-ivory/10 shadow-inner">
-              <span className="text-lg animate-bounce" style={{ animationDuration: '3s' }}>💬</span>
-              <div className="flex-1">
-                <input 
-                  type="text" 
-                  maxLength={40}
-                  placeholder="Share a status note... (like Instagram notes)"
-                  value={player.statusNote || ""}
-                  onChange={async (e) => {
-                    const updatedPlayer = { ...player, statusNote: e.target.value };
-                    await updatePlayer(updatedPlayer);
-                  }}
-                  className="w-full bg-transparent border-none outline-none text-xs text-ivory placeholder:text-ivory/40 focus:ring-0 px-1 py-0.5"
-                />
+            {/* Status note */}
+            <div className="mt-4 rounded-xl bg-ivory/10 p-3 border border-ivory/10 shadow-inner space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-lg" aria-hidden>💬</span>
+                <label htmlFor="player-status-note" className="text-[10px] font-black uppercase tracking-wider text-brass">
+                  Status note
+                </label>
               </div>
-              {player.statusNote && (
-                <button 
-                  onClick={async () => {
-                    const updatedPlayer = { ...player, statusNote: "" };
-                    await updatePlayer(updatedPlayer);
-                  }}
-                  className="text-[10px] text-brass hover:text-ivory font-bold uppercase shrink-0"
+              <input
+                id="player-status-note"
+                type="text"
+                maxLength={40}
+                placeholder="Share a short note for the lounge & TV (max 40 chars)"
+                value={statusNoteDraft}
+                onChange={(e) => setStatusNoteDraft(e.target.value)}
+                className="w-full rounded-xl bg-[#073427]/60 border border-white/10 px-3 py-2 text-xs text-ivory placeholder:text-ivory/40 outline-none focus:ring-1 focus:ring-brass"
+              />
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  onClick={() => void handleSaveStatusNote()}
+                  disabled={isSavingStatusNote || statusNoteDraft.trim() === (player.statusNote ?? "").trim()}
+                  className="flex-1 min-h-9 bg-brass text-forest hover:bg-ivory font-black text-xs border-none disabled:opacity-50"
                 >
-                  Clear
-                </button>
-              )}
+                  {isSavingStatusNote ? "Saving..." : "Save status"}
+                </Button>
+                {statusNoteDraft.trim() && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setStatusNoteDraft("");
+                      if (player.statusNote) {
+                        setIsSavingStatusNote(true);
+                        try {
+                          await updatePlayer({ ...player, statusNote: undefined });
+                          playSound("checkin");
+                        } finally {
+                          setIsSavingStatusNote(false);
+                        }
+                      }
+                    }}
+                    className="rounded-xl px-3 text-[10px] text-brass hover:text-ivory font-bold uppercase shrink-0 border border-white/10"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* 1. Status Section */}
@@ -3748,14 +4436,14 @@ function PlayerView() {
                       {status.label}
                     </span>
                   </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2.5">
-                    {formatDurationParts(status.estimatedSeconds ?? 0).map((part) => (
-                      <div key={part.label} className="rounded-[1rem] bg-[#06241B] px-2 py-3.5 text-center text-ivory shadow-[0_14px_30px_rgba(6,36,27,0.24)] ring-1 ring-forest/20">
-                        <p className="text-4xl font-black leading-none tracking-normal tabular-nums sm:text-5xl">{part.value}</p>
-                        <p className="mt-2 text-[9px] font-black uppercase tracking-[0.16em] text-linen/75">{part.label}</p>
-                      </div>
-                    ))}
-                  </div>
+                  <PlayerWaitCountdown
+                    playerId={player.id}
+                    players={players}
+                    courts={courts}
+                    matches={matches}
+                    stackOrder={stackOrder}
+                    matchDurationMinutes={matchDurationMinutes}
+                  />
                   <div className="mt-3 rounded-2xl bg-linen p-3 ring-1 ring-forest/10">
                     <p className="text-sm font-black leading-tight text-ink">{status.stackDetail}</p>
                     <p className="mt-1 text-xs leading-relaxed text-ink/75">{status.reason}</p>
@@ -3765,12 +4453,12 @@ function PlayerView() {
 
               {/* Status Action Button */}
               {!player.checkedIn ? (
-                <Button 
-                  onClick={() => checkIn(player.id, autoLogPayment)} 
-                  className="mt-4 w-full bg-brass text-ink hover:bg-ivory font-black py-3 rounded-2xl shadow-lg transition-transform hover:scale-[1.01] active:scale-95 border-none"
-                >
-                  Check In and Park
-                </Button>
+                <div className="mt-4 rounded-2xl bg-[#06241B] px-4 py-3.5 ring-1 ring-forest/30 text-center">
+                  <p className="text-xs font-black uppercase tracking-[0.12em] text-brass">Check In at the Front Desk</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-linen/65">
+                    Please see the admin at the front desk to complete your check-in and join the queue.
+                  </p>
+                </div>
               ) : (
                 <Button 
                   onClick={() => setPlayerParked(player.id, !player.parked)} 
@@ -3784,55 +4472,6 @@ function PlayerView() {
                   {player.parked ? "Join Play Rotation" : "Park Me"}
                 </Button>
               )}
-
-              {/* Stack Placement/Transfer Selector */}
-              <div className="mt-4 rounded-xl bg-ivory/5 p-3.5 border border-ivory/10">
-                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-brass">Queue Stack Placement</span>
-                <p className="text-[11px] text-linen/70 mt-0.5 mb-3">Join or transfer directly into a specific stack:</p>
-                <div className="space-y-2">
-                  {(() => {
-                    const groups = getWaitingGroups(players, courts, matches, stackOrder);
-                    const totalGroupsToShow = Math.max(groups.length, 3);
-                    
-                    return Array.from({ length: totalGroupsToShow }).map((_, idx) => {
-                      const group = groups[idx] || [];
-                      const hasCurrentPlayer = group.some(p => p.id === player.id);
-                      const names = group.filter(p => !p.isVacant).map(p => p.displayName.split(" ")[0]).join(" / ");
-                      
-                      return (
-                        <div key={idx} className="flex items-center justify-between p-2 rounded-xl bg-[#092b21] border border-white/5">
-                          <div className="min-w-0 flex-1 pr-2">
-                            <p className="text-[10px] font-black text-brass uppercase">Stack {idx + 1}</p>
-                            <p className="text-xs text-ivory/80 font-semibold truncate mt-0.5">
-                              {names || "Empty / Open"}
-                            </p>
-                          </div>
-                          <button
-                            disabled={hasCurrentPlayer}
-                            onClick={async () => {
-                              let targetIndex = stackOrder.length;
-                              if (group.length > 0) {
-                                const idxInOrder = stackOrder.indexOf(group[0].id);
-                                if (idxInOrder !== -1) {
-                                  targetIndex = idxInOrder;
-                                }
-                              }
-                              await movePlayerToIndex(player.id, targetIndex);
-                            }}
-                            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition shrink-0 ${
-                              hasCurrentPlayer
-                                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                                : "bg-brass text-forest hover:bg-ivory"
-                            }`}
-                          >
-                            {hasCurrentPlayer ? "Current" : player.checkedIn && !player.parked ? "Transfer" : "Check In"}
-                          </button>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-              </div>
             </div>
 
             <PlayerTvPreview />
@@ -3880,22 +4519,22 @@ function PlayerView() {
                       <div className="flex-1">
                         <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full bg-brass px-4 text-xs font-black text-forest hover:bg-ivory">
                           <ImagePlus size={16} />
-                          {isProcessingProfilePhoto ? "Preparing..." : "Use Existing Photo"}
+                          Upload Photo
                           <input
                             accept="image/jpeg,image/png,image/webp"
                             className="sr-only"
-                            disabled={isProcessingProfilePhoto}
+                            disabled={Boolean(photoCropSource)}
                             onChange={(event) => void handlePlayerPhoto(event.target.files?.[0])}
                             type="file"
                           />
                         </label>
-                        <p className="mt-1.5 text-[10px] leading-4 text-linen/60">Choose an existing image from your phone or computer photo library.</p>
+                        <p className="mt-1.5 text-[10px] leading-4 text-linen/60">Choose a photo, then drag and zoom to crop your profile picture.</p>
                       </div>
                     </div>
                     {profilePhotoError && <p className="mb-2 text-xs font-semibold text-red-200">{profilePhotoError}</p>}
-                    <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Or select an avatar</label>
-                    <div className="grid grid-cols-5 gap-2 mb-2">
-                      {AVATAR_OPTIONS.map((opt) => (
+                    <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Choose an avatar</label>
+                    <div className="grid grid-cols-5 gap-2">
+                      {AVATAR_PRESETS.map((opt) => (
                         <button
                           key={opt.url}
                           type="button"
@@ -3908,32 +4547,6 @@ function PlayerView() {
                         </button>
                       ))}
                     </div>
-                    <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Custom image URL</label>
-                    <input 
-                      type="text" 
-                      value={editAvatarUrl} 
-                      onChange={(e) => setEditAvatarUrl(e.target.value)} 
-                      className="w-full rounded-xl bg-white/10 text-ivory border-none px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-brass"
-                      placeholder="Paste any PNG, JPG, or GIF URL"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Full Name</label>
-                    <input 
-                      type="text" 
-                      value={editFullName} 
-                      onChange={(e) => setEditFullName(e.target.value)} 
-                      className="w-full rounded-xl bg-white/10 text-ivory border-none px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-brass"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Phone Number</label>
-                    <input 
-                      type="text" 
-                      value={editPhone} 
-                      onChange={(e) => setEditPhone(e.target.value)} 
-                      className="w-full rounded-xl bg-white/10 text-ivory border-none px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-brass"
-                    />
                   </div>
                   <div>
                     <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Skill Level</label>
@@ -3948,23 +4561,14 @@ function PlayerView() {
                     </select>
                   </div>
                   <div>
-                    <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Preferred Play Style</label>
-                    <input 
-                      type="text" 
-                      value={editPlayStyle} 
-                      onChange={(e) => setEditPlayStyle(e.target.value)} 
+                    <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Status note</label>
+                    <input
+                      type="text"
+                      maxLength={40}
+                      value={editStatusNote}
+                      onChange={(e) => setEditStatusNote(e.target.value)}
+                      placeholder="Short note shown on lounge & TV"
                       className="w-full rounded-xl bg-white/10 text-ivory border-none px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-brass"
-                      placeholder="e.g. Dinks, Aggressive, Balanced"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Emergency Notes</label>
-                    <input 
-                      type="text" 
-                      value={editEmergencyNote} 
-                      onChange={(e) => setEditEmergencyNote(e.target.value)} 
-                      className="w-full rounded-xl bg-white/10 text-ivory border-none px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-brass"
-                      placeholder="e.g. Asthma, Contact: Jane +639..."
                     />
                   </div>
                   <Button 
@@ -3980,51 +4584,22 @@ function PlayerView() {
                     <span className="text-linen/50 text-xs">Display Name</span>
                     <span className="font-bold text-ivory">{player.displayName}</span>
                   </div>
-                  <div className="flex justify-between items-baseline">
-                    <span className="text-linen/50 text-xs">Full Name</span>
-                    <span className="font-medium text-ivory">{player.fullName || player.displayName}</span>
-                  </div>
-                  <div className="flex justify-between items-baseline">
-                    <span className="text-linen/50 text-xs">Handle</span>
-                    <span className="font-mono text-xs text-brass">
-                      @{player.fullName ? player.fullName.toLowerCase().replace(/\s+/g, "") : player.displayName.toLowerCase()}
-                    </span>
-                  </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-linen/50 text-xs">Skill Level / Tag</span>
-                    <div className="flex gap-1.5">
-                      <RankBadge skillLevel={player.skillLevel} compact />
-                      {player.totalGamesPlayed < 5 && (
-                        <span className="bg-brass text-forest text-[9px] font-black uppercase rounded-md px-1.5 py-0.5 tracking-wider">New</span>
-                      )}
-                    </div>
+                    <span className="text-linen/50 text-xs">Skill Level</span>
+                    <RankBadge skillLevel={player.skillLevel} compact />
                   </div>
-                  <div className="flex justify-between items-baseline">
-                    <span className="text-linen/50 text-xs">Phone</span>
-                    <span className="font-mono text-xs text-ivory">{player.phoneNumber || "Not set"}</span>
-                  </div>
-                  {player.preferredPlayStyle && (
+                  {player.phoneNumber && (
                     <div className="flex justify-between items-baseline">
-                      <span className="text-linen/50 text-xs">Play Style</span>
-                      <span className="font-medium text-ivory">{player.preferredPlayStyle}</span>
+                      <span className="text-linen/50 text-xs">Phone</span>
+                      <span className="font-mono text-xs text-ivory">{player.phoneNumber}</span>
                     </div>
                   )}
-                  {player.emergencyNote && (
-                    <div className="flex justify-between items-baseline">
-                      <span className="text-linen/50 text-xs">Emergency Notes</span>
-                      <span className="text-xs text-clay font-semibold">{player.emergencyNote}</span>
+                  {player.statusNote && (
+                    <div className="flex justify-between items-baseline gap-3">
+                      <span className="text-linen/50 text-xs shrink-0">Status</span>
+                      <span className="text-xs text-brass font-semibold text-right">{player.statusNote}</span>
                     </div>
                   )}
-                  
-                  <button 
-                    onClick={() => {
-                      playSound("checkin");
-                      alert("Password change requests are managed securely at the club registration counter.");
-                    }}
-                    className="w-full text-center text-xs text-brass/75 hover:text-white transition font-semibold pt-2 border-t border-white/5 bg-transparent border-none cursor-pointer"
-                  >
-                    Change Password
-                  </button>
                 </div>
               )}
             </div>
@@ -4041,8 +4616,8 @@ function PlayerView() {
                   <p className="text-[9px] uppercase tracking-wider text-linen/50 mt-1">Games</p>
                 </div>
                 <div className="rounded-2xl bg-[#073427] p-2.5">
-                  <p className="text-2xl font-black text-ivory">{((player.totalGamesPlayed * 12) / 60).toFixed(1)}</p>
-                  <p className="text-[9px] uppercase tracking-wider text-linen/50 mt-1">Hours</p>
+                  <p className="text-2xl font-black text-ivory">{(player.totalGamesPlayed * 12).toFixed(0)}</p>
+                  <p className="text-[9px] uppercase tracking-wider text-linen/50 mt-1">Minutes</p>
                 </div>
                 <div className="rounded-2xl bg-[#073427] p-2.5">
                   <p className="text-2xl font-black text-ivory">{player.totalDaysPlayed}</p>
@@ -4058,51 +4633,33 @@ function PlayerView() {
             </div>
 
             {/* Kudos & Recommendations Card */}
-            {(() => {
-              const { tallies, chats } = (() => {
-                try {
-                  const raw = localStorage.getItem("haff-player-endorsements");
-                  if (!raw) return { tallies: {}, chats: [] };
-                  const all = JSON.parse(raw);
-                  const playerEndorsements = all.filter((item: any) => item.targetPlayerId === player.id);
-                  const tallies: Record<string, number> = {};
-                  const chats: any[] = [];
-                  for (const item of playerEndorsements) {
-                    if (item.endorsements) {
-                      for (const e of item.endorsements) {
-                        tallies[e] = (tallies[e] ?? 0) + 1;
-                      }
-                    }
-                    if (item.chat && item.chat.trim()) {
-                      chats.push({ reviewerName: item.reviewerName, chat: item.chat, timestamp: item.timestamp });
-                    }
-                  }
-                  return { tallies, chats };
-                } catch {
-                  return { tallies: {}, chats: [] };
-                }
-              })();
-
-              const hasEndorsements = Object.keys(tallies).length > 0 || chats.length > 0;
+            {player && (() => {
+              const received = kudosForPlayer(playerKudos, player.id);
+              const pillTallies = tallyKudosPills(received);
+              const recentNotes = received
+                .filter((entry) => entry.note || entry.pills.length > 0)
+                .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+                .slice(0, 5);
+              const hasEndorsements = pillTallies.length > 0 || recentNotes.length > 0;
 
               return (
                 <div className="mt-4 rounded-xl bg-[#124a39] p-4 text-ivory" key={endorsementTrigger}>
                   <div className="mb-3 flex items-center gap-1.5 border-b border-[#2f7b61] pb-2.5 text-brass">
                     <Sparkles size={16} />
-                    <span className="text-[10px] font-bold uppercase tracking-[0.20em]">Player Kudos & Endorsements</span>
+                    <span className="text-[10px] font-bold uppercase tracking-[0.20em]">Your Kudos</span>
                   </div>
 
                   {!hasEndorsements ? (
-                    <p className="text-xs text-linen/50 italic text-center py-4">No player endorsements logged yet. Finish matches to receive kudos!</p>
+                    <p className="text-xs text-linen/50 italic text-center py-4">No kudos yet. Finish a match and teammates can shout out your best shots.</p>
                   ) : (
                     <div className="space-y-4">
-                      {Object.keys(tallies).length > 0 && (
+                      {pillTallies.length > 0 && (
                         <div>
-                          <p className="text-[9px] uppercase tracking-wider text-brass font-bold mb-1.5">Top Skills Recognized</p>
+                          <p className="text-[9px] uppercase tracking-wider text-brass font-bold mb-1.5">Top skills recognized</p>
                           <div className="flex flex-wrap gap-1.5">
-                            {Object.entries(tallies).map(([skill, count]) => (
+                            {pillTallies.map(([skill, count]) => (
                               <span key={skill} className="text-[10px] bg-forest border border-white/10 rounded-full px-2.5 py-1 flex items-center gap-1.5 font-bold">
-                                <span>⚡ {skill}</span>
+                                <span>{skill}</span>
                                 <span className="bg-brass text-forest rounded-full h-4 w-4 flex items-center justify-center font-black text-[9px]">{count}</span>
                               </span>
                             ))}
@@ -4110,14 +4667,21 @@ function PlayerView() {
                         </div>
                       )}
 
-                      {chats.length > 0 && (
+                      {recentNotes.length > 0 && (
                         <div>
-                          <p className="text-[9px] uppercase tracking-wider text-brass font-bold mb-1.5">Recent Recommendation Chats</p>
+                          <p className="text-[9px] uppercase tracking-wider text-brass font-bold mb-1.5">From your partners</p>
                           <div className="space-y-2 max-h-40 overflow-y-auto pr-1 scrollbar-none">
-                            {chats.map((c, idx) => (
-                              <div key={idx} className="bg-forest/40 border border-white/5 p-2 rounded-xl text-xs">
-                                <p className="text-brass font-bold">{c.reviewerName}</p>
-                                <p className="text-linen/90 mt-0.5 font-medium">“{c.chat}”</p>
+                            {recentNotes.map((entry) => (
+                              <div key={entry.id} className="bg-forest/40 border border-white/5 p-2 rounded-xl text-xs">
+                                <p className="text-brass font-bold">{entry.fromPlayerName}</p>
+                                {entry.pills.length > 0 && (
+                                  <div className="mt-1 flex flex-wrap gap-1">
+                                    {entry.pills.map((pill) => (
+                                      <span key={pill} className="rounded-full bg-brass/15 px-2 py-0.5 text-[9px] font-bold text-brass">{pill}</span>
+                                    ))}
+                                  </div>
+                                )}
+                                {entry.note && <p className="text-linen/90 mt-1 font-medium">“{entry.note}”</p>}
                               </div>
                             ))}
                           </div>
@@ -4130,52 +4694,70 @@ function PlayerView() {
             })()}
 
             {/* Recent Games & Feedback Card */}
-            {(() => {
-              const completedGames = matches.filter(m => 
-                m.status === "Completed" && 
-                [...m.teamAPlayerIds, ...m.teamBPlayerIds].includes(player.id)
-              );
+            {player && (() => {
+              const completedGames = matches
+                .filter((m) => m.status === "Completed" && [...m.teamAPlayerIds, ...m.teamBPlayerIds].includes(player.id))
+                .sort((a, b) => new Date(b.endedAt ?? 0).getTime() - new Date(a.endedAt ?? 0).getTime())
+                .slice(0, 8);
 
               return (
                 <div className="mt-4 rounded-xl bg-[#124a39] p-4 text-ivory">
                   <div className="mb-3 flex items-center gap-1.5 border-b border-[#2f7b61] pb-2.5 text-brass">
                     <Activity size={16} />
-                    <span className="text-[10px] font-bold uppercase tracking-[0.20em]">Recent Games & Feedback</span>
+                    <span className="text-[10px] font-bold uppercase tracking-[0.20em]">Play History & Feedback</span>
                   </div>
 
                   {completedGames.length === 0 ? (
-                    <p className="text-xs text-linen/50 italic text-center py-4">No completed matches logged for you today.</p>
+                    <p className="text-xs text-linen/50 italic text-center py-4">No completed matches yet. Your game history and kudos will show up here.</p>
                   ) : (
                     <div className="space-y-3">
                       {completedGames.map((m) => {
-                        const isReviewed = Boolean(reviews[m.id]);
-                        const otherPlayerIds = [...m.teamAPlayerIds, ...m.teamBPlayerIds].filter(id => id !== player.id);
-                        
+                        const isReviewed = matchReviews.some((review) => review.matchId === m.id && review.reviewerId === player.id);
+                        const court = courts.find((c) => c.id === m.courtId);
+                        const teammates = getMatchOpponentIds(m, player.id)
+                          .map((id) => players.find((p) => p.id === id))
+                          .filter((p): p is NonNullable<typeof p> => Boolean(p && !p.isVacant));
+                        const receivedForMatch = kudosForMatch(playerKudos, m.id).filter((entry) => entry.toPlayerId === player.id);
+                        const onTeamA = m.teamAPlayerIds.includes(player.id);
+
                         return (
                           <div key={m.id} className="rounded-2xl bg-[#073427] p-3 border border-white/5">
-                            <div className="flex justify-between items-center">
+                            <div className="flex justify-between items-start gap-2">
                               <div>
-                                <p className="text-[10px] font-mono text-brass">Match ID: {m.id.slice(-6).toUpperCase()}</p>
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-brass">{court?.name ?? "Court"}</p>
                                 <p className="text-xs font-bold text-ivory mt-0.5">
-                                  Score: <span className="font-mono text-brass">{m.scoreA} - {m.scoreB}</span>
+                                  Final score: <span className="font-mono text-brass">{onTeamA ? m.scoreA : m.scoreB}–{onTeamA ? m.scoreB : m.scoreA}</span>
                                 </p>
+                                {teammates.length > 0 && (
+                                  <p className="text-[10px] text-linen/65 mt-1">
+                                    Played with {teammates.map((p) => p.displayName).join(", ")}
+                                  </p>
+                                )}
+                                {receivedForMatch.length > 0 && (
+                                  <div className="mt-2 flex flex-wrap gap-1">
+                                    {receivedForMatch.flatMap((entry) => entry.pills).map((pill) => (
+                                      <span key={`${m.id}-${pill}`} className="rounded-full bg-brass/15 px-2 py-0.5 text-[9px] font-bold text-brass">{pill}</span>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
-                              <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                              <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase shrink-0 ${
                                 isReviewed ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/20" : "bg-amber-500/20 text-amber-300 border border-amber-500/20"
                               }`}>
-                                {isReviewed ? "Reviewed" : "Review Pending"}
+                                {isReviewed ? "Reviewed" : "Leave kudos"}
                               </span>
                             </div>
 
                             {reviewingMatch?.id === m.id ? (
                               <div className="mt-4 border-t border-white/5 pt-3 space-y-4">
-                                <p className="text-xs font-bold text-brass uppercase tracking-wider">Submit Match Feedback</p>
+                                <p className="text-xs font-bold text-brass uppercase tracking-wider">Give kudos to your partners</p>
                                 
                                 <div className="grid grid-cols-2 gap-3 bg-forest/20 p-2.5 rounded-xl border border-white/5">
                                   <div>
                                     <label className="block text-[10px] uppercase text-linen/60 mb-1">Team A Score</label>
                                     <input
                                       type="number"
+                                      min={0}
                                       value={feedbackScores.scoreA}
                                       onChange={(e) => setFeedbackScores({ ...feedbackScores, scoreA: Number(e.target.value) })}
                                       className="w-full bg-[#073427] border-none text-ivory font-mono font-bold text-center rounded px-2 py-1.5"
@@ -4185,6 +4767,7 @@ function PlayerView() {
                                     <label className="block text-[10px] uppercase text-linen/60 mb-1">Team B Score</label>
                                     <input
                                       type="number"
+                                      min={0}
                                       value={feedbackScores.scoreB}
                                       onChange={(e) => setFeedbackScores({ ...feedbackScores, scoreB: Number(e.target.value) })}
                                       className="w-full bg-[#073427] border-none text-ivory font-mono font-bold text-center rounded px-2 py-1.5"
@@ -4193,61 +4776,61 @@ function PlayerView() {
                                 </div>
 
                                 <div className="space-y-4">
-                                  {otherPlayerIds.map((targetId) => {
-                                    const targetPlayer = players.find(p => p.id === targetId);
+                                  {getMatchOpponentIds(m, player.id).map((targetId) => {
+                                    const targetPlayer = players.find((p) => p.id === targetId);
                                     if (!targetPlayer || targetPlayer.isVacant) return null;
-                                    const rec = feedbackRecs[targetId] || { chat: "", endorsements: [] };
-                                    const skills = ["Good Dinking", "Strong Backhand", "Powerful Drive", "Great Third Shot Drop", "Amazing Fast Hands", "Excellent Communication"];
+                                    const rec = feedbackRecs[targetId] || { note: "", pills: [] };
 
                                     return (
                                       <div key={targetId} className="bg-forest/15 border border-white/5 p-3 rounded-xl space-y-3">
                                         <div className="flex items-center gap-2">
                                           <div className="h-6 w-6 rounded-full overflow-hidden shrink-0 border border-white/10">
-                                            <img src={getPlayerAvatar(targetPlayer)} className="h-full w-full object-cover" />
+                                            <img src={getPlayerAvatar(targetPlayer)} alt="" className="h-full w-full object-cover" />
                                           </div>
                                           <span className="text-xs font-bold text-ivory">{targetPlayer.displayName}</span>
                                         </div>
 
-                                        <input
-                                          type="text"
-                                          placeholder={`Kudos message for ${targetPlayer.displayName.split(" ")[0]}...`}
-                                          value={rec.chat}
-                                          onChange={(e) => {
-                                            setFeedbackRecs({
-                                              ...feedbackRecs,
-                                              [targetId]: { ...rec, chat: e.target.value }
-                                            });
-                                          }}
-                                          className="w-full bg-[#073427] border-none text-xs text-ivory placeholder:text-ivory/30 rounded px-2.5 py-1.5 focus:ring-1 focus:ring-brass"
-                                        />
-
+                                        <p className="text-[9px] uppercase tracking-wider text-linen/50">Tap compliments (optional note below)</p>
                                         <div className="flex flex-wrap gap-1">
-                                          {skills.map((skill) => {
-                                            const isSelected = rec.endorsements.includes(skill);
+                                          {PLAY_KUDOS_PILLS.map((pill) => {
+                                            const isSelected = rec.pills.includes(pill);
                                             return (
                                               <button
-                                                key={skill}
+                                                key={pill}
                                                 type="button"
                                                 onClick={() => {
-                                                  const newEndorsements = isSelected
-                                                    ? rec.endorsements.filter(e => e !== skill)
-                                                    : [...rec.endorsements, skill];
+                                                  const nextPills = isSelected
+                                                    ? rec.pills.filter((item) => item !== pill)
+                                                    : [...rec.pills, pill];
                                                   setFeedbackRecs({
                                                     ...feedbackRecs,
-                                                    [targetId]: { ...rec, endorsements: newEndorsements }
+                                                    [targetId]: { ...rec, pills: nextPills },
                                                   });
                                                 }}
                                                 className={`text-[9px] font-semibold px-2 py-1 rounded-full border transition ${
-                                                  isSelected 
-                                                    ? "bg-brass text-forest border-brass" 
+                                                  isSelected
+                                                    ? "bg-brass text-forest border-brass"
                                                     : "bg-[#073427]/50 text-linen/70 border-white/10 hover:border-white/20"
                                                 }`}
                                               >
-                                                {skill}
+                                                {pill}
                                               </button>
                                             );
                                           })}
                                         </div>
+
+                                        <input
+                                          type="text"
+                                          placeholder={`Short note for ${targetPlayer.displayName.split(" ")[0]} (optional)`}
+                                          value={rec.note}
+                                          onChange={(e) => {
+                                            setFeedbackRecs({
+                                              ...feedbackRecs,
+                                              [targetId]: { ...rec, note: e.target.value },
+                                            });
+                                          }}
+                                          className="w-full bg-[#073427] border-none text-xs text-ivory placeholder:text-ivory/30 rounded px-2.5 py-1.5 focus:ring-1 focus:ring-brass"
+                                        />
                                       </div>
                                     );
                                   })}
@@ -4255,55 +4838,26 @@ function PlayerView() {
 
                                 <div className="flex gap-2">
                                   <button
+                                    type="button"
                                     onClick={async () => {
-                                      const newReview = {
-                                        matchId: m.id,
-                                        scoreA: feedbackScores.scoreA,
-                                        scoreB: feedbackScores.scoreB,
-                                        recommendations: feedbackRecs
-                                      };
-                                      const updatedReviews = { ...reviews, [m.id]: newReview };
-                                      localStorage.setItem("haff-match-reviews", JSON.stringify(updatedReviews));
-                                      setReviews(updatedReviews);
-
-                                      try {
-                                        const globalSaved = localStorage.getItem("haff-player-endorsements") || "[]";
-                                        const endorsementsList = JSON.parse(globalSaved);
-                                        for (const [targetPlayerId, info] of Object.entries(feedbackRecs)) {
-                                          endorsementsList.push({
-                                            id: crypto.randomUUID(),
-                                            targetPlayerId,
-                                            reviewerName: player.displayName,
-                                            chat: info.chat,
-                                            endorsements: info.endorsements,
-                                            timestamp: new Date().toISOString()
-                                          });
-                                        }
-                                        localStorage.setItem("haff-player-endorsements", JSON.stringify(endorsementsList));
-                                        window.dispatchEvent(new Event("haff-endorsements-updated"));
-                                      } catch (err) {
-                                        console.error(err);
-                                      }
-
-                                      const updatedStoreMatch = {
-                                        ...m,
-                                        scoreA: feedbackScores.scoreA,
-                                        scoreB: feedbackScores.scoreB,
-                                        syncStatus: "PendingSync" as const
-                                      };
-                                      await db.matches.put(updatedStoreMatch);
-                                      useClubStore.setState({
-                                        matches: matches.map(item => item.id === m.id ? updatedStoreMatch : item)
-                                      });
-                                      await updateMatchScores(m.id, feedbackScores.scoreA, feedbackScores.scoreB);
-
+                                      if (!player) return;
+                                      await submitMatchFeedback(
+                                        m.id,
+                                        player.id,
+                                        player.displayName,
+                                        feedbackScores.scoreA,
+                                        feedbackScores.scoreB,
+                                        feedbackRecs
+                                      );
+                                      playSound("complete");
                                       setReviewingMatch(null);
                                     }}
                                     className="flex-1 rounded-xl bg-brass px-3 py-2 font-black text-forest text-xs hover:bg-ivory transition"
                                   >
-                                    Submit Feedback
+                                    Submit Kudos
                                   </button>
                                   <button
+                                    type="button"
                                     onClick={() => setReviewingMatch(null)}
                                     className="rounded-xl bg-forest/20 px-3 py-2 font-bold text-xs hover:bg-forest/30 transition text-ivory"
                                   >
@@ -4313,18 +4867,25 @@ function PlayerView() {
                               </div>
                             ) : (
                               <button
+                                type="button"
                                 onClick={() => {
                                   setReviewingMatch(m);
                                   setFeedbackScores({ scoreA: m.scoreA, scoreB: m.scoreB });
-                                  const initialRecs: any = {};
-                                  otherPlayerIds.forEach(id => {
-                                    initialRecs[id] = { chat: "", endorsements: m.id === reviewingMatch?.id ? reviewingMatch.recommendations[id]?.endorsements ?? [] : [] };
-                                  });
+                                  const initialRecs: Record<string, { note: string; pills: string[] }> = {};
+                                  for (const id of getMatchOpponentIds(m, player.id)) {
+                                    const existing = playerKudos.find(
+                                      (entry) => entry.matchId === m.id && entry.fromPlayerId === player.id && entry.toPlayerId === id
+                                    );
+                                    initialRecs[id] = {
+                                      note: existing?.note ?? "",
+                                      pills: existing?.pills ?? [],
+                                    };
+                                  }
                                   setFeedbackRecs(initialRecs);
                                 }}
                                 className="mt-3 w-full rounded-xl bg-forest/40 hover:bg-forest/60 border border-white/10 px-3 py-2 text-xs font-bold transition flex items-center justify-center gap-1.5"
                               >
-                                <span>{isReviewed ? "📝 Edit Review" : "⭐ Leave Review & Kudos"}</span>
+                                <span>{isReviewed ? "Edit kudos & score" : "Leave kudos for partners"}</span>
                               </button>
                             )}
                           </div>
@@ -4353,10 +4914,8 @@ function MiniStat({ label, value }: { label: string; value: number }) {
 
 function PlayerTvPreview() {
   const { courts, matches, players, stackOrder } = useClubStore();
-  const queueGroups = getWaitingGroups(players, courts, matches, stackOrder).filter((group) =>
-    group.some((player) => !player.isVacant)
-  );
-  const visibleCourts = courts.slice(0, 4);
+  const queueGroups = getStackDisplayGroups(stackOrder, players, matches, courts, 2);
+  const visibleCourts = sortCourts(courts).slice(0, 4);
 
   return (
     <div className="mt-4 overflow-hidden rounded-xl bg-[#124a39]">
@@ -4379,7 +4938,7 @@ function PlayerTvPreview() {
 
           <div className="mt-3 grid grid-cols-2 gap-2">
             {visibleCourts.map((court) => {
-              const match = matches.find((item) => item.id === court.currentMatchId);
+              const match = getActiveCourtMatch(court, matches);
               const names = match
                 ? [...match.teamAPlayerIds, ...match.teamBPlayerIds]
                 : court.reservedPlayerIds ?? [];
@@ -4390,7 +4949,7 @@ function PlayerTvPreview() {
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-black uppercase text-ivory">{court.name}</p>
                     <span className={`rounded-full px-2 py-0.5 text-[8px] font-black uppercase ${
-                      court.status === "InUse"
+                      match
                         ? "bg-amber-300 text-forest"
                         : court.status === "Reserved"
                         ? "bg-brass text-forest"
@@ -4398,16 +4957,16 @@ function PlayerTvPreview() {
                         ? "bg-clay text-ivory"
                         : "bg-ivory/12 text-linen"
                     }`}>
-                      {court.status === "InUse" ? "In Use" : court.status}
+                      {match ? "In Use" : court.status === "Available" ? "Available" : court.status}
                     </span>
                   </div>
                   {hasPlayers ? (
                     <div className="mt-2 grid gap-1">
                       {names.slice(0, 4).map((id) => {
-                        const person = players.find((item) => item.id === id);
+                        const person = resolvePlayerById(id, players);
                         return (
                           <p key={id} className="truncate rounded-lg bg-ivory/10 px-2 py-1 text-xs font-bold text-ivory">
-                            {person?.displayName ?? "Open Slot"}
+                            {person.isVacant ? "Open Slot" : person.displayName}
                           </p>
                         );
                       })}
@@ -4434,7 +4993,7 @@ function PlayerTvPreview() {
                   <p className="mt-1 truncate text-xs font-black text-forest">
                     {group
                       .filter((item) => !item.isVacant)
-                      .map((item) => item.displayName.split(" ")[0])
+                      .map((item) => (item?.displayName || "Player").split(" ")[0])
                       .join(" / ") || "Waiting for players"}
                   </p>
                 </div>
@@ -4450,16 +5009,15 @@ function PlayerTvPreview() {
 }
 
 function CourtTimer({ matchId, size }: { matchId: string; size: "small" | "large" }) {
-  const now = useNow();
   const match = useClubStore((state) => state.matches.find((item) => item.id === matchId));
   const duration = useClubStore((state) => state.matchDurationMinutes);
+  const now = useSmoothNow(Boolean(match?.startedAt && !match?.timerPausedAt));
   if (!match?.startedAt) return null;
-  const remainingMs = getRemainingMilliseconds(match.startedAt, duration, now);
+  const remainingMs = getRemainingMilliseconds(match.startedAt, duration, now, match.timerPausedAt);
   const overtime = remainingMs < 0;
-  const label = formatClockMilliseconds(Math.abs(remainingMs));
   return (
     <div className={`rounded-full text-center font-black tracking-normal tabular-nums ${overtime ? "bg-clay text-ivory" : "bg-brass text-forest"} ${size === "large" ? "mt-auto px-4 py-2 text-[clamp(2rem,3.2vw,4rem)] leading-none" : "mt-5 px-5 py-3 text-3xl"}`}>
-      {overtime ? "-" : ""}{label}
+      <CountdownClock totalMs={Math.abs(remainingMs)} prefix={overtime ? "-" : ""} />
     </div>
   );
 }
@@ -4502,9 +5060,9 @@ function PlayerChip({
           event.dataTransfer.setData("text/player-id", playerId);
         }
       }}
-      className={`rank-chip ${tone === "light" ? "tv-chip" : ""} rank-${rankKey(player.skillLevel)} flex items-center justify-between rounded-xl ${compact ? "gap-2 px-2.5 py-1.5" : "gap-3 px-3 py-2"} ${draggable ? "cursor-grab active:cursor-grabbing hover:brightness-95 transition" : ""} ${tone === "light" ? "bg-forest text-ivory" : "bg-ivory/10 text-ivory"}`}
+      className={`rank-chip ${tone === "light" ? "tv-chip" : ""} rank-${rankKey(player.skillLevel)} flex items-center gap-2 rounded-xl ${compact ? "px-2.5 py-1.5" : "gap-3 px-3 py-2"} ${draggable ? "cursor-grab active:cursor-grabbing hover:brightness-95 transition" : ""} ${tone === "light" ? "bg-forest text-ivory" : "bg-ivory/10 text-ivory"}`}
     >
-      <span className="flex min-w-0 items-center gap-3">
+      <span className="flex min-w-0 flex-1 items-center gap-2.5">
         <div className="relative shrink-0">
           <img
             src={getPlayerAvatar(player)}
@@ -4512,49 +5070,169 @@ function PlayerChip({
             className={`${compact ? "h-9 w-9" : "h-11 w-11"} shrink-0 rounded-full border-2 border-ivory/30 bg-ivory object-cover`}
           />
         </div>
-        <span className="min-w-0">
-          <span className={`block truncate font-black leading-none tracking-normal ${compact ? "text-[clamp(1rem,1.25vw,1.45rem)]" : "text-2xl"}`}>{player.displayName.split(" ")[0]}</span>
+        <span className="min-w-0 flex-1">
+          <span className={`block truncate font-black leading-tight tracking-normal ${compact ? "text-sm" : "text-2xl"}`}>
+            {getPlayerDisplayLabel(player)}
+          </span>
           {player.statusNote && (
-            <span className={`block truncate font-bold opacity-70 ${compact ? "mt-0.5 max-w-32 text-[8px]" : "mt-1 max-w-40 text-[9px]"}`} title={player.statusNote}>
-              Note: {player.statusNote}
+            <span className={`block truncate font-bold opacity-70 ${compact ? "mt-0.5 text-[8px]" : "mt-1 text-[9px]"}`} title={player.statusNote}>
+              {player.statusNote}
             </span>
           )}
         </span>
       </span>
-      <RankBadge skillLevel={player.skillLevel} compact={compact} />
+      <RankBadge skillLevel={player.skillLevel} compact={compact} className="shrink-0 self-center" />
     </div>
   );
 }
 
-function RankBadge({ skillLevel, compact = false }: { skillLevel: ReturnType<typeof useClubStore.getState>["players"][number]["skillLevel"]; compact?: boolean }) {
+function RankBadge({ skillLevel, compact = false, className = "" }: { skillLevel: ReturnType<typeof useClubStore.getState>["players"][number]["skillLevel"]; compact?: boolean; className?: string }) {
   return (
-    <span className={`rank-badge rank-${rankKey(skillLevel)} inline-flex items-center rounded-md font-medium normal-case tracking-normal ${compact ? "mt-1 px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[11px]"}`}>
+    <span className={`rank-badge rank-${rankKey(skillLevel)} inline-flex max-w-[7.5rem] items-center truncate rounded-md font-medium normal-case tracking-normal ${compact ? "px-1.5 py-0.5 text-[9px] leading-tight" : "px-2 py-0.5 text-[11px]"} ${className}`}>
       {skillLevel}
     </span>
   );
 }
 
-function DisplayView({ setView }: { setView: (view: ViewMode) => void }) {
-  const { courts, matches, players: allPlayers, stackOrder, clubStatus } = useClubStore();
+function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void }) {
+  const { courts, matches, players, stackOrder, clubStatus, refreshSharedState, goBackFromTv, tvBroadcast } = useClubStore();
   const now = useNow();
 
-  const players = React.useMemo(() => {
-    return allPlayers.filter(p => 
-      p.tags?.includes("AdminCheckedIn") || 
-      courts.some(c => c.reservedPlayerIds?.includes(p.id)) ||
-      matches.some(m => m.status === "InProgress" && (m.teamAPlayerIds.includes(p.id) || m.teamBPlayerIds.includes(p.id)))
-    );
-  }, [allPlayers, courts, matches]);
+  React.useEffect(() => {
+    void refreshSharedState();
+    const timer = window.setInterval(() => { void refreshSharedState(); }, 2000);
+    return () => window.clearInterval(timer);
+  }, [refreshSharedState]);
+
   const matchDurationMinutes = useClubStore((state) => state.matchDurationMinutes);
   const announcedOvertimeRef = React.useRef<Record<string, number>>({});
   const announcedReservationsRef = React.useRef<Record<string, string>>({});
 
   const [activeBillboard, setActiveBillboard] = React.useState<{
     courtName: string;
+    courtId: string;
+    participantIds: string[];
     players: Array<{ displayName: string; avatarUrl?: string; skillLevel: string }>;
+    variant: "active" | "reserved";
   } | null>(null);
 
   const seenMatchIdsRef = React.useRef<Set<string>>(new Set());
+  const billboardDismissTimerRef = React.useRef<number | undefined>(undefined);
+  const messageBillboardTimerRef = React.useRef<number | undefined>(undefined);
+  const handledBroadcastIdRef = React.useRef<string | null>(null);
+  const [activeTextBillboard, setActiveTextBillboard] = React.useState<string | null>(null);
+
+  const scheduleBillboardDismiss = React.useCallback((courtName: string, delayMs = 8000) => {
+    window.clearTimeout(billboardDismissTimerRef.current);
+    billboardDismissTimerRef.current = window.setTimeout(() => {
+      setActiveBillboard((current) => (current?.courtName === courtName ? null : current));
+    }, delayMs);
+  }, []);
+
+  const triggerCourtAnnouncement = React.useCallback((
+    courtId: string,
+    courtName: string,
+    participantIds: string[],
+    playerList = players,
+    variant: "active" | "reserved" = "active"
+  ) => {
+    void unlockAudio();
+    playSound("checkin");
+
+    const billboardPlayers = participantIds
+      .map((id) => resolvePlayerById(id, playerList))
+      .filter((player) => !player.isVacant)
+      .map((player) => ({
+        displayName: player.displayName,
+        avatarUrl: player.avatarUrl,
+        skillLevel: player.skillLevel
+      }));
+
+    if (billboardPlayers.length > 0) {
+      setActiveBillboard({
+        courtId,
+        courtName,
+        participantIds,
+        players: billboardPlayers,
+        variant
+      });
+      scheduleBillboardDismiss(courtName);
+    }
+
+    announceNextPlayers(courtName, participantIds, playerList);
+  }, [players, scheduleBillboardDismiss]);
+
+  const handleReplayBillboard = React.useCallback(() => {
+    if (!activeBillboard) return;
+    triggerCourtAnnouncement(
+      activeBillboard.courtId,
+      activeBillboard.courtName,
+      activeBillboard.participantIds
+    );
+  }, [activeBillboard, triggerCourtAnnouncement]);
+
+  React.useEffect(() => {
+    if (!tvBroadcast?.id || handledBroadcastIdRef.current === tvBroadcast.id) return;
+    handledBroadcastIdRef.current = tvBroadcast.id;
+
+    if (tvBroadcast.kind === "message" && tvBroadcast.message) {
+      void unlockAudio();
+      playSound("checkin");
+      setActiveBillboard(null);
+      setActiveTextBillboard(tvBroadcast.message);
+      speakAnnouncement(tvBroadcast.message);
+      window.clearTimeout(messageBillboardTimerRef.current);
+      messageBillboardTimerRef.current = window.setTimeout(() => setActiveTextBillboard(null), 10000);
+      return;
+    }
+
+    setActiveTextBillboard(null);
+    if (tvBroadcast.kind === "court" && tvBroadcast.courtName) {
+      triggerCourtAnnouncement(
+        tvBroadcast.courtId ?? "",
+        tvBroadcast.courtName,
+        tvBroadcast.participantIds ?? [],
+        players,
+        tvBroadcast.variant ?? "active"
+      );
+      return;
+    }
+    if (tvBroadcast.kind === "overtime" && tvBroadcast.courtName) {
+      void unlockAudio();
+      announceCourtOvertime(tvBroadcast.courtName, tvBroadcast.participantIds ?? [], players);
+    }
+  }, [tvBroadcast, players, triggerCourtAnnouncement]);
+
+  const broadcastCourtAnnouncement = React.useCallback((
+    courtId: string,
+    courtName: string,
+    participantIds: string[],
+    variant: "active" | "reserved" = "active"
+  ) => {
+    void useClubStore.getState().broadcastTvAnnouncement({
+      kind: "court",
+      courtId,
+      courtName,
+      participantIds,
+      variant
+    });
+  }, []);
+
+  // Unlock speech/audio on first interaction (TV has no TopBar sound toggle)
+  React.useEffect(() => {
+    const unlock = () => void unlockAudio();
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
+
+  React.useEffect(() => () => {
+    window.clearTimeout(billboardDismissTimerRef.current);
+    window.clearTimeout(messageBillboardTimerRef.current);
+  }, []);
 
   // Populate initial match IDs so we don't billboard them on initial mount
   React.useEffect(() => {
@@ -4575,40 +5253,23 @@ function DisplayView({ setView }: { setView: (view: ViewMode) => void }) {
 
           const match = matches.find((m) => m.id === matchId);
           if (match) {
-            const teamAPlayers = match.teamAPlayerIds.map(id => players.find(p => p.id === id)).filter(Boolean);
-            const teamBPlayers = match.teamBPlayerIds.map(id => players.find(p => p.id === id)).filter(Boolean);
-            const allPlayers = [...teamAPlayers, ...teamBPlayers];
-
-            if (allPlayers.length > 0) {
-              setActiveBillboard({
-                courtName: court.name,
-                players: allPlayers.map(p => ({
-                  displayName: p!.displayName,
-                  avatarUrl: p!.avatarUrl,
-                  skillLevel: p!.skillLevel
-                }))
-              });
-              
-              playSound("checkin");
-
-              setTimeout(() => {
-                setActiveBillboard(current => current?.courtName === court.name ? null : current);
-              }, 8000);
+            const participantIds = [...match.teamAPlayerIds, ...match.teamBPlayerIds];
+            const hasPlayers = participantIds.some((id) => !resolvePlayerById(id, players).isVacant);
+            if (hasPlayers) {
+              triggerCourtAnnouncement(court.id, court.name, participantIds);
             }
           }
         }
       }
     });
-  }, [courts, matches, players]);
+  }, [courts, matches, players, triggerCourtAnnouncement]);
 
-  const queueGroups = getWaitingGroups(players, courts, matches, stackOrder).filter(
-    (group) => group.some((player) => !player.isVacant)
-  );
+  const queueGroups = getTvStackGroups(stackOrder, players, matches, courts, 4);
   const overtimeCourts = courts
     .map((court) => {
       const match = matches.find((item) => item.id === court.currentMatchId && item.status === "InProgress" && item.startedAt);
       if (!match?.startedAt) return null;
-      const remaining = getRemainingMilliseconds(match.startedAt, matchDurationMinutes, now);
+      const remaining = getRemainingMilliseconds(match.startedAt, matchDurationMinutes, now, match.timerPausedAt);
       return remaining < 0 ? { court, milliseconds: Math.abs(remaining) } : null;
     })
     .filter((item): item is { court: typeof courts[number]; milliseconds: number } => Boolean(item));
@@ -4636,31 +5297,54 @@ function DisplayView({ setView }: { setView: (view: ViewMode) => void }) {
   }, [overtimeAnnouncementKey, courts, matches, players]);
 
   const reservationAnnouncementKey = courts
-    .filter((court) => court.status === "Reserved" && court.reservedPlayerIds?.length)
-    .map((court) => `${court.id}:${court.reservedPlayerIds?.join(",")}`)
+    .filter((court) => court.status === "Reserved")
+    .map((court) => `${court.id}:${court.reservedFor ?? ""}:${court.reservedPlayerIds?.join(",") ?? ""}`)
     .join("|");
 
   React.useEffect(() => {
     courts.forEach((court) => {
-      if (court.status !== "Reserved" || !court.reservedPlayerIds?.length) {
+      if (court.status !== "Reserved") {
         delete announcedReservationsRef.current[court.id];
         return;
       }
-      const reservationKey = court.reservedPlayerIds.join(",");
+      const reservationKey = `${court.reservedFor ?? ""}:${court.reservedPlayerIds?.join(",") ?? ""}`;
       if (announcedReservationsRef.current[court.id] === reservationKey) return;
-      if (announceNextPlayers(court.name, court.reservedPlayerIds, players)) {
+      if (court.reservedPlayerIds?.length) {
+        if (announceNextPlayers(court.name, court.reservedPlayerIds, players)) {
+          announcedReservationsRef.current[court.id] = reservationKey;
+        }
+      } else {
         announcedReservationsRef.current[court.id] = reservationKey;
       }
     });
   }, [reservationAnnouncementKey, courts, players]);
-  const displayQueueGroups = queueGroups.length ? queueGroups : Array.from({ length: 3 }, (_, index) => [
-    { id: `vacant-tv-empty-${index}-1`, displayName: "Waiting", skillLevel: "Newbie" as const, rating: 0, tags: [], checkedIn: false, parked: false, totalGamesPlayed: 0, totalDaysPlayed: 0, statusNote: undefined, isVacant: true },
-    { id: `vacant-tv-empty-${index}-2`, displayName: "Waiting", skillLevel: "Newbie" as const, rating: 0, tags: [], checkedIn: false, parked: false, totalGamesPlayed: 0, totalDaysPlayed: 0, statusNote: undefined, isVacant: true },
-    { id: `vacant-tv-empty-${index}-3`, displayName: "Waiting", skillLevel: "Newbie" as const, rating: 0, tags: [], checkedIn: false, parked: false, totalGamesPlayed: 0, totalDaysPlayed: 0, statusNote: undefined, isVacant: true },
-    { id: `vacant-tv-empty-${index}-4`, displayName: "Waiting", skillLevel: "Newbie" as const, rating: 0, tags: [], checkedIn: false, parked: false, totalGamesPlayed: 0, totalDaysPlayed: 0, statusNote: undefined, isVacant: true }
+  const displayQueueGroups = queueGroups.length > 0
+    ? queueGroups
+    : Array.from({ length: 4 }, (_, index) => [
+    createTvVacantSlot(`vacant-tv-empty-${index}-1`),
+    createTvVacantSlot(`vacant-tv-empty-${index}-2`),
+    createTvVacantSlot(`vacant-tv-empty-${index}-3`),
+    createTvVacantSlot(`vacant-tv-empty-${index}-4`)
   ]);
+
+  const sortedCourts = sortCourts(courts);
+
+  const playerNote = (p: (typeof players)[number] | undefined) => (p ? getPlayerStatusNote(p) : "");
+
+  const noteIcon = (note: string) => {
+    const n = note.toLowerCase();
+    if (n.includes("aggressive") || n.includes("attack")) return "⚡";
+    if (n.includes("left")) return "↖";
+    if (n.includes("beginner") || n.includes("newbie")) return "★";
+    if (n.includes("consistent")) return "◎";
+    if (n.includes("serve")) return "◈";
+    if (n.includes("net")) return "⊕";
+    if (n.includes("pro") || n.includes("intermediate")) return "◆";
+    return "·";
+  };
+
   return (
-    <section className="tv-display relative z-10 bg-forest text-ivory">
+    <section className="relative flex flex-col bg-[#0b2e22] text-ivory select-none min-h-screen overflow-x-hidden md:h-screen md:w-screen md:overflow-hidden" style={{ fontFamily: "'Inter', 'Helvetica Neue', sans-serif" }}>
       <style dangerouslySetInnerHTML={{ __html: `
         @keyframes gradientShift {
           0% { background-position: 0% 50%; }
@@ -4672,204 +5356,456 @@ function DisplayView({ setView }: { setView: (view: ViewMode) => void }) {
           background-size: 400% 400%;
           animation: gradientShift 8s ease infinite;
         }
+        .tv-elapsed {
+          letter-spacing: -0.02em;
+        }
       `}} />
+
+      {/* ── Text announcement overlay ── */}
       <AnimatePresence>
-        {activeBillboard && (
+        {activeTextBillboard && (
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[150] flex flex-col items-center justify-center animate-billboard-bg text-ivory p-6"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[150] flex flex-col items-center justify-center animate-billboard-bg text-ivory p-6 md:p-10"
           >
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(203,239,67,0.22),transparent_50%)] animate-pulse pointer-events-none" />
-            <div className="absolute top-10 left-10 opacity-[0.03] pointer-events-none">
-              <LogoMark size="large" />
-            </div>
-
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(203,239,67,0.18),transparent_55%)] pointer-events-none" />
             <motion.div
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.95, y: -20 }}
-              transition={{ type: "spring", damping: 20, stiffness: 100 }}
-              className="w-full max-w-5xl text-center z-10"
+              initial={{ scale: 0.92, y: 16 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96, y: -12 }}
+              className="relative z-10 max-w-5xl text-center px-4"
             >
-              <span className="inline-flex items-center gap-2 rounded-full bg-brass/10 px-4 py-1.5 text-base font-black text-brass border border-brass/25 uppercase tracking-wider mb-4">
-                <Megaphone className="h-5 w-5 animate-bounce" />
-                <span>Walk-Up Announcement</span>
+              <span className="inline-flex items-center gap-2 rounded-full bg-brass/10 px-4 py-1.5 text-sm md:text-lg font-black text-brass border border-brass/25 uppercase tracking-wider mb-6">
+                <Megaphone className="h-5 w-5" />
+                Club Announcement
               </span>
-
-              <h1 className="font-display text-[clamp(4rem,7vw,9rem)] font-black leading-none tracking-tight text-ivory mb-2">
-                {activeBillboard.courtName.toUpperCase()}
-              </h1>
-              <p className="text-xl md:text-2xl text-linen/80 font-bold max-w-2xl mx-auto mb-12">
-                Your stack is active. Please proceed to the court now.
+              <p className="font-display text-[clamp(1.75rem,6vw,5rem)] font-black leading-tight text-ivory break-words">
+                {activeTextBillboard}
               </p>
-
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 px-4">
-                {activeBillboard.players.map((p, idx) => (
-                  <motion.div
-                    key={p.displayName + idx}
-                    initial={{ opacity: 0, y: 30 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.15 + idx * 0.1, type: "spring" }}
-                    className="relative flex flex-col items-center p-6 rounded-[2rem] border border-white/10 bg-[#0b3a2c] shadow-2xl hover:border-brass/35 transition-all"
-                  >
-                    <div className="h-24 w-24 md:h-28 md:w-28 rounded-full overflow-hidden border-3 border-brass/40 shadow-xl bg-forest mb-4 relative">
-                      <img
-                        src={p.avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(p.displayName)}`}
-                        alt={p.displayName}
-                        className="h-full w-full object-cover"
-                      />
-                    </div>
-                    <h3 className="text-2xl font-black text-white truncate max-w-full">
-                      {p.displayName}
-                    </h3>
-                    <span className="mt-2.5 px-3 py-1 rounded-full text-[10px] font-black uppercase bg-white/10 text-ivory/70 border border-white/5 tracking-wider">
-                      {p.skillLevel}
-                    </span>
-                  </motion.div>
-                ))}
-              </div>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="mx-auto flex h-full max-w-[1920px] flex-col">
-        <div className="fixed left-7 top-7 z-50">
-          <button
-            onClick={() => setView("landing")}
-            className="rounded-full border border-ivory/30 bg-ivory/12 px-4 py-2 text-sm font-black uppercase tracking-wider text-ivory backdrop-blur hover:bg-ivory hover:text-forest transition flex items-center gap-1.5 shadow-lg"
+
+      {/* ── Billboard overlay ── */}
+      <AnimatePresence>
+        {activeBillboard && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[150] flex flex-col items-center justify-center animate-billboard-bg text-ivory p-4 md:p-6"
           >
-            <ArrowLeft className="h-4.5 w-4.5" />
-            <span>Go Back</span>
-          </button>
-        </div>
-        <div className="tv-display-header flex shrink-0 items-end justify-between border-b border-ivory/10 pb-4 pr-52">
-          <div>
-            <p className="text-base font-black uppercase tracking-wider text-brass">HAFF Leisure Club</p>
-            <h1 className="tv-display-title text-[clamp(3.5rem,5vw,6rem)] font-black leading-none tracking-normal">NOW PLAYING</h1>
-          </div>
-          <p className="hidden text-3xl font-black tracking-normal lg:block">OPEN PLAY</p>
-        </div>
-        {clubStatus && (
-          <div className="mt-3 flex shrink-0 items-center gap-3 rounded-xl bg-brass px-5 py-3 text-forest">
-            <span className="h-3 w-3 shrink-0 rounded-full bg-clay" />
-            <p className="truncate text-2xl font-black leading-tight tracking-normal">{clubStatus}</p>
-          </div>
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(203,239,67,0.22),transparent_50%)] animate-pulse pointer-events-none" />
+            <div className="absolute top-10 left-10 opacity-[0.03] pointer-events-none"><LogoMark size="large" /></div>
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: -20 }}
+              transition={{ type: "spring", damping: 20, stiffness: 100 }}
+              className="flex h-full w-full flex-col items-center justify-center text-center z-10 px-4 py-6 md:px-12 md:py-10"
+            >
+              <span className="inline-flex items-center gap-2 rounded-full bg-brass/10 px-4 py-1.5 text-sm md:px-6 md:py-2.5 md:text-xl font-black text-brass border border-brass/25 uppercase tracking-wider mb-4 md:mb-6">
+                <Megaphone className="h-4 w-4 md:h-7 md:w-7 animate-bounce" />
+                <span>{activeBillboard.variant === "reserved" ? "Court Reserved" : "Walk-Up Announcement"}</span>
+              </span>
+              <h1 className="font-display text-[clamp(2.5rem,10vw,14rem)] font-black leading-none tracking-tight text-ivory mb-2 md:mb-4">{activeBillboard.courtName.toUpperCase()}</h1>
+              <p className="text-base md:text-[clamp(1.25rem,3vw,3.5rem)] text-linen/80 font-bold max-w-2xl md:max-w-5xl mx-auto mb-8 md:mb-14">
+                {activeBillboard.variant === "reserved"
+                  ? "This court is reserved. Please wait courtside until the match begins."
+                  : "Your stack is active. Please proceed to the court now."}
+              </p>
+              <div className="flex w-full max-w-2xl flex-col gap-3 md:gap-4 px-2 md:px-6">
+                {activeBillboard.players.slice(0, 2).map((p, idx) => (
+                  <motion.div key={`a-${p.displayName}-${idx}`} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.15 + idx * 0.08, type: "spring" }}>
+                    <TvBillboardPlayerRow player={p} getPlayerAvatar={getPlayerAvatar} />
+                  </motion.div>
+                ))}
+                <div className="flex items-center gap-4 py-1 md:py-2">
+                  <div className="h-px flex-1 bg-ivory/20" />
+                  <span className="text-lg md:text-3xl font-black text-ivory/40 uppercase tracking-[0.25em]">VS</span>
+                  <div className="h-px flex-1 bg-ivory/20" />
+                </div>
+                {activeBillboard.players.slice(2, 4).map((p, idx) => (
+                  <motion.div key={`b-${p.displayName}-${idx}`} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.35 + idx * 0.08, type: "spring" }}>
+                    <TvBillboardPlayerRow player={p} getPlayerAvatar={getPlayerAvatar} />
+                  </motion.div>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={handleReplayBillboard}
+                className="mt-8 md:mt-12 inline-flex items-center gap-2.5 rounded-full border border-brass/40 bg-brass/15 px-6 py-3 md:px-8 md:py-4 text-sm md:text-lg font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest"
+              >
+                <RotateCcw className="h-5 w-5 md:h-6 md:w-6" />
+                Replay announcement
+              </button>
+            </motion.div>
+          </motion.div>
         )}
-        {overtimeCourts.length > 0 && (
-          <div className="mt-3 shrink-0 rounded-xl bg-clay px-5 py-3 text-ivory">
-            <p className="text-2xl font-black uppercase tracking-normal">
-              Overtime: {overtimeCourts.map(({ court, milliseconds }) => `${court.name} -${formatClockMilliseconds(milliseconds)}`).join("   ")}
+      </AnimatePresence>
+
+      {/* ── Back button ── */}
+      <div className="fixed left-4 top-4 z-50">
+        <button onClick={() => goBackFromTv()}
+          className="rounded-full border border-ivory/30 bg-ivory/10 px-3 py-1.5 text-xs font-black uppercase tracking-wider text-ivory backdrop-blur hover:bg-ivory hover:text-forest transition flex items-center gap-1.5 shadow-lg">
+          <ArrowLeft className="h-3.5 w-3.5" /> Back
+        </button>
+      </div>
+
+      {/* ── Main layout ── */}
+      <div className="flex flex-col flex-1 px-4 md:px-5 pt-14 md:pt-4 pb-5 md:pb-3 gap-3 md:h-full">
+
+        {/* ── Header ── */}
+        <header className="shrink-0 flex items-start md:items-end justify-between gap-3 flex-wrap">
+          <div>
+            <p className="text-[9px] md:text-[11px] font-black uppercase tracking-[0.22em] text-ivory/60 leading-none">HAFF LEISURE CLUB</p>
+            <h1 className="text-2xl md:text-[clamp(2.2rem,3.8vw,4rem)] font-black leading-none tracking-tighter uppercase text-ivory mt-0.5">NOW PLAYING</h1>
+          </div>
+          <div className="flex items-center gap-2 md:gap-4 flex-wrap justify-end">
+            {clubStatus && (
+              <span className="flex items-center gap-1.5 rounded-full bg-brass/15 border border-brass/30 px-3 md:px-4 py-1 md:py-1.5 text-[10px] md:text-sm font-black text-brass uppercase tracking-wider">
+                <span className="h-1.5 w-1.5 rounded-full bg-brass animate-pulse" />
+                {clubStatus}
+              </span>
+            )}
+            {overtimeCourts.length > 0 && (
+              <span className="flex items-center gap-1.5 rounded-full bg-red-500/20 border border-red-400/30 px-3 md:px-4 py-1 md:py-1.5 text-[10px] md:text-sm font-black text-red-300 uppercase tracking-wider animate-pulse">
+                ⚠ <span className="hidden sm:inline">OVERTIME: {overtimeCourts.map(({ court }) => court.name).join(", ")}</span>
+                <span className="sm:hidden">OT</span>
+              </span>
+            )}
+            <p className="text-[10px] md:text-[clamp(1rem,1.6vw,1.5rem)] font-black tracking-[0.12em] uppercase text-brass">
+              {courts.some(c => c.status === "Reserved") ? "🔒 RESERVED" : "OPEN PLAY"}
             </p>
           </div>
-        )}
-        <div className="tv-display-layout mt-4 grid min-h-0 flex-1 grid-cols-[minmax(300px,23%)_1fr] gap-4">
-          <aside className="tv-queue-rail min-h-0 overflow-hidden rounded-2xl border border-ivory/10 bg-[#061f18] shadow-[0_18px_48px_rgba(0,0,0,0.28)]">
-            <div className="border-b border-ivory/10 px-5 py-4">
-              <p className="text-sm font-black uppercase tracking-normal text-brass">Up Next</p>
-              <p className="mt-1 text-2xl font-black tracking-normal text-ivory">Queue Stacks</p>
-            </div>
-            <div className="tv-vertical-marquee h-[calc(100%-81px)] overflow-hidden px-3 py-3">
-              <div className="tv-vertical-marquee-track">
-                {[0, 1].map((copy) => (
-                  <div aria-hidden={copy === 1} className="grid shrink-0 gap-3 pb-3" key={copy}>
-                    {displayQueueGroups.map((group, index) => (
-                      <div className="tv-queue-stack overflow-hidden rounded-xl bg-ivory text-forest" key={`${copy}-${group.map((player) => player.id).join("-")}`}>
-                        <div className="flex items-center justify-between bg-brass px-4 py-2 text-forest">
-                          <span className="text-base font-black uppercase tracking-normal">Stack {index + 1}</span>
-                          <span className="text-sm font-black">{group.filter((player) => !player.isVacant).length}/4</span>
-                        </div>
-                        <div className="grid gap-px bg-forest/10">
-                          {group.map((player) => (
-                            <div className="flex min-w-0 items-center gap-3 bg-ivory px-3 py-2.5" key={player.id}>
-                              <img
-                                src={getPlayerAvatar(player)}
-                                alt=""
-                                className="h-12 w-12 shrink-0 rounded-full border-2 border-forest/15 bg-linen object-cover"
-                              />
-                              <div className="min-w-0">
-                                <p className="truncate text-lg font-black leading-tight tracking-normal">{player.displayName}</p>
-                                <p className="truncate text-xs font-bold leading-5 text-forest/70">
-                                  {player.statusNote ? `Note: ${player.statusNote}` : player.isVacant ? "Open player slot" : player.skillLevel}
-                                </p>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+        </header>
+
+        {/* ── Stack Queue — Mobile: compact 2-column ── */}
+        <div className="md:hidden shrink-0 rounded-2xl border border-[#1e4f3a] bg-[#0d2e22] px-3 py-3">
+          <p className="text-[9px] font-black uppercase tracking-[0.22em] text-ivory/40 mb-2">STACK QUEUE</p>
+          <div className="grid grid-cols-2 gap-2">
+            {displayQueueGroups.slice(0, 4).map((group, index) => {
+              const realCount = group.filter((p) => !p.isVacant).length;
+              const isUpNext = index === 0;
+              return (
+                <div key={index} className="rounded-xl overflow-hidden border border-[#1e4f3a]">
+                  <div className={`flex items-center justify-between px-2.5 py-1.5 ${isUpNext ? "bg-brass" : "bg-[#173d2c]"}`}>
+                    <span className={`truncate text-[10px] font-black uppercase tracking-wide ${isUpNext ? "text-forest" : "text-ivory/70"}`}>
+                      {isUpNext ? "UP NEXT" : `Stack ${index + 1}`}
+                    </span>
+                    <span className={`ml-1.5 shrink-0 text-[10px] font-black tabular-nums ${isUpNext ? "text-forest" : "text-ivory/50"}`}>{realCount}/4</span>
+                  </div>
+                  <div className="divide-y divide-[#1a3f2e]">
+                    {group.map((player) => (
+                      <div key={player.id} className="flex items-center gap-2 bg-[#0d2e22] px-2 py-2 min-h-[40px]">
+                        <img
+                          src={getPlayerAvatar(player)}
+                          alt=""
+                          className={`h-6 w-6 shrink-0 rounded-full object-cover border ${player.isVacant ? "border-white/10 opacity-20" : "border-brass/30"} bg-[#173d2c]`}
+                        />
+                        <p className={`break-words text-[11px] font-bold leading-tight ${player.isVacant ? "text-ivory/25 italic" : "text-ivory"}`}>
+                          {getPlayerDisplayLabel(player)}
+                        </p>
                       </div>
                     ))}
                   </div>
-                ))}
-              </div>
-            </div>
-          </aside>
-          <div className="tv-court-grid grid h-full min-w-0 grid-cols-2 grid-rows-2 gap-4">
-            {courts.map((court) => {
-              const match = matches.find((item) => item.id === court.currentMatchId);
-              return (
-                <div key={court.id} className="display-court flex min-h-0 flex-col overflow-hidden rounded-2xl p-[clamp(0.85rem,1.2vw,1.25rem)] text-ivory">
-                  <div className="flex items-center justify-between">
-                    <h2 className="tv-court-title text-[clamp(2rem,2.5vw,3.5rem)] font-black tracking-normal text-ivory">{court.name}</h2>
-                    <span className={`tv-court-status rounded-full px-4 py-1.5 text-base font-black uppercase ${
-                      court.status === "InUse"
-                        ? (match?.mode === "Reserved" ? "bg-amber-500 text-forest border border-brass/50" : "bg-amber-400 text-forest")
-                        : court.status === "Maintenance"
-                        ? "bg-clay text-ivory"
-                        : court.status === "Paused"
-                        ? "bg-ivory text-forest"
-                        : "bg-brass text-forest animate-pulse"
-                    }`}>
-                      {court.status === "InUse" 
-                        ? (match?.mode === "Reserved" ? "RESERVED USE" : "IN USE") 
-                        : court.status === "Maintenance" 
-                        ? "MAINTENANCE" 
-                        : court.status === "Paused" 
-                        ? "PAUSED" 
-                        : court.status === "Reserved" 
-                        ? "RESERVED" 
-                        : court.status.toUpperCase()}
-                    </span>
-                  </div>
-                  {match ? (
-                    <div className="mt-3 flex min-h-0 flex-1 flex-col">
-                      <PlayerNames ids={match.teamAPlayerIds} className="font-black leading-tight tracking-normal" showRanks tone="light" compact />
-                      <p className="my-1 text-sm font-black uppercase tracking-[0.16em] text-brass">versus</p>
-                      <PlayerNames ids={match.teamBPlayerIds} className="font-black leading-tight tracking-normal" showRanks tone="light" compact />
-                      <CourtTimer matchId={match.id} size="large" />
-                    </div>
-                  ) : (
-                    <div className="mt-6">
-                      {court.status === "Reserved" && court.reservedPlayerIds?.length ? (
-                        <>
-                          <p className="text-xl font-black uppercase tracking-[0.16em] text-brass">Reserved for</p>
-                          <PlayerNames ids={court.reservedPlayerIds} className="mt-3 text-[clamp(1.6rem,2.2vw,3rem)] font-black leading-tight tracking-normal" showRanks tone="light" />
-                        </>
-                      ) : court.status === "Maintenance" ? (
-                        <p className="mt-12 text-4xl font-black tracking-normal text-clay uppercase">Under Maintenance</p>
-                      ) : court.status === "Paused" ? (
-                        <p className="mt-12 text-4xl font-black tracking-normal text-linen uppercase">Paused</p>
-                      ) : court.status === "InUse" ? (
-                        <p className="mt-12 text-4xl font-black tracking-normal text-amber-400 uppercase">Match Starting...</p>
-                      ) : (
-                        <p className="mt-12 text-4xl font-black tracking-normal text-brass uppercase">AVAILABLE</p>
-                      )}
-                    </div>
-                  )}
                 </div>
               );
             })}
           </div>
         </div>
+
+        {/* ── Stack Queue — Desktop: 4-column full ── */}
+        <div className="hidden md:block shrink-0 rounded-2xl border border-[#1e4f3a] bg-[#0d2e22] px-4 py-3">
+          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-ivory/40 mb-2.5">STACK QUEUE</p>
+          <div className="grid grid-cols-4 gap-3">
+            {displayQueueGroups.slice(0, 4).map((group, index) => {
+              const realCount = group.filter((p) => !p.isVacant).length;
+              const isUpNext = index === 0;
+              return (
+                <div key={index} className="rounded-xl overflow-hidden border border-[#1e4f3a]">
+                  <div className={`flex items-center justify-between px-3 py-1.5 ${isUpNext ? "bg-brass" : "bg-[#173d2c]"}`}>
+                    <div className="flex items-center gap-1.5">
+                      {isUpNext && (
+                        <span className="rounded-sm bg-[#0d2e22] px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-brass">UP NEXT</span>
+                      )}
+                      <span className={`text-[11px] font-black uppercase tracking-wider ${isUpNext ? "text-forest" : "text-ivory/70"}`}>
+                        Stack {index + 1}
+                      </span>
+                    </div>
+                    <span className={`text-[11px] font-black tabular-nums ${isUpNext ? "text-forest" : "text-ivory/50"}`}>{realCount}/4</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-px bg-[#1a3f2e]">
+                    {group.map((player) => (
+                      <div key={player.id} className="flex items-center gap-2 bg-[#0d2e22] px-2.5 py-2">
+                        <img
+                          src={getPlayerAvatar(player)}
+                          alt=""
+                          className={`h-7 w-7 shrink-0 rounded-full object-cover border ${player.isVacant ? "border-white/10 opacity-20" : "border-brass/30"} bg-[#173d2c]`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className={`break-words text-[11px] font-black leading-tight ${player.isVacant ? "text-ivory/25 italic" : "text-ivory"}`}>
+                            {getPlayerDisplayLabel(player)}
+                          </p>
+                          {!player.isVacant && (
+                            <div className="mt-1 flex min-w-0 items-center gap-1">
+                              <span className="shrink-0 truncate rounded bg-white/10 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-ivory/55 max-w-full">
+                                {player.skillLevel}
+                              </span>
+                            </div>
+                          )}
+                          {!player.isVacant && playerNote(player) && (
+                            <p className="mt-0.5 truncate text-[9px] font-bold text-brass/75 leading-tight">
+                              {noteIcon(playerNote(player))} {playerNote(player)}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ── Courts ── */}
+        <div className={`grid gap-3 md:flex-1 md:min-h-0 grid-cols-1 ${sortedCourts.length <= 3 ? "md:grid-cols-3" : "md:grid-cols-2 md:grid-rows-2"}`}>
+          {sortedCourts.map((court) => {
+            const match = getActiveCourtMatch(court, matches);
+            const teamA = match ? resolveMatchTeamPlayers(match.teamAPlayerIds, players).filter((player) => !player.isVacant) : [];
+            const teamB = match ? resolveMatchTeamPlayers(match.teamBPlayerIds, players).filter((player) => !player.isVacant) : [];
+            const isPlaying = Boolean(match);
+            const isReserved = !isPlaying && court.status === "Reserved";
+            const reservedPlayers = (court.reservedPlayerIds ?? [])
+              .map((id) => resolvePlayerById(id, players))
+              .filter((player) => !player.isVacant);
+            return (
+              <div key={court.id} className={`flex flex-col overflow-hidden rounded-2xl border bg-[#0d2e22] md:min-h-0 ${
+                isReserved ? "border-amber-400/45 shadow-[0_0_24px_rgba(251,191,36,0.12)]" : "border-[#1e4f3a]"
+              }`}>
+                {/* Court header */}
+                <div className="flex shrink-0 items-center border-b border-[#1e4f3a] px-3 md:px-4 py-2 md:py-2.5 gap-2">
+                  <h2 className="shrink-0 text-base md:text-[clamp(1.1rem,1.6vw,1.5rem)] font-black uppercase tracking-wide text-ivory">{court.name.toUpperCase()}</h2>
+                  <span className={`flex shrink-0 items-center gap-1 rounded-full px-2 md:px-2.5 py-0.5 text-[9px] md:text-[10px] font-black uppercase tracking-wider ${
+                    isPlaying ? "bg-emerald-400/20 text-emerald-300 border border-emerald-400/30" :
+                    court.status === "Maintenance" ? "bg-red-400/20 text-red-300 border border-red-400/30" :
+                    court.status === "Paused" ? "bg-ivory/20 text-ivory/70 border border-white/20" :
+                    isReserved ? "bg-amber-400/20 text-amber-300 border border-amber-400/30" :
+                    "bg-brass/20 text-brass border border-brass/30"
+                  }`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${isPlaying ? "bg-emerald-400 animate-pulse" : "bg-current"}`} />
+                    <span className="hidden sm:inline">{isPlaying ? "PLAYING" : court.status === "Maintenance" ? "MAINTENANCE" : court.status === "Paused" ? "PAUSED" : isReserved ? "RESERVED" : "AVAILABLE"}</span>
+                    <span className="sm:hidden">{isPlaying ? "LIVE" : court.status === "Maintenance" ? "MAINT" : court.status === "Paused" ? "PAUSED" : isReserved ? "RESV" : "FREE"}</span>
+                  </span>
+                  {isPlaying && match && (
+                    <button
+                      type="button"
+                      onClick={() => broadcastCourtAnnouncement(court.id, court.name, [...match.teamAPlayerIds, ...match.teamBPlayerIds], "active")}
+                      className="ml-auto inline-flex items-center gap-1 rounded-full border border-brass/35 bg-brass/10 px-2 md:px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest min-h-[32px]"
+                      title="Replay court call announcement"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                      <span className="hidden sm:inline">Announce</span>
+                    </button>
+                  )}
+                  {isReserved && !isPlaying && (
+                    <button
+                      type="button"
+                      onClick={() => broadcastCourtAnnouncement(
+                        court.id,
+                        court.name,
+                        court.reservedPlayerIds ?? [],
+                        "reserved"
+                      )}
+                      className="ml-auto inline-flex items-center gap-1 rounded-full border border-brass/35 bg-brass/10 px-2 md:px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest min-h-[32px]"
+                      title="Replay court call announcement"
+                    >
+                      <Megaphone className="h-3 w-3" />
+                      <span className="hidden sm:inline">Announce</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Court body */}
+                {isPlaying ? (
+                  <div className="flex flex-col px-3 md:px-4 py-2.5 md:py-3 gap-2.5 md:gap-3 md:flex-1 md:min-h-0">
+                    {/* Players — stacked teams with VS between */}
+                    <div className="flex flex-1 min-h-0 flex-col gap-2 md:gap-2.5">
+                      <div className="flex flex-col gap-2 md:gap-2.5">
+                        {teamA.length > 0 ? teamA.map((p) => p && (
+                          <TvPlayerCard key={p.id} player={p} playerNote={playerNote(p)} noteIcon={noteIcon(playerNote(p))} getPlayerAvatar={getPlayerAvatar} />
+                        )) : (
+                          <div className="h-14 rounded-xl border border-dashed border-white/10 flex items-center justify-center">
+                            <span className="text-ivory/25 text-sm font-bold">—</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-3 py-0.5">
+                        <div className="h-px flex-1 bg-ivory/15" />
+                        <span className="shrink-0 text-sm md:text-lg font-black text-ivory/35 uppercase tracking-[0.2em]">VS</span>
+                        <div className="h-px flex-1 bg-ivory/15" />
+                      </div>
+
+                      <div className="flex flex-col gap-2 md:gap-2.5">
+                        {teamB.length > 0 ? teamB.map((p) => p && (
+                          <TvPlayerCard key={p.id} player={p} playerNote={playerNote(p)} noteIcon={noteIcon(playerNote(p))} getPlayerAvatar={getPlayerAvatar} />
+                        )) : (
+                          <div className="h-14 rounded-xl border border-dashed border-white/10 flex items-center justify-center">
+                            <span className="text-ivory/25 text-sm font-bold">—</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Timer */}
+                    <div className="shrink-0 flex items-center justify-center gap-3">
+                      <TvElapsedTimer matchId={match!.id} />
+                    </div>
+                  </div>
+                ) : isReserved ? (
+                  <div className="flex flex-col items-center justify-center gap-2.5 md:gap-3 p-4 md:p-5 min-h-[100px] md:flex-1 bg-gradient-to-b from-amber-500/[0.14] to-transparent">
+                    <div className="flex items-center gap-2 rounded-full border border-amber-400/35 bg-amber-400/10 px-3 py-1.5">
+                      <Lock className="h-4 w-4 md:h-5 md:w-5 text-amber-300" />
+                      <span className="text-sm md:text-xl font-black uppercase tracking-[0.18em] text-amber-200">Court Reserved</span>
+                    </div>
+                    {court.reservedFor && (
+                      <p className="text-center text-xs md:text-base font-bold text-amber-100/90 break-words max-w-full px-2">
+                        {court.reservedFor}
+                      </p>
+                    )}
+                    {reservedPlayers.length > 0 ? (
+                      <div className="flex w-full max-w-md flex-col gap-2 md:gap-2.5">
+                        {reservedPlayers.map((player) => (
+                          <TvPlayerCard
+                            key={player.id}
+                            player={player}
+                            playerNote={playerNote(player)}
+                            noteIcon={noteIcon(playerNote(player))}
+                            getPlayerAvatar={getPlayerAvatar}
+                            variant="reserved"
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[10px] md:text-xs font-bold uppercase tracking-[0.2em] text-amber-200/70">Held for upcoming play</p>
+                    )}
+                    <p className="text-[9px] md:text-[10px] font-bold uppercase tracking-widest text-ivory/35">Not open for walk-ups</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center gap-1.5 p-4 min-h-[80px] md:flex-1">
+                    {court.status === "Maintenance" ? (
+                      <p className="text-base md:text-2xl font-black uppercase text-red-400 tracking-wider">Under Maintenance</p>
+                    ) : court.status === "Paused" ? (
+                      <p className="text-base md:text-2xl font-black uppercase text-ivory/50 tracking-wider">Paused</p>
+                    ) : (
+                      <>
+                        <span className="text-xl md:text-3xl font-black uppercase text-brass tracking-wider">Available</span>
+                        <p className="text-[10px] font-bold text-ivory/30 uppercase tracking-widest">Waiting for players</p>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ── Footer note ── */}
+        <p className="shrink-0 text-center text-[10px] font-bold text-ivory/25 tracking-wide pb-2">
+          ⓘ Open Play is self-officiated. Please rotate in and out of play. Have fun and be respectful!
+        </p>
       </div>
     </section>
   );
 }
 
-function announceCourtOvertime(courtName: string, playerIds: string[], players: Array<{ id: string; displayName: string }>) {
+function TvPlayerCard({
+  player,
+  playerNote,
+  noteIcon,
+  getPlayerAvatar,
+  variant = "default",
+}: {
+  player: { id: string; displayName: string; rating: number; avatarUrl?: string; skillLevel: string };
+  playerNote: string;
+  noteIcon: string;
+  getPlayerAvatar: (p: any) => string;
+  variant?: "default" | "reserved";
+}) {
+  const borderClass = variant === "reserved" ? "border-amber-400/30 bg-[#173d2c]/90" : "border-[#1e4f3a] bg-[#132e24]";
+  const avatarBorderClass = variant === "reserved" ? "border-amber-300/40" : "border-brass/40";
+
+  return (
+    <div className={`flex min-w-0 flex-col gap-1.5 md:gap-2 rounded-xl md:rounded-2xl border px-3 md:px-3.5 py-2.5 md:py-3 shadow-lg ${borderClass}`}>
+      <div className="flex min-w-0 items-center gap-2.5 md:gap-3">
+        <img
+          src={getPlayerAvatar(player)}
+          alt=""
+          className={`h-10 w-10 md:h-12 md:w-12 shrink-0 rounded-full border-2 object-cover bg-[#0d2e22] shadow-xl ${avatarBorderClass}`}
+        />
+        <p className="min-w-0 flex-1 break-words text-sm md:text-[clamp(1rem,1.35vw,1.25rem)] font-black text-ivory leading-tight">
+          {getPlayerDisplayLabel(player)}
+        </p>
+      </div>
+      <div className="flex min-w-0 items-center gap-2 pl-[2.875rem] md:pl-[3.75rem]">
+        <span className="shrink-0 truncate rounded-md bg-white/10 px-1.5 md:px-2 py-0.5 text-[9px] md:text-[10px] font-black uppercase tracking-wide text-ivory/65 border border-white/10">
+          {player.skillLevel}
+        </span>
+        {playerNote ? (
+          <span className="min-w-0 truncate text-[10px] md:text-xs font-bold text-brass/80 leading-tight">
+            <span className="text-brass">{noteIcon}</span> {playerNote}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function TvBillboardPlayerRow({
+  player,
+  getPlayerAvatar,
+}: {
+  player: { displayName: string; avatarUrl?: string; skillLevel: string };
+  getPlayerAvatar: (p: { displayName: string; avatarUrl?: string }) => string;
+}) {
+  return (
+    <div className="flex flex-col gap-2 md:gap-3 rounded-2xl md:rounded-[1.75rem] border border-white/10 bg-[#0b3a2c] px-4 py-3 md:px-6 md:py-5 shadow-2xl">
+      <div className="flex items-center gap-3 md:gap-5">
+        <div className="h-14 w-14 md:h-20 md:w-20 shrink-0 overflow-hidden rounded-full border-2 md:border-[3px] border-brass/40 bg-forest shadow-xl">
+          <img src={getPlayerAvatar(player)} alt={player.displayName} className="h-full w-full object-cover" />
+        </div>
+        <h3 className="min-w-0 flex-1 break-words text-lg md:text-3xl font-black text-white leading-tight">{player.displayName}</h3>
+      </div>
+      <div className="flex items-center gap-2 pl-[4.25rem] md:pl-[6.25rem]">
+        <span className="shrink-0 rounded-full bg-white/10 px-3 py-1 text-[10px] md:text-sm font-black uppercase tracking-wider text-ivory/70 border border-white/5">
+          {player.skillLevel}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function TvElapsedTimer({ matchId }: { matchId: string }) {
+  const match = useClubStore((state) => state.matches.find((m) => m.id === matchId));
+  const durationMinutes = useClubStore((state) => state.matchDurationMinutes);
+  const now = useSmoothNow(Boolean(match?.startedAt && !match?.timerPausedAt));
+  if (!match?.startedAt) return null;
+  const remainingMs = getRemainingMilliseconds(match.startedAt, durationMinutes, now, match.timerPausedAt);
+  const overtime = remainingMs < 0;
+  return (
+    <div className="flex flex-col items-center">
+      <span className={`tv-elapsed text-2xl md:text-[clamp(2rem,3.2vw,3.5rem)] font-black leading-none tabular-nums ${overtime ? "text-red-400 animate-pulse" : "text-brass"}`}>
+        <CountdownClock totalMs={Math.abs(remainingMs)} prefix={overtime ? "-" : ""} />
+      </span>
+      <span className="mt-0.5 text-[9px] font-black uppercase tracking-[0.2em] text-ivory/35">
+        {overtime ? "OVERTIME" : "TIME LEFT"}
+      </span>
+    </div>
+  );
+}
+
+function announceCourtOvertime(courtName: string, playerIds: string[], players: Player[]) {
   const names = playerIds
-    .map((playerId) => players.find((player) => player.id === playerId)?.displayName)
-    .filter((name): name is string => Boolean(name));
+    .map((playerId) => resolvePlayerById(playerId, players))
+    .filter((player) => !player.isVacant)
+    .map((player) => player.displayName);
   const playerList = formatSpokenNames(names);
   const courtLabel = courtName.replace(/^Court\s*/i, "Court ");
   const message = playerList
@@ -4878,10 +5814,11 @@ function announceCourtOvertime(courtName: string, playerIds: string[], players: 
   return speakAnnouncement(message);
 }
 
-function announceNextPlayers(courtName: string, playerIds: string[], players: Array<{ id: string; displayName: string }>) {
+function announceNextPlayers(courtName: string, playerIds: string[], players: Player[]) {
   const names = playerIds
-    .map((playerId) => players.find((player) => player.id === playerId)?.displayName)
-    .filter((name): name is string => Boolean(name));
+    .map((playerId) => resolvePlayerById(playerId, players))
+    .filter((player) => !player.isVacant)
+    .map((player) => player.displayName);
   const playerList = formatSpokenNames(names);
   const courtLabel = courtName.replace(/^Court\s*/i, "Court ");
   return speakAnnouncement(
@@ -4904,8 +5841,9 @@ function getRemainingSeconds(startedAt: string, durationMinutes: number, now: nu
   return Math.ceil(remainingMs / 1000);
 }
 
-function getRemainingMilliseconds(startedAt: string, durationMinutes: number, now: number) {
-  const elapsedMs = now - new Date(startedAt).getTime();
+function getRemainingMilliseconds(startedAt: string, durationMinutes: number, now: number, timerPausedAt?: string) {
+  const effectiveNow = timerPausedAt ? new Date(timerPausedAt).getTime() : now;
+  const elapsedMs = effectiveNow - new Date(startedAt).getTime();
   return durationMinutes * 60_000 - elapsedMs;
 }
 
@@ -4924,12 +5862,77 @@ function formatClockMilliseconds(totalMilliseconds: number) {
   const hours = Math.floor(safeMs / 3_600_000);
   const minutes = Math.floor((safeMs % 3_600_000) / 60_000);
   const seconds = Math.floor((safeMs % 60_000) / 1000);
-  const milliseconds = safeMs % 1000;
-  const ms = String(milliseconds).padStart(3, "0");
+  const centiseconds = Math.floor((safeMs % 1000) / 10);
+  const cs = String(centiseconds).padStart(2, "0");
   if (hours > 0) {
-    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${ms}`;
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${cs}`;
   }
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${ms}`;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${cs}`;
+}
+
+function CountdownClock({ totalMs, className = "", prefix = "" }: { totalMs: number; className?: string; prefix?: string }) {
+  const safeMs = Math.max(0, Math.floor(totalMs));
+  const hours = Math.floor(safeMs / 3_600_000);
+  const minutes = Math.floor((safeMs % 3_600_000) / 60_000);
+  const seconds = Math.floor((safeMs % 60_000) / 1000);
+  const centiseconds = Math.floor((safeMs % 1000) / 10);
+  const mm = String(minutes).padStart(2, "0");
+  const ss = String(seconds).padStart(2, "0");
+  const cs = String(centiseconds).padStart(2, "0");
+  if (hours > 0) {
+    const hh = String(hours).padStart(2, "0");
+    return (
+      <span className={`countdown-digits ${className}`.trim()}>
+        {prefix}
+        <span className="countdown-seg">{hh}</span>
+        <span className="countdown-sep">:</span>
+        <span className="countdown-seg">{mm}</span>
+        <span className="countdown-sep">:</span>
+        <span className="countdown-seg">{ss}</span>
+        <span className="countdown-sep">.</span>
+        <span className="countdown-seg">{cs}</span>
+      </span>
+    );
+  }
+  return (
+    <span className={`countdown-digits ${className}`.trim()}>
+      {prefix}
+      <span className="countdown-seg">{mm}</span>
+      <span className="countdown-sep">:</span>
+      <span className="countdown-seg">{ss}</span>
+      <span className="countdown-sep">.</span>
+      <span className="countdown-seg">{cs}</span>
+    </span>
+  );
+}
+
+function PlayerWaitCountdown({
+  playerId,
+  players,
+  courts,
+  matches,
+  stackOrder,
+  matchDurationMinutes,
+}: {
+  playerId: string;
+  players: ReturnType<typeof useClubStore.getState>["players"];
+  courts: ReturnType<typeof useClubStore.getState>["courts"];
+  matches: ReturnType<typeof useClubStore.getState>["matches"];
+  stackOrder: string[];
+  matchDurationMinutes: number;
+}) {
+  const now = useSmoothNow(true);
+  const { estimatedMs } = getPlayerWaitStatus(playerId, players, courts, matches, stackOrder, matchDurationMinutes, now);
+  return (
+    <div className="mt-3 grid grid-cols-3 gap-2.5">
+      {formatDurationParts(estimatedMs).map((part) => (
+        <div key={part.label} className="rounded-[1rem] bg-[#06241B] px-2 py-3.5 text-center text-ivory shadow-[0_14px_30px_rgba(6,36,27,0.24)] ring-1 ring-forest/20">
+          <p className={`text-4xl font-black leading-none tracking-normal tabular-nums sm:text-5xl ${part.label === "seconds" ? "countdown-digits" : ""}`}>{part.value}</p>
+          <p className="mt-2 text-[9px] font-black uppercase tracking-[0.16em] text-linen/75">{part.label}</p>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function rankKey(skillLevel: ReturnType<typeof useClubStore.getState>["players"][number]["skillLevel"]) {
@@ -4963,7 +5966,7 @@ function getWaitingPlayers(
   );
 
   return stackOrder
-    .filter((id) => eligibleIds.has(id))
+    .filter((id) => id !== "vacant" && id !== "reserved" && eligibleIds.has(id))
     .map((id) => players.find((p) => p.id === id)!)
     .filter(Boolean);
 }
@@ -4974,12 +5977,7 @@ function getWaitingGroups(
   matches: ReturnType<typeof useClubStore.getState>["matches"],
   stackOrder: string[] = []
 ) {
-  const waiting = getWaitingPlayers(players, matches, courts, stackOrder);
-  const groups: Array<Array<ReturnType<typeof getWaitingPlayers>[number]>> = [];
-  for (let index = 0; index < waiting.length; index += 4) {
-    groups.push(waiting.slice(index, index + 4));
-  }
-  return groups;
+  return getStackDisplayGroups(stackOrder, players, matches, courts);
 }
 
 function getPlayerWaitStatus(
@@ -4997,7 +5995,7 @@ function getPlayerWaitStatus(
       label: "Check in first",
       reason: "Once checked in, the system can place you in the waiting order.",
       stackDetail: "You are not in the rotation yet.",
-      estimatedSeconds: 0
+      estimatedMs: 0
     };
   }
   if (player.parked) {
@@ -5005,7 +6003,7 @@ function getPlayerWaitStatus(
       label: "Parked",
       reason: "You are paused from rotation. Tap Resume Play when you are ready to be added back into the stack order.",
       stackDetail: "Your spot is paused until you resume.",
-      estimatedSeconds: 0
+      estimatedMs: 0
     };
   }
   const activeMatch = matches.find((match) => match.status === "InProgress" && [...match.teamAPlayerIds, ...match.teamBPlayerIds].includes(playerId));
@@ -5015,7 +6013,7 @@ function getPlayerWaitStatus(
       label: "Playing now",
       reason: `You are currently assigned to ${court?.name ?? "a court"}.`,
       stackDetail: `${court?.name ?? "Court"} is active now.`,
-      estimatedSeconds: 0
+      estimatedMs: 0
     };
   }
   const waiting = getWaitingPlayers(players, matches, courts, stackOrder);
@@ -5025,7 +6023,7 @@ function getPlayerWaitStatus(
       label: "Joining queue",
       reason: "Your check-in is active. The shared queue is updating now.",
       stackDetail: "You will appear in the next open stack slot.",
-      estimatedSeconds: 0
+      estimatedMs: 0
     };
   }
   const rotationCourts = Math.max(1, courts.filter((court) => court.status !== "Maintenance" && court.status !== "Paused").length);
@@ -5033,28 +6031,29 @@ function getPlayerWaitStatus(
   const wave = Math.floor(Math.max(0, position) / playersPerWave);
   const stackNumber = Math.floor(Math.max(0, position) / 4) + 1;
   const stackSlot = (Math.max(0, position) % 4) + 1;
-  const activeRemainingSeconds = matches
+  const activeRemainingMs = matches
     .filter((match) => match.status === "InProgress" && match.startedAt)
-    .map((match) => Math.max(0, Math.ceil((matchDurationMinutes * 60_000 - (now - new Date(match.startedAt!).getTime())) / 1000)));
-  const nextCourtSeconds = activeRemainingSeconds.length ? Math.min(...activeRemainingSeconds) : Math.max(120, Math.ceil(matchDurationMinutes * 60 / 3));
-  const estimatedSeconds = Math.max(0, nextCourtSeconds + wave * matchDurationMinutes * 60);
+    .map((match) => Math.max(0, getRemainingMilliseconds(match.startedAt!, matchDurationMinutes, now, match.timerPausedAt)));
+  const nextCourtMs = activeRemainingMs.length ? Math.min(...activeRemainingMs) : Math.max(120_000, Math.ceil((matchDurationMinutes * 60_000) / 3));
+  const estimatedMs = Math.max(0, nextCourtMs + wave * matchDurationMinutes * 60_000);
   return {
     label: position < 4 ? "Next stack" : `Stack wave ${wave + 1}`,
     reason: `You are #${position + 1} in the waiting order. Estimate uses ${matchDurationMinutes} minutes per game and ${rotationCourts} active court${rotationCourts === 1 ? "" : "s"}.`,
     stackDetail: `Stack ${stackNumber}, slot ${stackSlot}. Estimated from the current court timer and the open play rotation.`,
-    estimatedSeconds
+    estimatedMs
   };
 }
 
-function formatDurationParts(totalSeconds: number) {
-  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
-  const hours = Math.floor(safeSeconds / 3600);
-  const minutes = Math.floor((safeSeconds % 3600) / 60);
-  const seconds = safeSeconds % 60;
+function formatDurationParts(totalMs: number) {
+  const safeMs = Math.max(0, Math.floor(totalMs));
+  const hours = Math.floor(safeMs / 3_600_000);
+  const minutes = Math.floor((safeMs % 3_600_000) / 60_000);
+  const seconds = Math.floor((safeMs % 60_000) / 1000);
+  const centiseconds = Math.floor((safeMs % 1000) / 10);
   return [
     { label: "hours", value: String(hours).padStart(2, "0") },
     { label: "minutes", value: String(minutes).padStart(2, "0") },
-    { label: "seconds", value: String(seconds).padStart(2, "0") }
+    { label: "seconds", value: `${String(seconds).padStart(2, "0")}.${String(centiseconds).padStart(2, "0")}` }
   ];
 }
 
@@ -5082,9 +6081,18 @@ function PlayerNames({
   compact?: boolean;
 }) {
   const players = useClubStore((state) => state.players);
-  if (!showRanks) return <p className={className}>{ids.map((id) => players.find((player) => player.id === id)?.displayName.split(" ")[0]).join(" / ")}</p>;
+  if (!showRanks) {
+    return (
+      <p className={className}>
+        {ids.map((id) => {
+          const player = players.find((p) => p.id === id);
+          return player?.displayName ? player.displayName.split(" ")[0] : "Open";
+        }).join(" / ")}
+      </p>
+    );
+  }
   return (
-    <div className={compact ? "space-y-1.5" : "space-y-2"}>
+    <div className={compact ? "grid grid-cols-2 gap-2" : "space-y-2"}>
       {ids.map((id) => <PlayerChip key={id} playerId={id} tone={tone} draggable={tone === "dark"} compact={compact} />)}
     </div>
   );
@@ -5149,6 +6157,80 @@ function Toasts() {
   );
 }
 
+function StackSlotSearchModal({
+  slotIndex,
+  players,
+  matches,
+  onClose,
+  onSelect
+}: {
+  slotIndex: number;
+  players: ReturnType<typeof useClubStore.getState>["players"];
+  matches: ReturnType<typeof useClubStore.getState>["matches"];
+  onClose: () => void;
+  onSelect: (playerId: string) => void;
+}) {
+  const [query, setQuery] = React.useState("");
+  const activeIds = new Set(
+    matches
+      .filter((match) => match.status === "InProgress")
+      .flatMap((match) => [...match.teamAPlayerIds, ...match.teamBPlayerIds])
+  );
+  const candidates = players.filter(
+    (player) =>
+      player.isActive !== false &&
+      player.checkedIn &&
+      !player.parked &&
+      !activeIds.has(player.id) &&
+      (query.trim() === "" || player.displayName.toLowerCase().includes(query.trim().toLowerCase()))
+  );
+
+  return (
+    <div className="fixed inset-0 z-[130] flex items-end justify-center bg-black/70 p-4 backdrop-blur-sm sm:items-center" onClick={onClose}>
+      <div
+        className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0a2a20] p-4 shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="font-display text-xl font-black text-ivory">Add to slot #{slotIndex + 1}</h3>
+          <button type="button" className="rounded-full p-1.5 text-ivory/60 hover:bg-white/10 hover:text-ivory" onClick={onClose} aria-label="Close">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="relative mb-3">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-ivory/40" size={16} />
+          <input
+            autoFocus
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search checked-in players..."
+            className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 pl-9 pr-3 text-sm text-ivory outline-none focus:ring-2 focus:ring-brass"
+          />
+        </div>
+        <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
+          {candidates.map((player) => (
+            <button
+              key={player.id}
+              type="button"
+              onClick={() => onSelect(player.id)}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-white/10"
+            >
+              <img src={getPlayerAvatar(player)} alt="" className="h-9 w-9 shrink-0 rounded-full border border-white/10 object-cover bg-forest/20" />
+              <div className="min-w-0">
+                <p className="truncate font-semibold text-ivory">{player.displayName}</p>
+                <p className="text-xs text-linen/60">{player.skillLevel}</p>
+              </div>
+            </button>
+          ))}
+          {candidates.length === 0 && (
+            <p className="py-8 text-center text-sm text-linen/50">No checked-in players match your search.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StackBuilder({
   players,
   courts,
@@ -5161,25 +6243,50 @@ function StackBuilder({
   stackOrder: string[];
 }) {
   const movePlayerToIndex = useClubStore((state) => state.movePlayerToIndex);
-  const waitingGroups = getWaitingGroups(players, courts, matches, stackOrder);
+  const moveStackToIndex = useClubStore((state) => state.moveStackToIndex);
+  const addEmptyStack = useClubStore((state) => state.addEmptyStack);
+  const setStackSlotKind = useClubStore((state) => state.setStackSlotKind);
+  const waitingGroups = getStackDisplayGroups(stackOrder, players, matches, courts, 24);
   const waiting = getWaitingPlayers(players, matches, courts, stackOrder);
+  const stackSlotCount = stackOrder.length;
   const [draggingPlayerId, setDraggingPlayerId] = React.useState<string | null>(null);
+  const [draggingStackIndex, setDraggingStackIndex] = React.useState<number | null>(null);
+  const [searchSlotIndex, setSearchSlotIndex] = React.useState<number | null>(null);
   const canDrag = true;
 
+  const handleStackDrop = (targetGroupIndex: number) => {
+    const fromIndex = draggingStackIndex;
+    if (fromIndex === null || fromIndex === targetGroupIndex) return;
+    void moveStackToIndex(fromIndex, targetGroupIndex);
+    setDraggingStackIndex(null);
+  };
+
   return (
-    <Card className="bg-[#173f32] text-ivory">
+    <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.24em] text-brass">Queue manager</p>
           <h2 className="font-display text-4xl leading-none">
             <span className="lg:hidden">Set the play order</span>
-            <span className="hidden lg:inline">Drag players to reorder</span>
+            <span className="hidden lg:inline">Drag stacks or players to reorder</span>
           </h2>
         </div>
         <p className="hidden max-w-xs text-right text-xs leading-5 text-linen/65 sm:block">
-          On mobile, choose a position from the menu. On larger screens, drag names over others to insert them.
+          Use + to add empty stacks. Tap open slots to search players, or mark a slot as reserved.
         </p>
       </div>
+      {searchSlotIndex !== null && (
+        <StackSlotSearchModal
+          slotIndex={searchSlotIndex}
+          players={players}
+          matches={matches}
+          onClose={() => setSearchSlotIndex(null)}
+          onSelect={(playerId) => {
+            void movePlayerToIndex(playerId, searchSlotIndex, true);
+            setSearchSlotIndex(null);
+          }}
+        />
+      )}
       <div 
         className="mt-5 grid min-w-0 gap-3 xl:grid-cols-2 2xl:grid-cols-3 min-h-32"
         onDragOver={(event) => event.preventDefault()}
@@ -5188,7 +6295,7 @@ function StackBuilder({
           const droppedId = event.dataTransfer.getData("text/player-id") || draggingPlayerId;
           // If dropped outside a specific player, append to the end of the queue
           if (droppedId && waiting.findIndex(p => p.id === droppedId) === -1) {
-             movePlayerToIndex(droppedId, waiting.length);
+             void movePlayerToIndex(droppedId, stackSlotCount, true);
           }
           setDraggingPlayerId(null);
         }}
@@ -5196,19 +6303,148 @@ function StackBuilder({
         {waitingGroups.map((group, groupIndex) => (
           <div
             key={groupIndex}
-            className={`min-w-0 min-h-32 rounded-[1.2rem] p-3 transition bg-ivory/8`}
+            className={`min-w-0 min-h-32 rounded-[1.2rem] p-3 transition bg-ivory/8 ${
+              draggingStackIndex === groupIndex ? "opacity-60 ring-2 ring-brass/50" : ""
+            }`}
+            onDragOver={(event) => {
+              if (draggingStackIndex !== null) {
+                event.preventDefault();
+              }
+            }}
+            onDrop={(event) => {
+              const stackIdxRaw = event.dataTransfer.getData("text/stack-index");
+              const fromIndex = stackIdxRaw !== "" ? Number(stackIdxRaw) : draggingStackIndex;
+              if (fromIndex !== null && Number.isFinite(fromIndex) && fromIndex !== groupIndex) {
+                event.preventDefault();
+                event.stopPropagation();
+                void moveStackToIndex(fromIndex, groupIndex);
+                setDraggingStackIndex(null);
+                return;
+              }
+              if (draggingStackIndex !== null) {
+                event.preventDefault();
+                event.stopPropagation();
+                handleStackDrop(groupIndex);
+              }
+            }}
           >
-            <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm font-black uppercase tracking-normal text-brass">
-                {groupIndex === 0 ? "Next Court" : `On Deck (${groupIndex + 1})`}
-              </p>
-              <span className="rounded-full bg-ivory/10 px-2 py-1 text-xs font-bold text-linen">
-                Positions {groupIndex * 4 + 1}-{groupIndex * 4 + group.length}
-              </span>
+            <div
+              className="mb-3 flex items-center justify-between gap-2"
+              draggable={canDrag}
+              onDragStart={(event) => {
+                event.stopPropagation();
+                event.dataTransfer.setData("text/stack-index", String(groupIndex));
+                event.dataTransfer.effectAllowed = "move";
+                setDraggingStackIndex(groupIndex);
+                setDraggingPlayerId(null);
+              }}
+              onDragEnd={() => setDraggingStackIndex(null)}
+            >
+              <div className="flex min-w-0 items-center gap-2 lg:cursor-grab lg:active:cursor-grabbing">
+                <GripVertical size={16} className="hidden shrink-0 text-brass/80 lg:block" />
+                <p className="text-sm font-black uppercase tracking-normal text-brass">
+                  {groupIndex === 0 ? "Next Court" : `On Deck (${groupIndex + 1})`}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-ivory/10 px-2 py-1 text-xs font-bold text-linen">
+                  {group.filter((player) => !player.isVacant && !player.isReservedSlot).length}/4 filled
+                  {group.some((player) => player.isReservedSlot)
+                    ? ` · ${group.filter((player) => player.isReservedSlot).length} held`
+                    : ""}
+                </span>
+                <label className="relative shrink-0 lg:hidden">
+                  <span className="sr-only">Move stack {groupIndex + 1} to position</span>
+                  <select
+                    aria-label={`Move stack ${groupIndex + 1} to position`}
+                    className="min-h-9 appearance-none rounded-lg bg-forest py-1.5 pl-2 pr-7 text-[10px] font-bold text-ivory outline-none focus:ring-2 focus:ring-brass"
+                    value={groupIndex}
+                    onChange={(event) => {
+                      const target = Number(event.target.value);
+                      if (Number.isFinite(target)) void moveStackToIndex(groupIndex, target);
+                    }}
+                  >
+                    {waitingGroups.map((_, optionIndex) => (
+                      <option key={optionIndex} value={optionIndex}>
+                        Stack {optionIndex + 1}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-ivory/75" size={12} />
+                </label>
+              </div>
             </div>
             <div className="grid gap-2">
               {group.map((player, idxInGroup) => {
                 const overallIndex = groupIndex * 4 + idxInGroup;
+                const slotKind = stackOrder[overallIndex];
+                if (player.isReservedSlot || slotKind === "reserved") {
+                  return (
+                    <div
+                      key={player.id}
+                      className="flex min-h-11 items-center justify-between gap-2 rounded-xl border border-amber-400/35 bg-amber-400/10 px-2.5 py-2"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Lock size={14} className="shrink-0 text-amber-300" />
+                        <span className="text-xs font-black uppercase tracking-wider text-amber-200">Reserved slot</span>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setSearchSlotIndex(overallIndex)}
+                          className="inline-flex items-center gap-1 rounded-lg bg-brass/20 px-2 py-1 text-[10px] font-black uppercase tracking-wide text-brass hover:bg-brass hover:text-forest"
+                        >
+                          <Plus size={12} /> Add
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void setStackSlotKind(overallIndex, "vacant")}
+                          className="rounded-lg bg-white/10 px-2 py-1 text-[10px] font-bold text-ivory/70 hover:bg-white/15"
+                        >
+                          Open
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
+                if (player.isVacant) {
+                  return (
+                    <div
+                      key={player.id}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        const droppedId = event.dataTransfer.getData("text/player-id") || draggingPlayerId;
+                        if (droppedId) void movePlayerToIndex(droppedId, overallIndex, true);
+                        setDraggingPlayerId(null);
+                      }}
+                      className="flex min-h-11 items-center justify-between gap-2 rounded-xl border border-dashed border-ivory/25 bg-ivory/5 px-2.5 py-2"
+                    >
+                      <span className="text-xs font-bold text-ivory/45">Open slot</span>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setSearchSlotIndex(overallIndex)}
+                          className="inline-flex items-center gap-1 rounded-lg bg-brass px-2 py-1 text-[10px] font-black uppercase tracking-wide text-forest hover:bg-brass/90"
+                        >
+                          <Plus size={12} /> Add
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void setStackSlotKind(overallIndex, "reserved")}
+                          className="inline-flex items-center gap-1 rounded-lg bg-amber-400/15 px-2 py-1 text-[10px] font-black uppercase tracking-wide text-amber-200 hover:bg-amber-400/25"
+                          title="Hold this slot as reserved"
+                        >
+                          <Lock size={12} /> Hold
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
                 return (
                   <div
                     key={player.id}
@@ -5217,6 +6453,7 @@ function StackBuilder({
                       event.stopPropagation();
                       event.dataTransfer.setData("text/player-id", player.id);
                       setDraggingPlayerId(player.id);
+                      setDraggingStackIndex(null);
                     }}
                     onDragEnd={() => setDraggingPlayerId(null)}
                     onDragOver={(event) => {
@@ -5228,7 +6465,7 @@ function StackBuilder({
                       event.stopPropagation();
                       const droppedId = event.dataTransfer.getData("text/player-id") || draggingPlayerId;
                       if (droppedId && droppedId !== player.id) {
-                        movePlayerToIndex(droppedId, overallIndex);
+                        void movePlayerToIndex(droppedId, overallIndex, true);
                       }
                       setDraggingPlayerId(null);
                     }}
@@ -5236,19 +6473,19 @@ function StackBuilder({
                     title={canDrag ? "Drag player over another to insert" : "Choose a position"}
                   >
                     <GripVertical size={16} className="hidden shrink-0 text-forest/55 lg:block" />
-                    <div className="min-w-0 flex-1 relative">
-                      <div className="min-w-0">
-                        <p className="truncate font-semibold">
+                    <div className="min-w-0 flex flex-1 items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-semibold leading-tight">
                           <span className="text-forest/50 mr-1.5 text-xs">#{overallIndex + 1}</span>
                           {player.displayName}
                         </p>
                         {player.statusNote && (
-                          <span className="mt-1 block max-w-full truncate text-[9px] font-bold text-forest/65" title={player.statusNote}>
-                            Note: {player.statusNote}
+                          <span className="mt-0.5 block max-w-full truncate text-[9px] font-bold text-forest/65" title={player.statusNote}>
+                            {player.statusNote}
                           </span>
                         )}
                       </div>
-                      <RankBadge skillLevel={player.skillLevel} compact />
+                      <RankBadge skillLevel={player.skillLevel} compact className="shrink-0 self-center" />
                     </div>
                     <label className="relative shrink-0 lg:hidden">
                       <span className="sr-only">Move {player.displayName} to position</span>
@@ -5257,12 +6494,14 @@ function StackBuilder({
                         className="min-h-10 appearance-none rounded-lg bg-forest py-2 pl-3 pr-8 text-xs font-bold text-ivory outline-none focus:ring-2 focus:ring-brass"
                         onChange={(event) => {
                           const targetIndex = Number(event.target.value);
-                          if (Number.isFinite(targetIndex)) movePlayerToIndex(player.id, targetIndex);
+                          if (Number.isFinite(targetIndex)) void movePlayerToIndex(player.id, targetIndex, true);
                         }}
                         value={overallIndex}
                       >
-                        {waiting.map((_, optionIndex) => (
-                          <option key={optionIndex} value={optionIndex}>Pos {optionIndex + 1}</option>
+                        {(stackOrder.length > 0 ? stackOrder : waiting.map((p) => p.id)).map((slotId, optionIndex) => (
+                          <option key={optionIndex} value={optionIndex}>
+                            Pos {optionIndex + 1}{slotId === "vacant" ? " (open)" : slotId === "reserved" ? " (held)" : ""}
+                          </option>
                         ))}
                       </select>
                       <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-ivory/75" size={14} />
@@ -5273,9 +6512,19 @@ function StackBuilder({
             </div>
           </div>
         ))}
+        <button
+          type="button"
+          onClick={() => void addEmptyStack()}
+          className="flex min-h-32 flex-col items-center justify-center gap-2 rounded-[1.2rem] border border-dashed border-brass/35 bg-brass/5 p-4 text-brass transition hover:border-brass/60 hover:bg-brass/10"
+        >
+          <Plus size={28} strokeWidth={2.5} />
+          <span className="text-sm font-black uppercase tracking-wider">Add stack</span>
+          <span className="text-[10px] font-semibold text-linen/55">4 empty slots</span>
+        </button>
         {waitingGroups.length === 0 && (
-          <div className="xl:col-span-2 2xl:col-span-3 rounded-2xl border border-dashed border-ivory/20 py-12 text-center">
-            <p className="text-sm font-semibold text-ivory/60">No players waiting in queue</p>
+          <div className="xl:col-span-2 2xl:col-span-3 rounded-2xl border border-dashed border-ivory/20 py-8 text-center">
+            <p className="text-sm font-semibold text-ivory/60">No stacks yet</p>
+            <p className="mt-1 text-xs text-ivory/40">Use Add stack on the right to create a deck, then fill slots with +.</p>
           </div>
         )}
       </div>
@@ -5285,7 +6534,7 @@ function StackBuilder({
 
 function AdminDetails() {
   return (
-    <Card className="bg-[#173f32] text-ivory">
+    <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory">
       <div className="flex items-center gap-2 text-brass">
         <ShieldCheck size={19} />
         <span className="text-xs font-bold uppercase tracking-[0.24em]">Admin details</span>
@@ -5372,15 +6621,15 @@ function ReservedStack({ courtId }: { courtId: string }) {
               onDragStart={(event) => {
                 event.dataTransfer.setData("text/player-id", player!.id);
               }}
-              className="rounded-2xl bg-white/60 px-3 py-2 cursor-grab active:cursor-grabbing hover:bg-white/80 transition"
+              className="rounded-2xl bg-white/10 px-3 py-2 cursor-grab active:cursor-grabbing hover:bg-white/15 border border-white/5 transition"
             >
-              <p className="font-semibold text-forest leading-none">{player!.displayName.split(" ")[0]}</p>
+              <p className="font-semibold text-ivory leading-none">{(player?.displayName || "Player").split(" ")[0]}</p>
               <RankBadge skillLevel={player!.skillLevel} compact />
             </div>
           ))}
         </div>
       ) : (
-        <p className="mt-3 text-sm text-forest/75">Held without assigned players.</p>
+        <p className="mt-3 text-sm text-linen/75">Reserved game — drag players here or tap Assign stack, then Start Match.</p>
       )}
     </div>
   );

@@ -47,12 +47,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (await prisma.user.findUnique({ where: { email } })) {
       return res.status(409).json({ error: "An account already exists for this email." });
     }
-    const adminEmail = (process.env.INITIAL_ADMIN_EMAIL ?? "gianaibo.dev@gmail.com").toLowerCase();
+    const adminEmail = process.env.INITIAL_ADMIN_EMAIL ? process.env.INITIAL_ADMIN_EMAIL.trim().toLowerCase() : null;
     const user = await prisma.user.create({
       data: {
         email,
         passwordHash: hashPassword(password),
-        role: email === adminEmail ? "ADMIN" : "MEMBER",
+        role: (adminEmail && email === adminEmail) ? "ADMIN" : "MEMBER",
         player: {
           create: {
             displayName,

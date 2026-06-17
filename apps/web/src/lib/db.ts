@@ -1,5 +1,6 @@
 import Dexie, { type Table } from "dexie";
 import type { Court, Match, Player, Session, Reservation, Transaction } from "./types";
+import { generateId } from "./utils";
 
 export type SyncQueueItem = {
   id: string;
@@ -89,15 +90,17 @@ export function getDeviceId() {
   const key = "haff-device-id";
   const existing = localStorage.getItem(key);
   if (existing) return existing;
-  const id = crypto.randomUUID();
+  const id = generateId();
   localStorage.setItem(key, id);
   return id;
 }
 
 
-export const seedCourts: Court[] = [1, 2, 3, 4].map((number) => ({
+export const seedCourts: Court[] = [1, 2, 3].map((number) => ({
   id: `court-${number}`,
   name: `Court ${number}`,
   number,
+  priority: number,
+  reservable: true,
   status: "Available"
 }));

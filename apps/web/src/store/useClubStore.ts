@@ -1,11 +1,294 @@
 import { create } from "zustand";
 import { db, getDeviceId, seedCourts } from "../lib/db";
 import { playSound, speakAnnouncement } from "../lib/sound";
-import { todayKey } from "../lib/utils";
-import type { Court, Match, Player, Toast, Session, Reservation, Transaction, Testimonial, Achievement, Announcement } from "../lib/types";
+import { todayKey, generateId, sortCourts, reconcileCourtsWithMatches, reconcileStackOrder, mergeSharedMatches, stripUnauthorizedCheckIns, resolveAuthorizedCheckInIds, splitStackGroups, flattenStackGroups } from "../lib/utils";
+import {
+  mergeKudosById,
+  mergeReviewsByKey,
+  migrateLegacyKudos,
+  parseMatchReviews,
+  parsePlayerKudos,
+  type MatchReviewRecord,
+  type PlayerKudosEntry
+} from "../lib/playerKudos";
+import type { Court, Match, Player, Toast, Session, Reservation, Transaction, Testimonial, Achievement, Announcement, TvBroadcast } from "../lib/types";
 
 let suppressSharedPublishUntil = 0;
 let suppressSharedRefreshUntil = 0;
+
+const clubStateBroadcast =
+  typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("haff-club-state-v1") : null;
+
+export function subscribeClubStateBroadcast(
+  onRefresh: () => void,
+  onStackOrder?: (stackOrder: string[]) => void,
+  onPlayerProfiles?: (profiles: PlayerProfileSnapshot[]) => void,
+  onTvBroadcast?: (broadcast: TvBroadcast) => void
+) {
+  if (!clubStateBroadcast) return () => {};
+  const handler = (event: MessageEvent) => {
+    if (event.data?.type === "state-published") {
+      if (Date.now() < suppressSharedRefreshUntil) return;
+      if (Array.isArray(event.data.stackOrder) && onStackOrder) {
+        onStackOrder(event.data.stackOrder.map(String));
+      }
+      if (Array.isArray(event.data.playerProfiles) && onPlayerProfiles) {
+        onPlayerProfiles(event.data.playerProfiles as PlayerProfileSnapshot[]);
+      }
+      onRefresh();
+    }
+    if (event.data?.type === "tv-broadcast" && event.data.broadcast && onTvBroadcast) {
+      onTvBroadcast(event.data.broadcast as TvBroadcast);
+    }
+  };
+  clubStateBroadcast.addEventListener("message", handler);
+  return () => clubStateBroadcast.removeEventListener("message", handler);
+}
+
+type PlayerProfileSnapshot = {
+  id: string;
+  displayName: string;
+  avatarUrl?: string | null;
+  skillLevel: string;
+  statusNote?: string | null;
+};
+
+function parseTvBroadcast(value: unknown): TvBroadcast | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Record<string, unknown>;
+  if (typeof item.id !== "string" || typeof item.kind !== "string" || typeof item.createdAt !== "string") {
+    return null;
+  }
+  if (!["message", "court", "overtime"].includes(item.kind)) return null;
+  return {
+    id: item.id,
+    kind: item.kind as TvBroadcast["kind"],
+    createdAt: item.createdAt,
+    message: typeof item.message === "string" ? item.message : undefined,
+    courtId: typeof item.courtId === "string" ? item.courtId : undefined,
+    courtName: typeof item.courtName === "string" ? item.courtName : undefined,
+    participantIds: Array.isArray(item.participantIds) ? item.participantIds.map(String) : undefined,
+    variant: item.variant === "reserved" ? "reserved" : item.variant === "active" ? "active" : undefined
+  };
+}
+
+function playerProfileSignature(players: Player[]) {
+  return players.map(({ id, displayName, avatarUrl, skillLevel, statusNote, checkedIn, parked }) => [
+    id,
+    displayName,
+    avatarUrl ?? "",
+    skillLevel,
+    statusNote ?? "",
+    checkedIn,
+    Boolean(parked)
+  ]);
+}
+
+function reservationSignature(reservations: Reservation[]) {
+  return reservations
+    .map((reservation) => [
+      reservation.id,
+      reservation.status,
+      reservation.courtId,
+      reservation.startTime,
+      reservation.endTime,
+      reservation.hostPlayerId,
+      reservation.hostDisplayName ?? "",
+      reservation.notes ?? "",
+      reservation.title ?? ""
+    ])
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+}
+
+function mergeReservations(local: Reservation[], remote: Reservation[]) {
+  const byId = new Map<string, Reservation>();
+  for (const reservation of local) byId.set(reservation.id, reservation);
+  for (const reservation of remote) byId.set(reservation.id, reservation);
+  return Array.from(byId.values()).sort(
+    (a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
+  );
+}
+
+function mapServerPlayerToClient(server: Record<string, unknown>, local?: Player): Player {
+  const lastPlayed =
+    server.lastPlayedDate instanceof Date
+      ? server.lastPlayedDate.toISOString()
+      : typeof server.lastPlayedDate === "string"
+        ? server.lastPlayedDate
+        : local?.lastPlayedDate;
+
+  return {
+    id: String(server.id),
+    displayName: String(server.displayName ?? local?.displayName ?? "Player"),
+    fullName: typeof server.fullName === "string" ? server.fullName : local?.fullName,
+    skillLevel: normalizeSkillLevel(String(server.skillLevel ?? local?.skillLevel ?? "Beginner")),
+    rating: typeof server.rating === "number" ? server.rating : local?.rating ?? 2,
+    tags: Array.isArray(server.tags) ? server.tags.map(String) : local?.tags ?? [],
+    checkedIn: local?.checkedIn ?? false,
+    parked: local?.parked ?? false,
+    totalGamesPlayed:
+      typeof server.totalGamesPlayed === "number" ? server.totalGamesPlayed : local?.totalGamesPlayed ?? 0,
+    totalDaysPlayed:
+      typeof server.totalDaysPlayed === "number" ? server.totalDaysPlayed : local?.totalDaysPlayed ?? 0,
+    lastPlayedDate: lastPlayed,
+    isActive: server.status === "Inactive" ? false : local?.isActive ?? true,
+    notes: local?.notes,
+    phoneNumber:
+      typeof server.phone === "string"
+        ? server.phone
+        : typeof server.phoneNumber === "string"
+          ? server.phoneNumber
+          : local?.phoneNumber,
+    accessCode: local?.accessCode,
+    emergencyNote: local?.emergencyNote,
+    preferredPlayStyle: local?.preferredPlayStyle,
+    avatarUrl:
+      typeof server.avatarUrl === "string" && server.avatarUrl.length > 0
+        ? server.avatarUrl
+        : local?.avatarUrl,
+    statusNote: local?.statusNote,
+    version: typeof server.version === "number" ? server.version : local?.version
+  };
+}
+
+function mergePlayersFromServer(localPlayers: Player[], serverPlayers: Record<string, unknown>[]) {
+  const localById = new Map(localPlayers.map((player) => [player.id, player]));
+  const merged = serverPlayers.map((serverPlayer) =>
+    mapServerPlayerToClient(serverPlayer, localById.get(String(serverPlayer.id)))
+  );
+  for (const localPlayer of localPlayers) {
+    if (!merged.some((player) => player.id === localPlayer.id)) {
+      merged.push(localPlayer);
+    }
+  }
+  return merged;
+}
+
+function mergeCourtsFromServer(localCourts: Court[], serverCourts: Record<string, unknown>[]): Court[] {
+  const localById = new Map(localCourts.map((court) => [court.id, court]));
+  const merged: Court[] = serverCourts.map((serverCourt, index) => {
+    const id = String(serverCourt.id);
+    const local = localById.get(id);
+    const number = Number(serverCourt.number ?? local?.number ?? index + 1);
+    return {
+      id,
+      name: String(serverCourt.name ?? local?.name ?? `Court ${number}`),
+      number,
+      priority: number,
+      reservable: local?.reservable ?? true,
+      status: (local?.status ?? String(serverCourt.status ?? "Available")) as Court["status"],
+      currentMatchId: local?.currentMatchId,
+      reservedFor: local?.reservedFor,
+      reservedPlayerIds: local?.reservedPlayerIds,
+      version: local?.version
+    };
+  });
+  for (const localCourt of localCourts) {
+    if (!merged.some((court) => court.id === localCourt.id)) {
+      merged.push({
+        ...localCourt,
+        priority: localCourt.number ?? localCourt.priority ?? 0,
+        reservable: localCourt.reservable ?? true
+      });
+    }
+  }
+  return sortCourts(merged).slice(0, MAX_COURTS);
+}
+
+const MAX_COURTS = 3;
+
+async function enforceCourtLimit(courts: Court[]): Promise<Court[]> {
+  const sorted = sortCourts(courts);
+  if (sorted.length <= MAX_COURTS) return sorted;
+  const keep = sorted.slice(0, MAX_COURTS);
+  const remove = sorted.slice(MAX_COURTS);
+  for (const court of remove) {
+    await db.courts.delete(court.id);
+    await db.syncQueue.where("entityId").equals(court.id).delete();
+  }
+  return keep;
+}
+
+function playerFromProfile(
+  profile: PlayerProfileSnapshot,
+  checkedIn: boolean,
+  parked: boolean
+): Player {
+  return {
+    id: profile.id,
+    displayName: profile.displayName,
+    skillLevel: normalizeSkillLevel(profile.skillLevel),
+    avatarUrl: profile.avatarUrl && profile.avatarUrl.length > 0 ? profile.avatarUrl : undefined,
+    statusNote: profile.statusNote ? profile.statusNote : undefined,
+    tags: [],
+    checkedIn,
+    parked,
+    totalGamesPlayed: 0,
+    totalDaysPlayed: 0,
+    rating: 2.0
+  };
+}
+
+function mergeSharedPlayerRoster(
+  players: Player[],
+  profiles: PlayerProfileSnapshot[],
+  checkedInIds: Set<string>,
+  parkedIds: Set<string>,
+  stackedIds: Set<string>,
+  matches: Match[]
+): Player[] {
+  const byId = new Map<string, Player>();
+
+  for (const player of players) {
+    const checkedIn = checkedInIds.has(player.id);
+    byId.set(player.id, {
+      ...player,
+      checkedIn,
+      parked: checkedIn && parkedIds.has(player.id)
+    });
+  }
+
+  for (const profile of profiles) {
+    const checkedIn = checkedInIds.has(profile.id);
+    const parked = checkedIn && parkedIds.has(profile.id);
+    const existing = byId.get(profile.id);
+    if (existing) {
+      byId.set(profile.id, {
+        ...existing,
+        displayName: profile.displayName || existing.displayName,
+        avatarUrl: profile.avatarUrl && profile.avatarUrl.length > 0 ? profile.avatarUrl : existing.avatarUrl,
+        skillLevel: normalizeSkillLevel(profile.skillLevel || existing.skillLevel),
+        statusNote: profile.statusNote !== undefined && profile.statusNote !== null
+          ? (profile.statusNote || undefined)
+          : existing.statusNote,
+        checkedIn,
+        parked
+      });
+    } else {
+      byId.set(profile.id, playerFromProfile(profile, checkedIn, parked));
+    }
+  }
+
+  for (const match of matches) {
+    if (match.status !== "InProgress") continue;
+    for (const id of [...match.teamAPlayerIds, ...match.teamBPlayerIds]) {
+      if (id === "vacant" || id.startsWith("vacant") || byId.has(id)) continue;
+      byId.set(id, {
+        id,
+        displayName: "Player",
+        skillLevel: "Beginner",
+        rating: 2,
+        tags: [],
+        checkedIn: true,
+        parked: false,
+        totalGamesPlayed: 0,
+        totalDaysPlayed: 0
+      });
+    }
+  }
+
+  return Array.from(byId.values());
+}
 
 type ViewMode = "landing" | "admin" | "player" | "parking" | "tv" | "calendar" | "finance" | "community";
 
@@ -18,13 +301,17 @@ type ClubState = {
   stackOrder: string[];
   toasts: Toast[];
   view: ViewMode;
+  returnFromTvView: ViewMode | null;
   online: boolean;
   pendingSyncCount: number;
   hydrated: boolean;
   matchDurationMinutes: number;
   clubStatus: string;
+  tvBroadcast: TvBroadcast | null;
   reservations: Reservation[];
   transactions: Transaction[];
+  playerKudos: PlayerKudosEntry[];
+  matchReviews: MatchReviewRecord[];
   testimonials: Testimonial[];
   announcements: Announcement[];
   achievements: Achievement[];
@@ -32,6 +319,7 @@ type ClubState = {
   showBillboard: (courtName: string, players: Array<{ displayName: string; avatarUrl?: string; skillLevel: string }>) => void;
   clearBillboard: () => void;
   setView: (view: ViewMode) => void;
+  goBackFromTv: () => void;
   setMatchDurationMinutes: (minutes: number) => void;
   setClubStatus: (status: string) => void;
   hydrate: () => Promise<void>;
@@ -40,22 +328,31 @@ type ClubState = {
   processSyncQueue: () => Promise<void>;
   refreshSharedState: () => Promise<void>;
   publishSharedState: () => Promise<void>;
+  broadcastTvAnnouncement: (broadcast: Omit<TvBroadcast, "id" | "createdAt">) => Promise<void>;
+  applyBroadcastPlayerProfiles: (profiles: PlayerProfileSnapshot[]) => void;
 
   // Reservation Actions
   addReservation: (reservation: Omit<Reservation, "id">) => Promise<void>;
+  updateReservation: (id: string, patch: Partial<Reservation>) => Promise<void>;
+  approveReservation: (id: string) => Promise<void>;
+  rejectReservation: (id: string, reason?: string) => Promise<void>;
   cancelReservation: (id: string, reason?: string) => Promise<void>;
 
   // Transaction Actions
   addTransaction: (transaction: Omit<Transaction, "id" | "status" | "timestamp">) => Promise<void>;
   completeTransaction: (id: string) => Promise<void>;
   voidTransaction: (id: string, reason: string) => Promise<void>;
+  deleteTransaction: (id: string) => Promise<void>;
 
   // Player Actions
   checkIn: (playerId: string, autoLog?: boolean, byAdmin?: boolean) => Promise<void>;
   checkOut: (playerId: string) => Promise<void>;
   checkOutAll: () => Promise<void>;
   setPlayerParked: (playerId: string, parked: boolean) => Promise<void>;
-  movePlayerToIndex: (playerId: string, targetIndex: number) => Promise<void>;
+  movePlayerToIndex: (playerId: string, targetIndex: number, byAdmin?: boolean) => Promise<void>;
+  moveStackToIndex: (fromGroupIndex: number, toGroupIndex: number) => Promise<void>;
+  addEmptyStack: () => Promise<void>;
+  setStackSlotKind: (slotIndex: number, kind: "vacant" | "reserved") => Promise<void>;
   addPlayer: (player: Omit<Player, "id" | "totalGamesPlayed" | "totalDaysPlayed">) => Promise<void>;
   updatePlayer: (player: Player) => Promise<void>;
   deletePlayer: (playerId: string) => Promise<void>;
@@ -64,6 +361,7 @@ type ClubState = {
   addCourt: (court: Omit<Court, "id" | "status" | "currentMatchId" | "reservedFor" | "reservedPlayerIds">) => Promise<void>;
   updateCourt: (court: Court) => Promise<void>;
   deleteCourt: (courtId: string) => Promise<void>;
+  reorderCourts: (courtId: string, targetIndex: number) => Promise<void>;
 
   // Session Actions
   addSession: (session: Omit<Session, "id">) => Promise<void>;
@@ -81,11 +379,20 @@ type ClubState = {
   clearCourt: (courtId: string) => Promise<void>;
   finishCourt: (courtId: string) => Promise<void>;
   updateMatchScores: (matchId: string, scoreA: number, scoreB: number) => Promise<void>;
+  submitMatchFeedback: (
+    matchId: string,
+    reviewerId: string,
+    reviewerName: string,
+    scoreA: number,
+    scoreB: number,
+    recommendations: Record<string, { pills: string[]; note?: string }>
+  ) => Promise<void>;
   assignPlayerToCourt: (playerId: string, courtId: string) => Promise<void>;
   removePlayerFromCourt: (playerId: string) => Promise<void>;
   joinActiveMatch: (playerId: string, courtId: string) => Promise<void>;
   dismissToast: (id: string) => void;
   suppressRefresh: (ms?: number) => void;
+  isRefreshSuppressed: () => boolean;
   addTestimonial: (quote: string, rating: number, displayName: string) => Promise<void>;
   deleteTestimonial: (id: string) => Promise<void>;
   addAnnouncement: (title: string, content: string) => Promise<void>;
@@ -93,6 +400,35 @@ type ClubState = {
   addAchievement: (title: string, value: string, desc: string) => Promise<void>;
   deleteAchievement: (id: string) => Promise<void>;
   seedDemoPlayers: () => Promise<void>;
+};
+
+const getInitialMatchReviews = (): MatchReviewRecord[] => {
+  try {
+    const saved = localStorage.getItem("haff-match-reviews-v2");
+    if (saved) return parseMatchReviews(JSON.parse(saved));
+  } catch {
+    // ignore
+  }
+  return [];
+};
+
+const getInitialPlayerKudos = (): PlayerKudosEntry[] => {
+  try {
+    const saved = localStorage.getItem("haff-player-kudos");
+    if (saved) return parsePlayerKudos(JSON.parse(saved));
+  } catch {
+    // ignore
+  }
+  return migrateLegacyKudos();
+};
+
+const persistKudosLocal = (playerKudos: PlayerKudosEntry[], matchReviews: MatchReviewRecord[]) => {
+  try {
+    localStorage.setItem("haff-player-kudos", JSON.stringify(playerKudos));
+    localStorage.setItem("haff-match-reviews-v2", JSON.stringify(matchReviews));
+  } catch {
+    // ignore quota errors
+  }
 };
 
 const getInitialTestimonials = () => {
@@ -137,6 +473,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
   sessions: [],
   reservations: [],
   transactions: [],
+  playerKudos: getInitialPlayerKudos(),
+  matchReviews: getInitialMatchReviews(),
   testimonials: getInitialTestimonials(),
   announcements: getInitialAnnouncements(),
   achievements: getInitialAchievements(),
@@ -164,14 +502,25 @@ export const useClubStore = create<ClubState>((set, get) => ({
     if (hash === "schedule" || hash === "reservation") return "calendar";
     return "landing";
   })() as ViewMode,
+  returnFromTvView: null,
   online: navigator.onLine,
   pendingSyncCount: 0,
   hydrated: false,
   matchDurationMinutes: Number(localStorage.getItem("haff-match-duration-minutes") ?? 12),
   clubStatus: localStorage.getItem("haff-club-status") ?? "",
+  tvBroadcast: null,
   setView: (view) => {
+    const current = get().view;
+    if (current === view) return;
     window.history.pushState(null, "", view === "landing" ? "/home" : `/${view}`);
-    set({ view });
+    set({
+      view,
+      returnFromTvView: view === "tv" ? current : get().returnFromTvView
+    });
+  },
+  goBackFromTv: () => {
+    const returnView = get().returnFromTvView;
+    get().setView(returnView && returnView !== "tv" ? returnView : "landing");
   },
   setMatchDurationMinutes: (minutes) => {
     const next = Math.max(5, Math.min(45, Math.round(minutes)));
@@ -204,17 +553,37 @@ export const useClubStore = create<ClubState>((set, get) => ({
       db.transactions.toArray(),
     ]);
 
-    const players = rawPlayers.map((player) => ({
-      ...player,
-      skillLevel: normalizeSkillLevel(player.skillLevel),
-      parked: player.parked ?? false
-    }));
-    const courts = rawCourts.map((court) =>
-      court.status === "InUse" && !court.currentMatchId ? { ...court, status: "Available" as const } : court
+    const players = stripUnauthorizedCheckIns(
+      rawPlayers.map((player) => ({
+        ...player,
+        skillLevel: normalizeSkillLevel(player.skillLevel),
+        parked: player.parked ?? false
+      })),
+      matches
     );
-    const reservations = rawReservations.map((r) =>
-      r.paymentStatus === "Pending" ? { ...r, paymentStatus: "Paid" as const } : r
+    const normalizedCourts = await enforceCourtLimit(
+      rawCourts.map((court, index) => {
+        const number = court.number ?? index + 1;
+        return {
+          ...court,
+          number,
+          priority: number,
+          reservable: court.reservable ?? true,
+          status: court.status === "InUse" && !court.currentMatchId ? "Available" as const : court.status
+        };
+      })
     );
+    if (normalizedCourts.length !== rawCourts.length) {
+      await db.courts.bulkPut(normalizedCourts);
+    }
+    const courts = normalizedCourts;
+    const reservations = rawReservations.map((r) => {
+      const paymentStatus = r.paymentStatus === "Pending" ? "Paid" as const : r.paymentStatus;
+      const hostDisplayName = r.hostDisplayName
+        ?? players.find((player) => player.id === r.hostPlayerId)?.displayName
+        ?? (r.hostPlayerId === "admin" ? "Admin" : undefined);
+      return hostDisplayName ? { ...r, paymentStatus, hostDisplayName } : { ...r, paymentStatus };
+    });
     const transactions = rawTransactions.map((t) =>
       t.status === "Pending" ? { ...t, status: "Success" as const } : t
     );
@@ -256,6 +625,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
       stackOrder,
       pendingSyncCount,
       clubStatus: localStorage.getItem("haff-club-status") ?? "",
+      playerKudos: getInitialPlayerKudos(),
+      matchReviews: getInitialMatchReviews(),
       hydrated: true
     });
 
@@ -280,15 +651,20 @@ export const useClubStore = create<ClubState>((set, get) => ({
             const response = await resPlayers.json();
             const serverPlayers = Array.isArray(response) ? response : response.players;
             if (Array.isArray(serverPlayers)) {
-              updates.push(db.players.clear().then(() => serverPlayers.length > 0 ? db.players.bulkPut(serverPlayers) : Promise.resolve()));
-              get().players; // trigger re-read below
+              updates.push((async () => {
+                const mergedPlayers = mergePlayersFromServer(players, serverPlayers as Record<string, unknown>[]);
+                await db.players.bulkPut(mergedPlayers);
+              })());
             }
           }
           if (resCourts.ok) {
             const response = await resCourts.json();
             const serverCourts = Array.isArray(response) ? response : response.courts;
             if (Array.isArray(serverCourts) && serverCourts.length > 0) {
-              updates.push(db.courts.bulkPut(serverCourts));
+              updates.push((async () => {
+                const mergedCourts = mergeCourtsFromServer(courts, serverCourts as Record<string, unknown>[]);
+                await db.courts.bulkPut(mergedCourts);
+              })());
             }
           }
           if (updates.length > 0) {
@@ -329,64 +705,194 @@ export const useClubStore = create<ClubState>((set, get) => ({
     } catch {
       return;
     }
-    const checkedInIds = new Set<string>(shared.checkedInPlayerIds ?? []);
-    const parkedIds = new Set<string>(shared.parkedPlayerIds ?? []);
-    const players = get().players.map((player) => ({
-      ...player,
-      checkedIn: checkedInIds.has(player.id),
-      parked: checkedInIds.has(player.id) && parkedIds.has(player.id)
-    }));
-    const stackOrder = reconcileStackOrder(
-      Array.isArray(shared.stackOrder) ? shared.stackOrder : [],
-      players,
-      Array.isArray(shared.matches) ? shared.matches : get().matches,
-      Array.isArray(shared.courts) ? shared.courts : get().courts
+    const checkedInIds = resolveAuthorizedCheckInIds(
+      shared.checkedInPlayerIds ?? [],
+      Array.isArray(shared.adminCheckedInIds) ? shared.adminCheckedInIds.map(String) : undefined,
+      get().players,
+      Array.isArray(shared.matches) ? shared.matches : get().matches
     );
-    const courts = Array.isArray(shared.courts) && shared.courts.length > 0 ? shared.courts : get().courts;
-    const matches = Array.isArray(shared.matches) ? shared.matches : get().matches;
+    const parkedIds = new Set<string>(
+      (shared.parkedPlayerIds ?? []).map(String).filter((id: string) => checkedInIds.has(id))
+    );
+    const incomingStack = Array.isArray(shared.stackOrder) ? shared.stackOrder : get().stackOrder;
+    const stackedPlayerIds = new Set<string>(
+      incomingStack.filter((id: string) => id !== "vacant").map(String)
+    );
+    let players = mergeSharedPlayerRoster(
+      get().players,
+      Array.isArray(shared.playerProfiles) ? shared.playerProfiles : [],
+      checkedInIds,
+      parkedIds,
+      stackedPlayerIds,
+      Array.isArray(shared.matches) ? shared.matches : get().matches
+    );
+    const rawCourts = Array.isArray(shared.courts) && shared.courts.length > 0 ? shared.courts : get().courts;
+    const matches = Array.isArray(shared.matches)
+      ? mergeSharedMatches(get().matches, shared.matches as Match[])
+      : get().matches;
+    players = stripUnauthorizedCheckIns(players, matches);
+    const courts = reconcileCourtsWithMatches(rawCourts, matches);
+    const stackOrder = reconcileStackOrder(incomingStack, players, matches, courts);
+    const remoteReservations = Array.isArray(shared.reservations) ? (shared.reservations as Reservation[]) : [];
+    const reservations = remoteReservations.length > 0
+      ? mergeReservations(get().reservations, remoteReservations)
+      : get().reservations;
+    const remoteKudos = parsePlayerKudos(shared.playerKudos);
+    const playerKudos = remoteKudos.length > 0
+      ? mergeKudosById(get().playerKudos, remoteKudos)
+      : get().playerKudos;
+    const remoteReviews = parseMatchReviews(shared.matchReviews);
+    const matchReviews = remoteReviews.length > 0
+      ? mergeReviewsByKey(get().matchReviews, remoteReviews)
+      : get().matchReviews;
     const currentSignature = JSON.stringify({
-      players: get().players.map(({ id, checkedIn, parked }) => [id, checkedIn, Boolean(parked)]),
+      players: playerProfileSignature(get().players),
       courts: get().courts,
       matches: get().matches,
-      stackOrder: get().stackOrder
+      stackOrder: get().stackOrder,
+      reservations: reservationSignature(get().reservations),
+      playerKudos: get().playerKudos.length,
+      matchReviews: get().matchReviews.length
     });
     const nextSignature = JSON.stringify({
-      players: players.map(({ id, checkedIn, parked }) => [id, checkedIn, Boolean(parked)]),
+      players: playerProfileSignature(players),
       courts,
       matches,
-      stackOrder
+      stackOrder,
+      reservations: reservationSignature(reservations),
+      playerKudos: playerKudos.length,
+      matchReviews: matchReviews.length
     });
-    if (currentSignature === nextSignature) return;
+    const incomingTvBroadcast = parseTvBroadcast(shared.tvBroadcast);
+    const broadcastChanged = Boolean(
+      incomingTvBroadcast && incomingTvBroadcast.id !== get().tvBroadcast?.id
+    );
+    if (currentSignature === nextSignature) {
+      if (broadcastChanged && incomingTvBroadcast) {
+        set({ tvBroadcast: incomingTvBroadcast });
+      }
+      return;
+    }
+    if (Date.now() < suppressSharedRefreshUntil) return;
     await db.players.bulkPut(players);
     if (Array.isArray(shared.courts) && shared.courts.length > 0) await db.courts.bulkPut(courts);
     if (Array.isArray(shared.matches)) {
       await db.matches.clear();
       if (matches.length > 0) await db.matches.bulkPut(matches);
     }
+    if (remoteReservations.length > 0) await db.reservations.bulkPut(reservations);
+    persistKudosLocal(playerKudos, matchReviews);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     suppressSharedPublishUntil = Date.now() + 750;
-    set({ players, courts, matches, stackOrder });
+    set({
+      players,
+      courts,
+      matches,
+      stackOrder,
+      reservations,
+      playerKudos,
+      matchReviews,
+      ...(broadcastChanged && incomingTvBroadcast ? { tvBroadcast: incomingTvBroadcast } : {})
+    });
+  },
+  applyBroadcastPlayerProfiles: (profiles) => {
+    if (!profiles.length) return;
+    const state = get();
+    const checkedInIds = new Set(state.players.filter((player) => player.checkedIn).map((player) => player.id));
+    const parkedIds = new Set(state.players.filter((player) => player.parked).map((player) => player.id));
+    const stackedIds = new Set(state.stackOrder.filter((id) => id !== "vacant"));
+    const players = mergeSharedPlayerRoster(
+      state.players,
+      profiles,
+      checkedInIds,
+      parkedIds,
+      stackedIds,
+      state.matches
+    );
+    if (playerProfileSignature(players) === playerProfileSignature(state.players)) return;
+    void db.players.bulkPut(players);
+    set({ players });
   },
   publishSharedState: async () => {
     if (Date.now() < suppressSharedPublishUntil) return;
-    suppressSharedRefreshUntil = Date.now() + 2500;
+    // Extend suppress only if it would shrink the existing window (e.g. finishCourt sets 6s).
+    if (suppressSharedRefreshUntil < Date.now() + 2500) suppressSharedRefreshUntil = Date.now() + 2500;
 
     const state = get();
-    fetch("/api/club-state", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: state.currentSessionId,
-        checkedInPlayerIds: state.players.filter((player) => player.checkedIn).map((player) => player.id),
-        parkedPlayerIds: state.players.filter((player) => player.checkedIn && player.parked).map((player) => player.id),
+    try {
+      await fetch("/api/club-state", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: state.currentSessionId,
+          checkedInPlayerIds: state.players.filter((player) => player.checkedIn).map((player) => player.id),
+          adminCheckedInIds: state.players
+            .filter((player) => player.checkedIn && player.tags?.includes("AdminCheckedIn"))
+            .map((player) => player.id),
+          parkedPlayerIds: state.players.filter((player) => player.checkedIn && player.parked).map((player) => player.id),
+          stackOrder: state.stackOrder,
+          courts: state.courts,
+          matches: state.matches,
+          reservations: state.reservations,
+          playerProfiles: state.players.map((player) => ({
+            id: player.id,
+            displayName: player.displayName,
+            avatarUrl: player.avatarUrl ?? null,
+            skillLevel: player.skillLevel,
+            statusNote: player.statusNote ?? null
+          })),
+          playerKudos: state.playerKudos,
+          matchReviews: state.matchReviews
+        })
+      });
+      clubStateBroadcast?.postMessage({
+        type: "state-published",
+        at: Date.now(),
         stackOrder: state.stackOrder,
-        courts: state.courts,
-        matches: state.matches
-      })
-    }).catch(() => {
+        playerProfiles: state.players.map((player) => ({
+          id: player.id,
+          displayName: player.displayName,
+          avatarUrl: player.avatarUrl ?? null,
+          skillLevel: player.skillLevel,
+          statusNote: player.statusNote ?? null
+        }))
+      });
+      // Again, only extend — never shrink an existing longer suppress window.
+      if (suppressSharedRefreshUntil < Date.now() + 4000) suppressSharedRefreshUntil = Date.now() + 4000;
+    } catch {
       // Local state remains authoritative until the next successful sync.
-    });
+    }
+  },
+  broadcastTvAnnouncement: async (broadcast) => {
+    const payload: TvBroadcast = {
+      id: generateId(),
+      createdAt: new Date().toISOString(),
+      ...broadcast
+    };
+    const sessionId = get().currentSessionId;
+    if (!sessionId) {
+      pushToast(set, "Broadcast failed", "No active session is selected.", "system");
+      return;
+    }
+    try {
+      const response = await fetch("/api/club-state", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId,
+          broadcastOnly: true,
+          tvBroadcast: payload
+        })
+      });
+      if (!response.ok) throw new Error("broadcast failed");
+    } catch {
+      pushToast(set, "Broadcast failed", "Could not reach the TV display sync server.", "system");
+      return;
+    }
+    set({ tvBroadcast: payload });
+    clubStateBroadcast?.postMessage({ type: "tv-broadcast", broadcast: payload, at: Date.now() });
   },
   processSyncQueue: async () => {
     if (!get().online) return;
@@ -446,20 +952,27 @@ export const useClubStore = create<ClubState>((set, get) => ({
 
   // Player Actions
   checkIn: async (playerId, autoLog = true, byAdmin = false) => {
+    get().suppressRefresh(6000);
     const existingPlayer = get().players.find((player) => player.id === playerId);
     if (!existingPlayer || existingPlayer.checkedIn) return;
     const newTags = byAdmin 
       ? [...(existingPlayer.tags ?? []).filter(t => t !== "AdminCheckedIn"), "AdminCheckedIn"]
       : (existingPlayer.tags ?? []).filter(t => t !== "AdminCheckedIn");
+    // Admin check-ins go straight into rotation (parked=false).
+    // Self check-ins stay parked until payment is cleared.
+    const parked = !byAdmin;
     const players = get().players.map((player) =>
-      player.id === playerId ? { ...player, checkedIn: true, parked: true, tags: newTags } : player
+      player.id === playerId ? { ...player, checkedIn: true, parked, tags: newTags } : player
     );
     const player = players.find((item) => item.id === playerId);
     if (!player) return;
     await db.players.put(player);
     await queue("CHECK_IN_PLAYER", "Player", player.id, player);
     playSound("checkin");
-    pushToast(set, "Player cleared for parking", `${player.displayName} is checked in${autoLog ? " and paid" : ""}.`, "fun");
+    const toastMsg = byAdmin
+      ? `${player.displayName} is checked in${autoLog ? " and paid" : ""} — added to rotation.`
+      : `${player.displayName} is checked in${autoLog ? " and paid" : ""}.`;
+    pushToast(set, byAdmin ? "Player added to rotation" : "Player cleared for parking", toastMsg, "fun");
 
     // Also update current session's checked-in list if there is an active session
     const currentSessionId = get().currentSessionId;
@@ -478,9 +991,14 @@ export const useClubStore = create<ClubState>((set, get) => ({
       }
     }
 
-    const stackOrder = reconcileStackOrder(get().stackOrder, players, get().matches, get().courts);
+    // If admin check-in, append to end of stack so the player is immediately eligible.
+    const baseOrder = !parked
+      ? [...get().stackOrder.filter(id => id !== playerId), playerId]
+      : get().stackOrder;
+    const stackOrder = reconcileStackOrder(baseOrder, players, get().matches, get().courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ players, stackOrder });
+    await get().publishSharedState();
 
     if (autoLog) {
       await get().addTransaction({
@@ -490,9 +1008,9 @@ export const useClubStore = create<ClubState>((set, get) => ({
         paymentMethod: "Cash"
       });
     }
-    await get().publishSharedState();
   },
   checkOut: async (playerId) => {
+    get().suppressRefresh(6000);
     const players = get().players.map((player) =>
       player.id === playerId 
         ? { 
@@ -526,12 +1044,14 @@ export const useClubStore = create<ClubState>((set, get) => ({
       }
     }
 
-    const stackOrder = reconcileStackOrder(get().stackOrder, players, get().matches, get().courts);
+    const baseOrder = get().stackOrder.filter((id) => id !== playerId);
+    const stackOrder = reconcileStackOrder(baseOrder, players, get().matches, get().courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ players, stackOrder });
     await get().publishSharedState();
   },
   checkOutAll: async () => {
+    get().suppressRefresh(6000);
     const state = get();
     const checkedInPlayers = state.players.filter(p => p.checkedIn);
     if (checkedInPlayers.length === 0) return;
@@ -567,12 +1087,15 @@ export const useClubStore = create<ClubState>((set, get) => ({
       }
     }
 
-    const stackOrder = reconcileStackOrder(state.stackOrder, players, state.matches, state.courts);
+    const checkedOutIds = new Set(checkedInPlayers.map((p) => p.id));
+    const baseOrder = state.stackOrder.filter((id) => !checkedOutIds.has(id));
+    const stackOrder = reconcileStackOrder(baseOrder, players, state.matches, state.courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ players, stackOrder });
     await get().publishSharedState();
   },
   setPlayerParked: async (playerId, parked) => {
+    get().suppressRefresh(6000);
     const players = get().players.map((player) =>
       player.id === playerId ? { ...player, parked } : player
     );
@@ -598,7 +1121,11 @@ export const useClubStore = create<ClubState>((set, get) => ({
     set({ players, stackOrder });
     await get().publishSharedState();
   },
-  movePlayerToIndex: async (playerId: string, targetIndex: number) => {
+  movePlayerToIndex: async (playerId: string, targetIndex: number, byAdmin = false) => {
+    if (!byAdmin) {
+      pushToast(set, "Staff only", "Only admins can change the queue order.", "system");
+      return;
+    }
     // If player is on a court or playing, free them first
     const stateBefore = get();
     const isReserved = stateBefore.courts.some(c => c.reservedPlayerIds?.includes(playerId));
@@ -641,10 +1168,21 @@ export const useClubStore = create<ClubState>((set, get) => ({
         updatedPlayersList = state.players.map((p) => p.id === playerId ? updatedPlayer : p);
         set({ players: updatedPlayersList });
       }
-      currentOrder.splice(targetIndex, 0, playerId);
+      if (targetIndex < currentOrder.length && (currentOrder[targetIndex] === "vacant" || currentOrder[targetIndex] === "reserved")) {
+        currentOrder[targetIndex] = playerId;
+      } else {
+        currentOrder.splice(targetIndex, 0, playerId);
+      }
+    } else if (oldIndex === targetIndex) {
+      // no-op
     } else {
       currentOrder.splice(oldIndex, 1);
-      currentOrder.splice(targetIndex, 0, playerId);
+      const insertAt = targetIndex > oldIndex ? targetIndex - 1 : targetIndex;
+      if (insertAt < currentOrder.length && (currentOrder[insertAt] === "vacant" || currentOrder[insertAt] === "reserved")) {
+        currentOrder[insertAt] = playerId;
+      } else {
+        currentOrder.splice(insertAt, 0, playerId);
+      }
     }
 
     const stackOrder = reconcileStackOrder(currentOrder, state.players, state.matches, state.courts);
@@ -652,10 +1190,54 @@ export const useClubStore = create<ClubState>((set, get) => ({
     set({ stackOrder });
     await get().publishSharedState();
   },
+  moveStackToIndex: async (fromGroupIndex, toGroupIndex) => {
+    const state = get();
+    const groups = splitStackGroups(state.stackOrder);
+    if (fromGroupIndex < 0 || fromGroupIndex >= groups.length) return;
+    const target = Math.max(0, Math.min(toGroupIndex, groups.length - 1));
+    if (fromGroupIndex === target) return;
+    const [moved] = groups.splice(fromGroupIndex, 1);
+    groups.splice(target, 0, moved);
+    const stackOrder = reconcileStackOrder(
+      flattenStackGroups(groups),
+      state.players,
+      state.matches,
+      state.courts
+    );
+    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    set({ stackOrder });
+    await get().publishSharedState();
+  },
+  addEmptyStack: async () => {
+    const state = get();
+    const nextOrder = [...state.stackOrder, "vacant", "vacant", "vacant", "vacant"];
+    const stackOrder = reconcileStackOrder(nextOrder, state.players, state.matches, state.courts, {
+      autoAppendMissing: false
+    });
+    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    set({ stackOrder });
+    await get().publishSharedState();
+  },
+  setStackSlotKind: async (slotIndex, kind) => {
+    const state = get();
+    const order = [...state.stackOrder];
+    while (order.length <= slotIndex) {
+      order.push("vacant");
+    }
+    const current = order[slotIndex];
+    if (current !== "vacant" && current !== "reserved") return;
+    order[slotIndex] = kind;
+    const stackOrder = reconcileStackOrder(order, state.players, state.matches, state.courts, {
+      autoAppendMissing: false
+    });
+    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    set({ stackOrder });
+    await get().publishSharedState();
+  },
   addPlayer: async (playerData) => {
     const newPlayer: Player = {
       ...playerData,
-      id: `player-${crypto.randomUUID()}`,
+      id: `player-${generateId()}`,
       checkedIn: false,
       parked: false,
       totalGamesPlayed: 0,
@@ -674,6 +1256,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const stackOrder = reconcileStackOrder(get().stackOrder, players, get().matches, get().courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ players, stackOrder });
+    await get().publishSharedState();
   },
   deletePlayer: async (playerId) => {
     const player = get().players.find((p) => p.id === playerId);
@@ -690,10 +1273,18 @@ export const useClubStore = create<ClubState>((set, get) => ({
 
   // Court Actions
   addCourt: async (courtData) => {
+    const existing = get().courts;
+    if (existing.length >= MAX_COURTS) {
+      pushToast(set, "Court limit reached", `HAFF runs ${MAX_COURTS} courts. Remove one before adding another.`, "system");
+      return;
+    }
+    const maxPriority = existing.reduce((max, c) => Math.max(max, c.priority ?? c.number), 0);
     const newCourt: Court = {
       ...courtData,
-      id: `court-${crypto.randomUUID()}`,
-      status: "Available"
+      id: `court-${generateId()}`,
+      status: "Available",
+      priority: courtData.priority ?? maxPriority + 1,
+      reservable: courtData.reservable ?? true
     };
     await db.courts.put(newCourt);
     await queue("CREATE_COURT", "Court", newCourt.id, newCourt);
@@ -709,10 +1300,34 @@ export const useClubStore = create<ClubState>((set, get) => ({
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ courts, stackOrder });
     pushToast(set, "Court updated", `${court.name} has been updated.`, "system");
+    await get().publishSharedState();
   },
   deleteCourt: async (courtId) => {
     const court = get().courts.find((c) => c.id === courtId);
     if (!court) return;
+    
+    // Cancel all active reservations for this court
+    const reservationsToCancel = get().reservations.filter(
+      (r) => r.courtId === courtId && ["Requested", "Confirmed"].includes(r.status)
+    );
+    for (const reservation of reservationsToCancel) {
+      await get().updateReservation(reservation.id, {
+        status: "Cancelled",
+        cancellationReason: `Court ${court.name} was deleted`
+      });
+    }
+    
+    // Complete any active match on this court
+    const activeMatch = get().matches.find(
+      (m) => m.courtId === courtId && m.status === "InProgress"
+    );
+    if (activeMatch) {
+      const completedMatch = { ...activeMatch, status: "Completed" as const, endTime: new Date().toISOString() };
+      await db.matches.put(completedMatch);
+      await queue("UPDATE_MATCH", "Match", activeMatch.id, completedMatch);
+      set({ matches: get().matches.map((m) => m.id === activeMatch.id ? completedMatch : m) });
+    }
+    
     await db.courts.delete(courtId);
     await queue("DELETE_COURT", "Court", courtId, { id: courtId });
     const courts = get().courts.filter((c) => c.id !== courtId);
@@ -720,13 +1335,30 @@ export const useClubStore = create<ClubState>((set, get) => ({
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ courts, stackOrder });
     pushToast(set, "Court deleted", `${court.name} has been deleted.`, "system");
+    await get().publishSharedState();
+  },
+  reorderCourts: async (courtId, targetIndex) => {
+    const sorted = sortCourts(get().courts);
+    const fromIndex = sorted.findIndex((c) => c.id === courtId);
+    if (fromIndex === -1 || fromIndex === targetIndex) return;
+    const reordered = [...sorted];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(targetIndex, 0, moved);
+    const courts = reordered.map((court, index) => ({ ...court, number: index + 1, priority: index + 1 }));
+    await db.courts.bulkPut(courts);
+    for (const court of courts) {
+      await queue("UPDATE_COURT", "Court", court.id, court);
+    }
+    set({ courts });
+    pushToast(set, "Court order updated", "Court priority has been saved.", "system");
+    await get().publishSharedState();
   },
 
   // Session Actions
   addSession: async (sessionData) => {
     const newSession: Session = {
       ...sessionData,
-      id: `session-${crypto.randomUUID()}`
+      id: `session-${generateId()}`
     };
     await db.sessions.put(newSession);
     await queue("CREATE_SESSION", "Session", newSession.id, newSession);
@@ -794,7 +1426,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
 
     // 3. Create a new active session
     const newSession: Session = {
-      id: `session-${crypto.randomUUID()}`,
+      id: `session-${generateId()}`,
       name: name || `Open Play - ${new Date().toLocaleDateString()}`,
       date: new Date().toISOString().split("T")[0],
       startTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
@@ -887,6 +1519,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     if (!court || !court.reservedPlayerIds || court.reservedPlayerIds.length === 0) return;
 
     const reservedIds = court.reservedPlayerIds;
+    const keepReservedMode = court.reservedFor === "Reserved game";
 
     // Put them back at the front of the stackOrder
     const currentOrder = get().stackOrder.filter((id) => !reservedIds.includes(id));
@@ -894,12 +1527,19 @@ export const useClubStore = create<ClubState>((set, get) => ({
 
     const courts = state.courts.map((c) =>
       c.id === courtId
-        ? {
-            ...c,
-            status: "Available" as const,
-            reservedFor: undefined,
-            reservedPlayerIds: undefined
-          }
+        ? keepReservedMode
+          ? {
+              ...c,
+              status: "Reserved" as const,
+              reservedFor: "Reserved game",
+              reservedPlayerIds: undefined
+            }
+          : {
+              ...c,
+              status: "Available" as const,
+              reservedFor: undefined,
+              reservedPlayerIds: undefined
+            }
         : c
     );
     const updatedCourt = courts.find((c) => c.id === courtId)!;
@@ -916,7 +1556,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
   // Game/Match Actions
   generateMatches: async () => {
     const state = get();
-    const availableCourts = state.courts.filter((court) => court.status === "Available");
+    const availableCourts = sortCourts(state.courts).filter((court) => court.status === "Available");
     if (availableCourts.length === 0) return;
 
     const newMatches: Match[] = [];
@@ -934,7 +1574,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       if (stackPlayers.length >= 2) {
         const teams = balanceTeams(stackPlayers);
         const match: Match = {
-          id: crypto.randomUUID(),
+          id: generateId(),
           courtId: court.id,
           teamAPlayerIds: teams.a.map((player) => player.id),
           teamBPlayerIds: teams.b.map((player) => player.id),
@@ -987,7 +1627,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     
     for (let i = 0; i < numStacks; i++) {
       const slice = currentOrder.slice(i * 4, i * 4 + 4);
-      if (slice.length === 4 && slice.every((id) => id !== "vacant")) {
+      if (slice.length === 4 && slice.every((id) => id !== "vacant" && id !== "reserved")) {
         targetStackIndex = i;
         nextFourIds = slice;
         break;
@@ -1060,9 +1700,13 @@ export const useClubStore = create<ClubState>((set, get) => ({
       .map((id) => state.players.find((player) => player.id === id))
       .filter((player): player is Player => Boolean(player));
     if (!court) return;
+    if (stack.length === 0) {
+      pushToast(set, "No players assigned", "Add players to this court before starting.", "system");
+      return;
+    }
     const teams = stack.length > 0 ? balanceTeams(stack) : { a: [], b: [] };
     const match: Match = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       courtId: court.id,
       mode: "Reserved",
       teamAPlayerIds: teams.a.map((player) => player.id),
@@ -1108,6 +1752,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     await get().publishSharedState();
   },
   finishCourt: async (courtId) => {
+    get().suppressRefresh(6000);
     const state = get();
     const court = state.courts.find((item) => item.id === courtId);
     const match = state.matches.find((item) => item.id === court?.currentMatchId);
@@ -1142,64 +1787,35 @@ export const useClubStore = create<ClubState>((set, get) => ({
         }
         : item
     );
-    const waitingOrder = reconcileStackOrder(state.stackOrder, players, state.matches, courts);
-    let nextStackStart = -1;
-    if (waitingOrder.length >= 4) {
-      nextStackStart = 0;
-    }
-    let remainingOrder = waitingOrder;
-    let nextMatch: Match | null = null;
-    if (nextStackStart >= 0) {
-      const nextIds = waitingOrder.slice(0, 4);
-      const nextPlayers = nextIds
-        .map((id) => players.find((player) => player.id === id))
-        .filter((player): player is Player => Boolean(player?.checkedIn && !player.parked));
-      if (nextPlayers.length === 4) {
-        const teams = balanceTeams(nextPlayers);
-        nextMatch = {
-          id: crypto.randomUUID(),
-          courtId,
-          teamAPlayerIds: teams.a.map((player) => player.id),
-          teamBPlayerIds: teams.b.map((player) => player.id),
-          scoreA: 0,
-          scoreB: 0,
-          status: "InProgress",
-          startedAt: new Date().toISOString(),
-          syncStatus: "PendingSync"
-        };
-        matches = [...matches, nextMatch];
-        courts = courts.map((item) =>
-          item.id === courtId ? { ...item, status: "InUse" as const, currentMatchId: nextMatch!.id } : item
-        );
-        remainingOrder = waitingOrder.slice(4);
-      }
-    }
-    remainingOrder = [
-      ...remainingOrder.filter((id) => !participantIds.includes(id)),
-      ...participantIds
-    ];
+    const finishedPlayerIds = new Set(
+      participantIds.filter((id) => id !== "vacant" && !id.startsWith("vacant"))
+    );
+    const baseOrder = state.stackOrder.filter(
+      (id) => id === "vacant" || !finishedPlayerIds.has(id)
+    );
     const updatedCourt = courts.find((item) => item.id === courtId);
-    await db.players.bulkPut(players);
-    await db.matches.put(completed);
-    if (nextMatch) await db.matches.put(nextMatch);
-    await db.courts.bulkPut(courts);
-    await queue("FINISH_COURT", "Match", completed.id, completed);
-    if (nextMatch) await queue("CREATE_MATCH", "Match", nextMatch.id, nextMatch);
-    if (updatedCourt) {
-      await queue("UPDATE_COURT", "Court", updatedCourt.id, updatedCourt);
+    try {
+      await db.players.bulkPut(players);
+      await db.matches.put(completed);
+      await db.courts.bulkPut(courts);
+      await queue("FINISH_COURT", "Match", completed.id, completed);
+      if (updatedCourt) {
+        await queue("UPDATE_COURT", "Court", updatedCourt.id, updatedCourt);
+      }
+    } catch (err) {
+      console.error("Failed to write finished court to DB, falling back to local memory:", err);
     }
-    const stackOrder = reconcileStackOrder(remainingOrder, players, matches, courts);
+    const stackOrder = reconcileStackOrder(baseOrder, players, matches, courts, {
+      autoAppendMissing: false
+    });
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ players, matches, courts, stackOrder });
-    if (nextMatch) {
-      const names = [...nextMatch.teamAPlayerIds, ...nextMatch.teamBPlayerIds]
-        .map((id) => players.find((player) => player.id === id)?.displayName)
-        .filter((name): name is string => Boolean(name));
-      speakAnnouncement(`Next players for ${court.name}: ${names.join(", ")}. Please proceed to your court.`);
-      pushToast(set, "Next stack assigned", `${names.join(", ")} sent to ${court.name}.`, "system");
-    } else {
-      pushToast(set, "Court available", `${court.name} is waiting for a complete stack of four.`, "system");
-    }
+    pushToast(
+      set,
+      "Court available",
+      `${court.name} is open. Finished players were not re-queued — add them manually when ready.`,
+      "system"
+    );
     await get().publishSharedState();
   },
   updateMatchScores: async (matchId, scoreA, scoreB) => {
@@ -1218,6 +1834,53 @@ export const useClubStore = create<ClubState>((set, get) => ({
     set({
       matches: state.matches.map((m) => (m.id === matchId ? updated : m))
     });
+    await get().publishSharedState();
+  },
+  submitMatchFeedback: async (matchId, reviewerId, reviewerName, scoreA, scoreB, recommendations) => {
+    const state = get();
+    const match = state.matches.find((item) => item.id === matchId);
+    if (!match) return;
+
+    const entries: PlayerKudosEntry[] = [];
+    for (const [toPlayerId, rec] of Object.entries(recommendations)) {
+      if (!rec.pills.length && !rec.note?.trim()) continue;
+      entries.push({
+        id: `${matchId}:${reviewerId}:${toPlayerId}`,
+        matchId,
+        fromPlayerId: reviewerId,
+        fromPlayerName: reviewerName,
+        toPlayerId,
+        pills: rec.pills,
+        note: rec.note?.trim() || undefined,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    const review: MatchReviewRecord = {
+      matchId,
+      reviewerId,
+      scoreA,
+      scoreB,
+      reviewedAt: new Date().toISOString(),
+    };
+
+    const updatedMatch = { ...match, scoreA, scoreB, syncStatus: "PendingSync" as const };
+    await db.matches.put(updatedMatch);
+    await queue("UPDATE_MATCH", "Match", matchId, updatedMatch);
+
+    const playerKudos = mergeKudosById(state.playerKudos, entries);
+    const matchReviews = mergeReviewsByKey(
+      state.matchReviews.filter((item) => !(item.matchId === matchId && item.reviewerId === reviewerId)),
+      [review]
+    );
+
+    set({
+      matches: state.matches.map((item) => (item.id === matchId ? updatedMatch : item)),
+      playerKudos,
+      matchReviews,
+    });
+    persistKudosLocal(playerKudos, matchReviews);
+    window.dispatchEvent(new Event("haff-endorsements-updated"));
     await get().publishSharedState();
   },
   assignPlayerToCourt: async (playerId, courtId) => {
@@ -1261,8 +1924,14 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const updatedCourts = state.courts.map((c) => {
       if (c.reservedPlayerIds?.includes(playerId)) {
         const nextReserved = c.reservedPlayerIds.filter((id) => id !== playerId);
-        const nextStatus = nextReserved.length === 0 ? "Available" : c.status;
-        return { ...c, reservedPlayerIds: nextReserved, status: nextStatus } as Court;
+        const nextStatus = nextReserved.length === 0
+          ? (c.reservedFor === "Reserved game" ? "Reserved" : "Available")
+          : c.status;
+        return {
+          ...c,
+          reservedPlayerIds: nextReserved.length > 0 ? nextReserved : undefined,
+          status: nextStatus as Court["status"]
+        };
       }
       return c;
     });
@@ -1273,10 +1942,15 @@ export const useClubStore = create<ClubState>((set, get) => ({
       const existingReserved = targetCourt.reservedPlayerIds || [];
       if (!existingReserved.includes(playerId)) {
         const nextReserved = [...existingReserved, playerId];
+        const reservedFor = nextReserved
+          .map((id) => updatedPlayers.find((player) => player.id === id)?.displayName.split(" ")[0])
+          .filter(Boolean)
+          .join(" / ") || targetCourt.reservedFor || "Reserved game";
         updatedCourts[targetCourtIndex] = {
           ...targetCourt,
           reservedPlayerIds: nextReserved,
-          status: "Reserved"
+          status: "Reserved",
+          reservedFor
         };
       }
     }
@@ -1308,8 +1982,14 @@ export const useClubStore = create<ClubState>((set, get) => ({
       if (c.reservedPlayerIds?.includes(playerId)) {
         courtUpdated = true;
         const nextReserved = c.reservedPlayerIds.filter((id) => id !== playerId);
-        const nextStatus = nextReserved.length === 0 ? "Available" : c.status;
-        return { ...c, reservedPlayerIds: nextReserved, status: nextStatus } as Court;
+        const nextStatus = nextReserved.length === 0
+          ? (c.reservedFor === "Reserved game" ? "Reserved" : "Available")
+          : c.status;
+        return {
+          ...c,
+          reservedPlayerIds: nextReserved.length > 0 ? nextReserved : undefined,
+          status: nextStatus as Court["status"]
+        };
       }
       return c;
     });
@@ -1319,7 +1999,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     let updatedMatches = state.matches;
     if (activeMatchIndex !== -1) {
       const match = state.matches[activeMatchIndex];
-      const vacantId = `vacant-${crypto.randomUUID()}`;
+      const vacantId = `vacant-${generateId()}`;
       const newTeamA = match.teamAPlayerIds.map(id => id === playerId ? vacantId : id);
       const newTeamB = match.teamBPlayerIds.map(id => id === playerId ? vacantId : id);
       
@@ -1431,23 +2111,29 @@ export const useClubStore = create<ClubState>((set, get) => ({
     speakAnnouncement(`${freshState.players.find(p => p.id === playerId)?.displayName} joined the match on ${court.name}.`);
   },
   addReservation: async (reservationData) => {
+    const activeStatuses = ["Confirmed", "Requested"];
     const hasConflict = get().reservations.some((reservation) =>
-      reservation.status === "Confirmed"
+      activeStatuses.includes(reservation.status)
       && reservation.courtId === reservationData.courtId
       && new Date(reservationData.startTime).getTime() < new Date(reservation.endTime).getTime()
       && new Date(reservationData.endTime).getTime() > new Date(reservation.startTime).getTime()
     );
     if (hasConflict) throw new Error("This court already has a reservation during that time.");
-    const id = crypto.randomUUID();
+    const id = generateId();
+    const status = reservationData.status ?? "Requested";
+    const hostDisplayName = reservationData.hostDisplayName
+      ?? get().players.find((player) => player.id === reservationData.hostPlayerId)?.displayName
+      ?? (reservationData.hostPlayerId === "admin" ? "Admin" : undefined);
     const reservation: Reservation = {
       ...reservationData,
+      hostDisplayName,
       id,
-      status: "Confirmed"
+      status
     };
     await db.reservations.put(reservation);
     await queue("CREATE_RESERVATION", "Reservation", id, reservation);
     
-    if (reservation.paymentStatus === "Paid") {
+    if (status === "Confirmed" && reservation.paymentStatus === "Paid") {
       await get().addTransaction({
         playerId: reservationData.hostPlayerId,
         amount: reservationData.feeAmount,
@@ -1462,7 +2148,49 @@ export const useClubStore = create<ClubState>((set, get) => ({
     playSound("checkin");
     
     const court = get().courts.find(c => c.id === reservationData.courtId);
-    speakAnnouncement(`Court reservation booked for ${court?.name || "Court"}.`);
+    if (status === "Requested") {
+      speakAnnouncement(`Reservation request submitted for ${court?.name || "Court"}. Awaiting admin approval.`);
+      pushToast(set, "Request submitted", "Your reservation is pending admin approval.", "system");
+    } else {
+      speakAnnouncement(`Court reservation booked for ${court?.name || "Court"}.`);
+    }
+    await get().publishSharedState();
+  },
+  updateReservation: async (id, patch) => {
+    const current = get().reservations.find((item) => item.id === id);
+    if (!current) return;
+    const updated = { ...current, ...patch };
+    await db.reservations.put(updated);
+    await queue("UPDATE_RESERVATION", "Reservation", id, updated);
+    set((state) => ({
+      reservations: state.reservations.map((item) => item.id === id ? updated : item)
+    }));
+    await get().publishSharedState();
+  },
+  approveReservation: async (id) => {
+    const reservation = get().reservations.find((r) => r.id === id);
+    if (!reservation || reservation.status !== "Requested") return;
+    await get().updateReservation(id, { status: "Confirmed", paymentStatus: "Paid" });
+    if (reservation.paymentStatus !== "Paid") {
+      await get().addTransaction({
+        playerId: reservation.hostPlayerId,
+        amount: reservation.feeAmount,
+        type: "CourtReservation",
+        paymentMethod: "EWallet"
+      });
+    }
+    playSound("checkin");
+    pushToast(set, "Reservation approved", "The court booking has been confirmed.", "system");
+  },
+  rejectReservation: async (id, reason) => {
+    const reservation = get().reservations.find((r) => r.id === id);
+    if (!reservation || reservation.status !== "Requested") return;
+    await get().updateReservation(id, {
+      status: "Rejected",
+      cancellationReason: reason?.trim() || "Rejected by admin"
+    });
+    playSound("complete");
+    pushToast(set, "Reservation rejected", "The booking request was declined.", "system");
   },
   cancelReservation: async (id, reason) => {
     const reservation = get().reservations.find(r => r.id === id);
@@ -1476,7 +2204,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     playSound("complete");
   },
   addTransaction: async (txData) => {
-    const id = crypto.randomUUID();
+    const id = generateId();
     const transaction: Transaction = {
       ...txData,
       id,
@@ -1516,6 +2244,15 @@ export const useClubStore = create<ClubState>((set, get) => ({
     }));
     playSound("complete");
   },
+  deleteTransaction: async (id) => {
+    const transaction = get().transactions.find((t) => t.id === id);
+    if (!transaction) return;
+    await db.transactions.delete(id);
+    await queue("DELETE_TRANSACTION", "Transaction", id, { id });
+    set((state) => ({
+      transactions: state.transactions.filter((t) => t.id !== id)
+    }));
+  },
   voidTransaction: async (id, reason) => {
     const tx = get().transactions.find((transaction) => transaction.id === id);
     const cleanReason = reason.trim();
@@ -1548,8 +2285,9 @@ export const useClubStore = create<ClubState>((set, get) => ({
   suppressRefresh: (ms = 2500) => {
     suppressSharedRefreshUntil = Date.now() + ms;
   },
+  isRefreshSuppressed: () => Date.now() < suppressSharedRefreshUntil,
   addTestimonial: async (quote, rating, displayName) => {
-    const testimonial = { id: crypto.randomUUID(), quote, rating, displayName };
+    const testimonial = { id: generateId(), quote, rating, displayName };
     set(state => {
       const next = [...state.testimonials, testimonial];
       localStorage.setItem("haff-testimonials", JSON.stringify(next));
@@ -1564,7 +2302,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     });
   },
   addAnnouncement: async (title, content) => {
-    const announcement = { id: crypto.randomUUID(), title, content, date: new Date().toISOString().split("T")[0] };
+    const announcement = { id: generateId(), title, content, date: new Date().toISOString().split("T")[0] };
     set(state => {
       const next = [announcement, ...state.announcements];
       localStorage.setItem("haff-announcements", JSON.stringify(next));
@@ -1579,7 +2317,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     });
   },
   addAchievement: async (title, value, desc) => {
-    const achievement = { id: crypto.randomUUID(), title, value, desc };
+    const achievement = { id: generateId(), title, value, desc };
     set(state => {
       const next = [...state.achievements, achievement];
       localStorage.setItem("haff-achievements", JSON.stringify(next));
@@ -1648,38 +2386,8 @@ function normalizeSkillLevel(skillLevel: string): Player["skillLevel"] {
   return "Beginner";
 }
 
-function reconcileStackOrder(stackOrder: string[], players: Player[], matches: Match[], courts: Court[]) {
-  const activeIds = new Set(
-    matches.filter((match) => match.status === "InProgress").flatMap((match) => [...match.teamAPlayerIds, ...match.teamBPlayerIds])
-  );
-  const reservedIds = new Set(courts.flatMap((court) => court.reservedPlayerIds ?? []));
-  const eligibleIds = new Set(
-    players
-      .filter((player) => player.checkedIn && !player.parked && player.isActive !== false && !activeIds.has(player.id) && !reservedIds.has(player.id))
-      .map((player) => player.id)
-  );
-
-  const seenIds = new Set<string>();
-  const cleaned: string[] = [];
-
-  for (const id of stackOrder) {
-    if (id !== "vacant" && eligibleIds.has(id) && !seenIds.has(id)) {
-      seenIds.add(id);
-      cleaned.push(id);
-    }
-  }
-
-  for (const id of eligibleIds) {
-    if (!seenIds.has(id)) {
-      cleaned.push(id);
-    }
-  }
-
-  return cleaned;
-}
-
 async function queue(actionType: string, entityType: string, entityId: string, payload: unknown) {
-  const id = crypto.randomUUID();
+  const id = generateId();
   const baseVersion =
     typeof payload === "object" && payload && "version" in payload && typeof payload.version === "number"
       ? payload.version
@@ -1717,7 +2425,7 @@ function pushToast(
   message: string,
   tone: Toast["tone"]
 ) {
-  const id = crypto.randomUUID();
+  const id = generateId();
   set((state) => {
     if (state.toasts.some((toast) => toast.title === title && toast.message === message)) return {};
     return { toasts: [{ id, title, message, tone }, ...state.toasts].slice(0, 4) };

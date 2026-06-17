@@ -5,18 +5,33 @@ let announcementChime: Howl | undefined;
 const SOUND_SETTING_KEY = "haff-sound-enabled";
 const VOICE_STYLE_KEY = "haff-announcement-voice-style";
 let soundEnabled = localStorage.getItem(SOUND_SETTING_KEY) !== "false";
-let voiceStyle = (localStorage.getItem(VOICE_STYLE_KEY) ?? "warm") as VoiceStyle;
 let unlocked = false;
 
 export type SoundKey = "score" | "complete" | "checkin";
-export type VoiceStyle = "warm" | "clear" | "bright" | "formal";
+export type VoiceStyle = "british" | "warm" | "clear" | "bright" | "formal";
 
-const voiceProfiles: Record<VoiceStyle, { rate: number; pitch: number; preferred: RegExp }> = {
+const voiceProfiles: Record<VoiceStyle, { rate: number; pitch: number; preferred: RegExp; lang?: RegExp }> = {
+  british: {
+    rate: 1.05,
+    pitch: 1.08,
+    preferred: /kate|serena|martha|hazel|libby|sonia|fiona|moira|tessa|amy|emma|susan|google.*english.*\(uk\)|google.*en-gb|microsoft.*hazel|microsoft.*libby|microsoft.*sonia|microsoft.*emma|uk english female|en-gb.*female/i,
+    lang: /en-gb/i
+  },
   warm: { rate: 0.89, pitch: 0.9, preferred: /daniel|aaron|jamie|guy natural|ryan|oliver/ },
   clear: { rate: 0.94, pitch: 1, preferred: /samantha|ava|allison|serena|karen|zoe/ },
   bright: { rate: 0.98, pitch: 1.08, preferred: /google.*us|victoria|susan|zira|aria/ },
   formal: { rate: 0.84, pitch: 0.86, preferred: /alex|tom|fred|david|george|mark/ }
 };
+
+const VALID_VOICE_STYLES = new Set<VoiceStyle>(["british", "warm", "clear", "bright", "formal"]);
+const storedVoiceStyle = localStorage.getItem(VOICE_STYLE_KEY);
+const normalizedStyle = storedVoiceStyle === "warm" ? "british" : storedVoiceStyle;
+let voiceStyle: VoiceStyle = VALID_VOICE_STYLES.has(normalizedStyle as VoiceStyle)
+  ? (normalizedStyle as VoiceStyle)
+  : "british";
+if (normalizedStyle === "british" && storedVoiceStyle === "warm") {
+  localStorage.setItem(VOICE_STYLE_KEY, "british");
+}
 
 export function isSoundEnabled() {
   return soundEnabled;
@@ -42,12 +57,44 @@ export async function setSoundEnabled(enabled: boolean) {
   }
 }
 
+let voicesLoadPromise: Promise<SpeechSynthesisVoice[]> | null = null;
+
+function loadSpeechVoices(): Promise<SpeechSynthesisVoice[]> {
+  if (!("speechSynthesis" in window)) return Promise.resolve([]);
+  if (voicesLoadPromise) return voicesLoadPromise;
+
+  voicesLoadPromise = new Promise((resolve) => {
+    const pick = () => window.speechSynthesis.getVoices();
+    const existing = pick();
+    if (existing.length > 0) {
+      resolve(existing);
+      return;
+    }
+
+    const onVoicesChanged = () => {
+      const loaded = pick();
+      if (loaded.length > 0) {
+        window.speechSynthesis.removeEventListener("voiceschanged", onVoicesChanged);
+        resolve(loaded);
+      }
+    };
+
+    window.speechSynthesis.addEventListener("voiceschanged", onVoicesChanged);
+    // Safari/Chrome sometimes need a nudge before voices populate.
+    pick();
+    window.setTimeout(() => resolve(pick()), 600);
+  });
+
+  return voicesLoadPromise;
+}
+
 export async function unlockAudio() {
   if (unlocked) return true;
   try {
     if (Howler.ctx?.state === "suspended") await Howler.ctx.resume();
     Howler.mute(!soundEnabled);
     unlocked = Howler.ctx?.state === "running" || !Howler.usingWebAudio;
+    void loadSpeechVoices();
     return unlocked;
   } catch {
     return false;
@@ -67,39 +114,47 @@ export function speakAnnouncement(message: string) {
     });
   }
 
-  const speak = () => {
-    window.setTimeout(() => {
-      const utterance = new SpeechSynthesisUtterance(message);
-      const profile = voiceProfiles[voiceStyle];
-      const preferredVoice = chooseNaturalVoice(window.speechSynthesis.getVoices(), profile.preferred);
-      if (preferredVoice) utterance.voice = preferredVoice;
-      utterance.lang = preferredVoice?.lang ?? "en-US";
-      utterance.rate = profile.rate;
-      utterance.pitch = profile.pitch;
-      utterance.volume = 1;
-      window.speechSynthesis.speak(utterance);
-    }, 420);
-  };
+  void loadSpeechVoices().then((voices) => {
+    const utterance = new SpeechSynthesisUtterance(message);
+    const profile = voiceProfiles[voiceStyle];
+    const preferredVoice = chooseNaturalVoice(voices, profile, voiceStyle);
+    if (preferredVoice) utterance.voice = preferredVoice;
+    utterance.lang = preferredVoice?.lang ?? (profile.lang ? "en-GB" : "en-US");
+    utterance.rate = profile.rate;
+    utterance.pitch = profile.pitch;
+    utterance.volume = 1;
+    window.speechSynthesis.speak(utterance);
+  });
 
-  announcementChime.once("end", speak);
-  announcementChime.once("playerror", speak);
+  void unlockAudio();
   announcementChime.play();
   return true;
 }
 
-function chooseNaturalVoice(voices: SpeechSynthesisVoice[], preferredPattern: RegExp) {
+function chooseNaturalVoice(
+  voices: SpeechSynthesisVoice[],
+  profile: { preferred: RegExp; lang?: RegExp },
+  style: VoiceStyle = voiceStyle
+) {
   const englishVoices = voices.filter((voice) => /^en[-_]/i.test(voice.lang));
-  const candidates = englishVoices.length ? englishVoices : voices;
+  let candidates = englishVoices.length ? englishVoices : voices;
+
+  if (style === "british") {
+    const gbVoices = candidates.filter((voice) => /en-gb/i.test(voice.lang));
+    if (gbVoices.length > 0) candidates = gbVoices;
+  }
+
   const score = (voice: SpeechSynthesisVoice) => {
     const name = voice.name.toLowerCase();
     let value = 0;
-    if (preferredPattern.test(name)) value += 180;
+    if (profile.preferred.test(name)) value += 180;
+    if (profile.lang?.test(voice.lang)) value += 220;
     if (/natural|neural|premium|enhanced/.test(name)) value += 100;
-    if (/alex|tom|fred/.test(name)) value += 35;
     if (/microsoft|apple|google/.test(name)) value += 30;
+    if (/daniel|arthur|ryan|oliver|george|james|thomas|male|guy/.test(name)) value -= 140;
     if (/en-ph|filipino/.test(`${voice.lang} ${name}`)) value += 18;
-    if (/en-us|en-gb|en-au/.test(voice.lang.toLowerCase())) value += 12;
-    if (voice.default) value += 6;
+    if (/en-gb/.test(voice.lang.toLowerCase())) value += 40;
+    if (voice.default && style !== "british") value += 6;
     return value;
   };
   return [...candidates].sort((a, b) => score(b) - score(a))[0];

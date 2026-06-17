@@ -1,6 +1,7 @@
 import React from "react";
 import { motion } from "framer-motion";
 import { useClubStore } from "../store/useClubStore";
+import { sortCourts, getStackDisplayGroups } from "../lib/utils";
 import { 
   Users, 
   Tv, 
@@ -63,13 +64,17 @@ const CircularBadge = ({ onClick }: { onClick: () => void }) => (
 );
 
 interface LandingViewProps {
-  setView: (view: "landing" | "admin" | "player" | "parking" | "tv" | "community") => void;
+  setView: (view: "landing" | "admin" | "player" | "parking" | "tv" | "calendar" | "finance" | "community") => void;
   signedIn: boolean;
 }
 
+const MANILA_TZ = "Asia/Manila";
+const scheduleDateKey = (date: Date) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: MANILA_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+
 export function LandingView({ setView, signedIn }: LandingViewProps) {
   const { 
-    players, courts, stackOrder, clubStatus,
+    players, courts, matches, stackOrder, clubStatus, reservations,
     testimonials, announcements, achievements,
     addTestimonial, deleteTestimonial,
     addAnnouncement, deleteAnnouncement,
@@ -106,25 +111,39 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
   // Next 2 stacks waiting
   const waitingStacks = React.useMemo(() => {
     if (!stackOrder || stackOrder.length === 0) return [];
-    
-    // Group waiting checked-in players that are not on court
-    const waitingPlayers = players.filter(p => p.checkedIn && !p.parked && !courts.some(c => c.reservedPlayerIds?.includes(p.id)));
-    // Sort them by stackOrder
-    const sortedWaiting = [...waitingPlayers].sort((a, b) => {
-      const idxA = stackOrder.indexOf(a.id);
-      const idxB = stackOrder.indexOf(b.id);
-      if (idxA === -1 && idxB === -1) return 0;
-      if (idxA === -1) return 1;
-      if (idxB === -1) return -1;
-      return idxA - idxB;
-    });
+    const activeIds = new Set(
+      matches
+        .filter((match) => match.status === "InProgress")
+        .flatMap((match) => [...match.teamAPlayerIds, ...match.teamBPlayerIds])
+    );
+    return getStackDisplayGroups(stackOrder, players, matches, courts, 2)
+      .map((group) =>
+        group
+          .filter((player) => !player.isVacant && !activeIds.has(player.id))
+          .map((player) => player.displayName)
+      )
+      .filter((group) => group.length > 0);
+  }, [players, courts, matches, stackOrder]);
 
-    const stacks: string[][] = [];
-    for (let i = 0; i < sortedWaiting.length; i += 4) {
-      stacks.push(sortedWaiting.slice(i, i + 4).map(p => p.displayName));
-    }
-    return stacks.slice(0, 2);
-  }, [players, courts, stackOrder]);
+  const todaySchedule = React.useMemo(() => {
+    const today = scheduleDateKey(new Date());
+    return reservations
+      .filter((reservation) =>
+        !["Cancelled", "Rejected", "NoShow"].includes(reservation.status)
+        && scheduleDateKey(new Date(reservation.startTime)) === today
+      )
+      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+  }, [reservations]);
+
+  const pendingReservationCount = reservations.filter((reservation) => reservation.status === "Requested").length;
+  const upcomingConfirmedCount = reservations.filter((reservation) =>
+    reservation.status === "Confirmed" && new Date(reservation.startTime).getTime() > Date.now()
+  ).length;
+
+  const resolveHostName = (reservation: (typeof reservations)[number]) =>
+    reservation.hostDisplayName
+    ?? players.find((player) => player.id === reservation.hostPlayerId)?.displayName
+    ?? (reservation.hostPlayerId === "admin" ? "Admin" : "Member");
 
   const toggleSound = () => {
     const next = !window.localStorage.getItem("haff-sound-enabled") || window.localStorage.getItem("haff-sound-enabled") === "false";
@@ -135,9 +154,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
   return (
     <div className="relative min-h-screen w-full overflow-hidden bg-forest font-sans text-ivory selection:bg-brass selection:text-forest">
       
-      {/* Background aesthetics */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#fff8ea0c_1px,transparent_1px),linear-gradient(to_bottom,#fff8ea0c_1px,transparent_1px)] bg-[size:4rem_4rem] pointer-events-none" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(244,201,93,0.18),transparent_50%),radial-gradient(circle_at_100%_40%,rgba(127,182,154,0.15),transparent_40%),linear-gradient(180deg,rgba(14,90,67,0.1),rgba(6,36,27,0.9))] pointer-events-none" />
+
 
       {/* Brand Header */}
       <header className="relative z-30 mx-auto flex w-full max-w-7xl items-center justify-between px-6 py-6">
@@ -200,7 +217,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
       </header>
 
       {/* MAIN CONTAINER */}
-      <main className="relative z-20 mx-auto max-w-7xl px-6 pb-24 pt-4">
+      <main className="relative z-20 mx-auto max-w-7xl px-6 pb-36 pt-4">
         
         {/* HERO HERO SECTION */}
         <section className="grid grid-cols-1 gap-12 lg:grid-cols-12 lg:items-center">
@@ -245,12 +262,18 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
             <div className="absolute h-64 w-64 rounded-full bg-brass/10 blur-3xl pointer-events-none" />
 
             {/* Glass Player Card Left */}
-            <motion.div 
+            <motion.div
+              role="button"
+              tabIndex={0}
               initial={{ opacity: 0, x: -50, rotate: -8 }}
               animate={{ opacity: 1, x: 0, rotate: -6 }}
               transition={{ duration: 0.8, delay: 0.1 }}
               whileHover={{ rotate: -2, y: -8, scale: 1.02 }}
-              className="absolute z-10 left-[4%] md:left-[10%] top-[10%] aspect-[3/3.6] w-36 md:w-44 rounded-2xl bg-[#FFF8EA] p-4 text-center text-ink shadow-2xl"
+              onClick={() => setView("calendar")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") setView("calendar");
+              }}
+              className="absolute z-10 left-[4%] md:left-[10%] top-[10%] aspect-[3/3.6] w-36 md:w-44 rounded-2xl bg-[#FFF8EA] p-4 text-center text-ink shadow-2xl cursor-pointer"
             >
               <div className="mx-auto mb-3 h-14 w-14 overflow-hidden rounded-full bg-brass p-1 shadow-inner md:h-18 md:w-18">
                 <img src={playerImage} alt="Player" className="h-full w-full object-cover rounded-full" />
@@ -260,18 +283,25 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
             </motion.div>
 
             {/* Glass Court Card Right */}
-            <motion.div 
+            <motion.div
+              role="button"
+              tabIndex={0}
               initial={{ opacity: 0, x: 50, rotate: 8 }}
               animate={{ opacity: 1, x: 0, rotate: 6 }}
               transition={{ duration: 0.8, delay: 0.2 }}
               whileHover={{ rotate: 2, y: -8, scale: 1.02 }}
-              className="absolute z-10 right-[4%] md:right-[10%] bottom-[12%] aspect-[3/3.6] w-36 md:w-44 rounded-2xl bg-[#FFF8EA] p-4 text-center text-ink shadow-2xl"
+              onClick={() => setView("player")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") setView("player");
+              }}
+              className="absolute z-10 right-[4%] md:right-[10%] bottom-[12%] aspect-[3/3.6] w-36 md:w-44 rounded-2xl bg-[#FFF8EA] p-4 text-center text-ink shadow-2xl cursor-pointer"
             >
               <div className="mx-auto mb-3 h-14 w-14 overflow-hidden rounded-full bg-brass p-1 shadow-inner md:h-18 md:w-18">
                 <img src={courtImage} alt="Court" className="h-full w-full object-cover rounded-full" />
               </div>
-              <h3 className="text-sm font-black md:text-base">₱150 per player</h3>
-              <p className="mt-1 text-[10px] md:text-xs font-semibold text-ink/60">3PM ONWARDS</p>
+              <h3 className="text-sm font-black md:text-base">Open Play</h3>
+              <p className="mt-1 text-[10px] md:text-xs font-semibold text-ink/60">₱150 per player</p>
+              <p className="text-[9px] md:text-[10px] font-bold text-ink/40 mt-1">3 PM ONWARDS</p>
             </motion.div>
 
             {/* SVGs & Badges */}
@@ -288,6 +318,118 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
             </div>
           </div>
 
+        </section>
+
+        {/* COURT SCHEDULE & RESERVATIONS */}
+        <section className="mt-16">
+          <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <span className="text-xs font-black uppercase tracking-wider text-brass">Bookings</span>
+              <h2 className="font-display text-3xl font-bold mt-1 text-ivory">Court Schedule & Reservations</h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => setView("calendar")}
+              className="flex items-center gap-2 rounded-full border border-brass/30 bg-brass/10 px-4 py-2 text-xs font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest"
+            >
+              View full schedule <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            {/* Court Schedule — today */}
+            <div className="rounded-3xl border border-ivory/10 bg-ivory/5 p-6 backdrop-blur-sm shadow-md">
+              <div className="flex items-center justify-between border-b border-ivory/10 pb-3">
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-5 w-5 text-brass" />
+                  <h3 className="font-display text-xl font-bold text-ivory">Today&apos;s Court Schedule</h3>
+                </div>
+                <span className="text-[10px] font-black uppercase tracking-wider text-ivory/50">
+                  {new Date().toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}
+                </span>
+              </div>
+              <div className="mt-4 space-y-3 max-h-72 overflow-y-auto pr-1">
+                {todaySchedule.length === 0 ? (
+                  <p className="text-sm text-ivory/50 italic">No court bookings scheduled for today yet.</p>
+                ) : (
+                  todaySchedule.map((reservation) => {
+                    const court = courts.find((item) => item.id === reservation.courtId);
+                    const isPending = reservation.status === "Requested";
+                    return (
+                      <article
+                        key={reservation.id}
+                        className={`rounded-2xl border p-3 ${isPending ? "border-amber-400/30 bg-amber-400/10" : "border-brass/20 bg-forest/30"}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-xs font-black uppercase tracking-wider text-brass">{court?.name ?? "Court"}</p>
+                            <p className="mt-0.5 font-bold text-ivory truncate">{resolveHostName(reservation)}</p>
+                            <p className="text-[11px] text-ivory/65">
+                              {new Date(reservation.startTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                              {" – "}
+                              {new Date(reservation.endTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                            </p>
+                            {reservation.notes && (
+                              <p className="mt-1.5 text-[11px] text-ivory/75 line-clamp-2 rounded-lg bg-black/15 px-2 py-1">
+                                {reservation.notes}
+                              </p>
+                            )}
+                          </div>
+                          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${isPending ? "bg-amber-400/20 text-amber-200" : "bg-brass/20 text-brass"}`}>
+                            {isPending ? "Pending" : reservation.status}
+                          </span>
+                        </div>
+                      </article>
+                    );
+                  })
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setView("calendar")}
+                className="mt-4 w-full rounded-xl border border-ivory/15 bg-ivory/5 py-2.5 text-xs font-black uppercase tracking-wider text-ivory transition hover:bg-ivory/10"
+              >
+                Open court calendar
+              </button>
+            </div>
+
+            {/* Reserve a Court CTA */}
+            <div className="rounded-3xl border border-brass/25 bg-gradient-to-br from-brass/15 to-forest/40 p-6 shadow-md flex flex-col justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-5 w-5 text-brass" />
+                  <h3 className="font-display text-xl font-bold text-ivory">Reserve a Court</h3>
+                </div>
+                <p className="mt-2 text-sm text-ivory/75 leading-relaxed">
+                  Pick a day and time slot, add notes for staff, and submit your request. Admin approval is required before your booking is confirmed.
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {pendingReservationCount > 0 && (
+                    <span className="rounded-full bg-amber-400/20 border border-amber-400/30 px-3 py-1 text-[10px] font-black uppercase text-amber-200">
+                      {pendingReservationCount} pending request{pendingReservationCount === 1 ? "" : "s"}
+                    </span>
+                  )}
+                  {upcomingConfirmedCount > 0 && (
+                    <span className="rounded-full bg-brass/20 border border-brass/30 px-3 py-1 text-[10px] font-black uppercase text-brass">
+                      {upcomingConfirmedCount} upcoming confirmed
+                    </span>
+                  )}
+                </div>
+                {sortCourts(courts).length > 0 && (
+                  <p className="mt-4 text-xs font-bold text-ivory/60 uppercase tracking-wider">
+                    {sortCourts(courts).length} courts available · from ₱300/hr
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setView("calendar")}
+                className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-brass px-5 py-3.5 text-sm font-black text-forest shadow-lg transition hover:scale-[1.01] active:scale-[0.99]"
+              >
+                Book a court now <ArrowRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
         </section>
 
         {/* BENTO STATS & INFRASTRUCTURE GRID (Live Stats) */}
@@ -484,77 +626,8 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
 
 
 
-        <section className="mt-24 grid gap-6 border-t border-ivory/10 pt-16 lg:grid-cols-2">
-          <div className="rounded-3xl bg-ivory p-7 text-forest">
-            <span className="text-xs font-black uppercase tracking-wider text-clay">Community voice</span>
-            <h3 className="mt-2 font-display text-3xl font-black">Help us improve HAFF</h3>
-            <p className="mt-2 text-sm text-forest/65">Send an anonymous suggestion. Contact details are always optional.</p>
-            <form className="mt-5 space-y-3" onSubmit={async (event) => {
-              event.preventDefault();
-              setFeedbackNotice("");
-              const response = await fetch("/api/feedback?action=submit", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(feedback)
-              });
-              const data = await response.json();
-              if (!response.ok) {
-                setFeedbackNotice(data.error ?? "Unable to send your report.");
-                return;
-              }
-              setFeedback({ category: "App", message: "", contact: "" });
-              setFeedbackNotice("Thank you. Your anonymous report was sent.");
-            }}>
-              <select className="w-full rounded-xl border border-forest/15 bg-white px-4 py-3" value={feedback.category} onChange={(event) => setFeedback({ ...feedback, category: event.target.value })}>
-                {["Facilities", "Courts", "Scheduling", "App", "Staff/Service", "Safety", "Other"].map((item) => <option key={item}>{item}</option>)}
-              </select>
-              <textarea className="min-h-32 w-full rounded-xl border border-forest/15 bg-white px-4 py-3" minLength={20} required placeholder="What should we improve?" value={feedback.message} onChange={(event) => setFeedback({ ...feedback, message: event.target.value })} />
-              <input className="w-full rounded-xl border border-forest/15 bg-white px-4 py-3" placeholder="Optional email or phone" value={feedback.contact} onChange={(event) => setFeedback({ ...feedback, contact: event.target.value })} />
-              <button className="w-full rounded-xl bg-forest px-5 py-3 font-black text-ivory">Send anonymously</button>
-              {feedbackNotice && <p className="text-sm font-bold text-forest/70">{feedbackNotice}</p>}
-            </form>
-          </div>
-
-          <div className="rounded-3xl border border-ivory/10 bg-ivory/5 p-7">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <div>
-                <span className="text-xs font-black uppercase tracking-wider text-brass">Member stories</span>
-                <h3 className="mt-1 font-display text-3xl font-black text-ivory font-bold">From the HAFF community</h3>
-              </div>
-              {isAdmin && (
-                <button 
-                  onClick={() => setShowAddTestimonial(true)}
-                  className="rounded-full bg-brass text-forest px-4 py-1.5 text-xs font-black uppercase hover:bg-linen transition"
-                >
-                  + Add Story
-                </button>
-              )}
-            </div>
-            <div className="mt-5 space-y-3 max-h-96 overflow-y-auto pr-1 scrollbar-none">
-              {testimonials.length === 0 && <p className="rounded-2xl bg-black/10 p-5 text-sm text-ivory/60">Member stories will appear here after approval.</p>}
-              {testimonials.map((item) => (
-                <blockquote className="rounded-2xl bg-black/15 p-5 relative group" key={item.id}>
-                  <p className="text-sm leading-relaxed text-ivory">“{item.quote}”</p>
-                  <footer className="mt-3 text-xs font-black uppercase tracking-wide text-brass">{item.displayName} · {"★".repeat(item.rating)}</footer>
-                  {isAdmin && (
-                    <button 
-                      onClick={() => deleteTestimonial(item.id)}
-                      className="absolute top-3 right-3 text-red-400 hover:text-red-600 font-bold text-xs opacity-0 group-hover:opacity-100 transition"
-                    >
-                      ✕ Delete
-                    </button>
-                  )}
-                </blockquote>
-              ))}
-            </div>
-            <button onClick={() => setView("community")} className="mt-5 flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-brass px-5 font-black text-forest">
-              <MessageCircle size={18} /> Open community
-            </button>
-          </div>
-        </section>
-
         {/* HLC MEMBERSHIP BENEFITS SECTION */}
-        <section className="mt-20 rounded-3xl bg-ivory p-8 text-forest relative overflow-hidden border border-brass/25 shadow-xl">
+        <section className="mt-24 rounded-3xl bg-ivory p-8 text-forest relative overflow-hidden border border-brass/25 shadow-xl">
           <div className="absolute top-0 right-0 w-64 h-64 bg-brass/10 rounded-full blur-3xl pointer-events-none" />
           <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-center">
             
@@ -617,6 +690,78 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
               </ul>
             </div>
 
+          </div>
+        </section>
+
+        {/* FEEDBACK & TESTIMONIALS SECTION */}
+        <section className="mt-20 grid gap-6 border-t border-ivory/10 pt-16 lg:grid-cols-2">
+          {/* Left Column: Member stories */}
+          <div className="rounded-3xl border border-ivory/10 bg-ivory/5 p-7">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div>
+                <span className="text-xs font-black uppercase tracking-wider text-brass">Member stories</span>
+                <h3 className="mt-1 font-display text-3xl font-black text-ivory font-bold">From the HAFF community</h3>
+              </div>
+              {isAdmin && (
+                <button 
+                  onClick={() => setShowAddTestimonial(true)}
+                  className="rounded-full bg-brass text-forest px-4 py-1.5 text-xs font-black uppercase hover:bg-linen transition"
+                >
+                  + Add Story
+                </button>
+              )}
+            </div>
+            <div className="mt-5 space-y-3 max-h-96 overflow-y-auto pr-1 scrollbar-none">
+              {testimonials.length === 0 && <p className="rounded-2xl bg-black/10 p-5 text-sm text-ivory/60">Member stories will appear here after approval.</p>}
+              {testimonials.map((item) => (
+                <blockquote className="rounded-2xl bg-black/15 p-5 relative group" key={item.id}>
+                  <p className="text-sm leading-relaxed text-ivory">“{item.quote}”</p>
+                  <footer className="mt-3 text-xs font-black uppercase tracking-wide text-brass">{item.displayName} · {"★".repeat(item.rating)}</footer>
+                  {isAdmin && (
+                    <button 
+                      onClick={() => deleteTestimonial(item.id)}
+                      className="absolute top-3 right-3 text-red-400 hover:text-red-600 font-bold text-xs opacity-0 group-hover:opacity-100 transition"
+                    >
+                      ✕ Delete
+                    </button>
+                  )}
+                </blockquote>
+              ))}
+            </div>
+            <button onClick={() => setView("community")} className="mt-5 flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-brass px-5 font-black text-forest">
+              <MessageCircle size={18} /> Open community
+            </button>
+          </div>
+
+          {/* Right Column: Community voice */}
+          <div className="rounded-3xl bg-ivory p-7 text-forest">
+            <span className="text-xs font-black uppercase tracking-wider text-clay">Community voice</span>
+            <h3 className="mt-2 font-display text-3xl font-black">Help us improve HAFF</h3>
+            <p className="mt-2 text-sm text-forest/65">Send an anonymous suggestion. Contact details are always optional.</p>
+            <form className="mt-5 space-y-3" onSubmit={async (event) => {
+              event.preventDefault();
+              setFeedbackNotice("");
+              const response = await fetch("/api/feedback?action=submit", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(feedback)
+              });
+              const data = await response.json();
+              if (!response.ok) {
+                setFeedbackNotice(data.error ?? "Unable to send your report.");
+                return;
+              }
+              setFeedback({ category: "App", message: "", contact: "" });
+              setFeedbackNotice("Thank you. Your anonymous report was sent.");
+            }}>
+              <select className="w-full rounded-xl border border-forest/15 bg-white px-4 py-3" value={feedback.category} onChange={(event) => setFeedback({ ...feedback, category: event.target.value })}>
+                {["Facilities", "Courts", "Scheduling", "App", "Staff/Service", "Safety", "Other"].map((item) => <option key={item}>{item}</option>)}
+              </select>
+              <textarea className="min-h-32 w-full rounded-xl border border-forest/15 bg-white px-4 py-3" minLength={20} required placeholder="What should we improve?" value={feedback.message} onChange={(event) => setFeedback({ ...feedback, message: event.target.value })} />
+              <input className="w-full rounded-xl border border-forest/15 bg-white px-4 py-3" placeholder="Optional email or phone" value={feedback.contact} onChange={(event) => setFeedback({ ...feedback, contact: event.target.value })} />
+              <button className="w-full rounded-xl bg-forest px-5 py-3 font-black text-ivory">Send anonymously</button>
+              {feedbackNotice && <p className="text-sm font-bold text-forest/70">{feedbackNotice}</p>}
+            </form>
           </div>
         </section>
 

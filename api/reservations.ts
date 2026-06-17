@@ -198,7 +198,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         participantPlayerIds: strings(req.body?.participantPlayerIds),
         startTime,
         endTime,
-        feeAmount: Number(req.body?.feeAmount ?? 350),
+        feeAmount: Number(req.body?.feeAmount ?? 300), // COURT_HOURLY_FEE in apps/web/src/lib/pricing.ts
         seriesId: typeof req.body?.seriesId === "string" ? req.body.seriesId : null,
         recurrenceRule: typeof req.body?.recurrenceRule === "string" ? req.body.recurrenceRule : null,
         approvalStatus: isInstant ? "CONFIRMED" : "REQUESTED",
