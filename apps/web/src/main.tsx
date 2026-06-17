@@ -5344,7 +5344,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
   };
 
   return (
-    <section className="relative flex flex-col bg-[#0b2e22] text-ivory select-none min-h-screen overflow-x-hidden md:h-screen md:w-screen md:overflow-hidden" style={{ fontFamily: "'Inter', 'Helvetica Neue', sans-serif" }}>
+    <section className="relative flex h-[100dvh] w-screen flex-col overflow-hidden bg-[#0b2e22] text-ivory select-none" style={{ fontFamily: "'Inter', 'Helvetica Neue', sans-serif" }}>
       <style dangerouslySetInnerHTML={{ __html: `
         @keyframes gradientShift {
           0% { background-position: 0% 50%; }
@@ -5389,47 +5389,67 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
       <AnimatePresence>
         {activeBillboard && (
           <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[150] flex flex-col items-center justify-center animate-billboard-bg text-ivory p-4 md:p-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[150] flex flex-col items-center justify-center bg-[#05241c] text-ivory p-6 md:p-8"
           >
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(203,239,67,0.22),transparent_50%)] animate-pulse pointer-events-none" />
-            <div className="absolute top-10 left-10 opacity-[0.03] pointer-events-none"><LogoMark size="large" /></div>
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(203,239,67,0.15),transparent_60%)] pointer-events-none" />
+            <div className="absolute top-10 left-10 opacity-[0.03] pointer-events-none">
+              <LogoMark size="large" />
+            </div>
+
             <motion.div
-              initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: -20 }}
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: -20 }}
               transition={{ type: "spring", damping: 20, stiffness: 100 }}
-              className="flex h-full w-full flex-col items-center justify-center text-center z-10 px-4 py-6 md:px-12 md:py-10"
+              className="w-full max-w-5xl text-center z-10"
             >
-              <span className="inline-flex items-center gap-2 rounded-full bg-brass/10 px-4 py-1.5 text-sm md:px-6 md:py-2.5 md:text-xl font-black text-brass border border-brass/25 uppercase tracking-wider mb-4 md:mb-6">
-                <Megaphone className="h-4 w-4 md:h-7 md:w-7 animate-bounce" />
+              <span className="inline-flex items-center gap-2 rounded-full bg-brass/10 px-4 py-1.5 text-base md:text-xl font-black text-brass border border-brass/25 uppercase tracking-wider mb-4 md:mb-6">
+                <Megaphone className="h-5 w-5 md:h-7 md:w-7 animate-bounce" />
                 <span>{activeBillboard.variant === "reserved" ? "Court Reserved" : "Walk-Up Announcement"}</span>
               </span>
-              <h1 className="font-display text-[clamp(2.5rem,10vw,14rem)] font-black leading-none tracking-tight text-ivory mb-2 md:mb-4">{activeBillboard.courtName.toUpperCase()}</h1>
-              <p className="text-base md:text-[clamp(1.25rem,3vw,3.5rem)] text-linen/80 font-bold max-w-2xl md:max-w-5xl mx-auto mb-8 md:mb-14">
+
+              <h1 className="font-display text-[clamp(4rem,7vw,9rem)] font-black leading-none tracking-tight text-ivory mb-2 md:mb-4">
+                {activeBillboard.courtName.toUpperCase()}
+              </h1>
+              <p className="text-xl md:text-2xl text-linen/80 font-bold max-w-2xl mx-auto mb-10 md:mb-12">
                 {activeBillboard.variant === "reserved"
                   ? "This court is reserved. Please wait courtside until the match begins."
                   : "Your stack is active. Please proceed to the court now."}
               </p>
-              <div className="flex w-full max-w-2xl flex-col gap-3 md:gap-4 px-2 md:px-6">
-                {activeBillboard.players.slice(0, 2).map((p, idx) => (
-                  <motion.div key={`a-${p.displayName}-${idx}`} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.15 + idx * 0.08, type: "spring" }}>
-                    <TvBillboardPlayerRow player={p} getPlayerAvatar={getPlayerAvatar} />
-                  </motion.div>
-                ))}
-                <div className="flex items-center gap-4 py-1 md:py-2">
-                  <div className="h-px flex-1 bg-ivory/20" />
-                  <span className="text-lg md:text-3xl font-black text-ivory/40 uppercase tracking-[0.25em]">VS</span>
-                  <div className="h-px flex-1 bg-ivory/20" />
-                </div>
-                {activeBillboard.players.slice(2, 4).map((p, idx) => (
-                  <motion.div key={`b-${p.displayName}-${idx}`} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.35 + idx * 0.08, type: "spring" }}>
-                    <TvBillboardPlayerRow player={p} getPlayerAvatar={getPlayerAvatar} />
+
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 px-2 md:px-4">
+                {activeBillboard.players.map((p, idx) => (
+                  <motion.div
+                    key={p.displayName + idx}
+                    initial={{ opacity: 0, y: 30 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.15 + idx * 0.1, type: "spring" }}
+                    className="relative flex flex-col items-center p-5 md:p-6 rounded-[2rem] border border-white/10 bg-[#0b3a2c] shadow-2xl"
+                  >
+                    <div className="h-24 w-24 md:h-28 md:w-28 rounded-full overflow-hidden border-[3px] border-brass/40 shadow-xl bg-forest mb-4">
+                      <img
+                        src={getPlayerAvatar(p)}
+                        alt={p.displayName}
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
+                    <h3 className="text-xl md:text-2xl font-black text-white break-words leading-tight text-center px-1 w-full">
+                      {p.displayName}
+                    </h3>
+                    <span className="mt-2.5 px-3 py-1 rounded-full text-[10px] md:text-xs font-black uppercase bg-white/10 text-ivory/70 border border-white/5 tracking-wider">
+                      {p.skillLevel}
+                    </span>
                   </motion.div>
                 ))}
               </div>
+
               <button
                 type="button"
                 onClick={handleReplayBillboard}
-                className="mt-8 md:mt-12 inline-flex items-center gap-2.5 rounded-full border border-brass/40 bg-brass/15 px-6 py-3 md:px-8 md:py-4 text-sm md:text-lg font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest"
+                className="mt-8 md:mt-10 inline-flex items-center gap-2.5 rounded-full border border-brass/40 bg-brass/15 px-6 py-3 md:px-8 md:py-4 text-sm md:text-lg font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest"
               >
                 <RotateCcw className="h-5 w-5 md:h-6 md:w-6" />
                 Replay announcement
@@ -5448,7 +5468,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
       </div>
 
       {/* ── Main layout ── */}
-      <div className="flex flex-col flex-1 px-4 md:px-5 pt-14 md:pt-4 pb-5 md:pb-3 gap-3 md:h-full">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden px-4 pb-2 pt-14 md:gap-2.5 md:px-5 md:pb-3 md:pt-4">
 
         {/* ── Header ── */}
         <header className="shrink-0 flex items-start md:items-end justify-between gap-3 flex-wrap">
@@ -5565,7 +5585,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
         </div>
 
         {/* ── Courts ── */}
-        <div className={`grid gap-3 md:flex-1 md:min-h-0 grid-cols-1 ${sortedCourts.length <= 3 ? "md:grid-cols-3" : "md:grid-cols-2 md:grid-rows-2"}`}>
+        <div className={`grid min-h-0 flex-1 gap-2 overflow-hidden md:gap-3 grid-cols-1 ${sortedCourts.length <= 3 ? "md:grid-cols-3 md:grid-rows-1" : "md:grid-cols-2 md:grid-rows-2"}`}>
           {sortedCourts.map((court) => {
             const match = getActiveCourtMatch(court, matches);
             const teamA = match ? resolveMatchTeamPlayers(match.teamAPlayerIds, players).filter((player) => !player.isVacant) : [];
@@ -5576,7 +5596,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
               .map((id) => resolvePlayerById(id, players))
               .filter((player) => !player.isVacant);
             return (
-              <div key={court.id} className={`flex flex-col overflow-hidden rounded-2xl border bg-[#0d2e22] md:min-h-0 ${
+              <div key={court.id} className={`flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border bg-[#0d2e22] ${
                 isReserved ? "border-amber-400/45 shadow-[0_0_24px_rgba(251,191,36,0.12)]" : "border-[#1e4f3a]"
               }`}>
                 {/* Court header */}
@@ -5593,70 +5613,65 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
                     <span className="hidden sm:inline">{isPlaying ? "PLAYING" : court.status === "Maintenance" ? "MAINTENANCE" : court.status === "Paused" ? "PAUSED" : isReserved ? "RESERVED" : "AVAILABLE"}</span>
                     <span className="sm:hidden">{isPlaying ? "LIVE" : court.status === "Maintenance" ? "MAINT" : court.status === "Paused" ? "PAUSED" : isReserved ? "RESV" : "FREE"}</span>
                   </span>
-                  {isPlaying && match && (
-                    <button
-                      type="button"
-                      onClick={() => broadcastCourtAnnouncement(court.id, court.name, [...match.teamAPlayerIds, ...match.teamBPlayerIds], "active")}
-                      className="ml-auto inline-flex items-center gap-1 rounded-full border border-brass/35 bg-brass/10 px-2 md:px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest min-h-[32px]"
-                      title="Replay court call announcement"
-                    >
-                      <RotateCcw className="h-3 w-3" />
-                      <span className="hidden sm:inline">Announce</span>
-                    </button>
-                  )}
-                  {isReserved && !isPlaying && (
-                    <button
-                      type="button"
-                      onClick={() => broadcastCourtAnnouncement(
-                        court.id,
-                        court.name,
-                        court.reservedPlayerIds ?? [],
-                        "reserved"
-                      )}
-                      className="ml-auto inline-flex items-center gap-1 rounded-full border border-brass/35 bg-brass/10 px-2 md:px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest min-h-[32px]"
-                      title="Replay court call announcement"
-                    >
-                      <Megaphone className="h-3 w-3" />
-                      <span className="hidden sm:inline">Announce</span>
-                    </button>
-                  )}
+                  <div className="ml-auto flex shrink-0 items-center gap-2">
+                    {isPlaying && match && <TvElapsedTimer matchId={match.id} compact />}
+                    {isPlaying && match && (
+                      <button
+                        type="button"
+                        onClick={() => broadcastCourtAnnouncement(court.id, court.name, [...match.teamAPlayerIds, ...match.teamBPlayerIds], "active")}
+                        className="inline-flex items-center gap-1 rounded-full border border-brass/35 bg-brass/10 px-2 md:px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest min-h-[32px]"
+                        title="Replay court call announcement"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        <span className="hidden sm:inline">Announce</span>
+                      </button>
+                    )}
+                    {isReserved && !isPlaying && (
+                      <button
+                        type="button"
+                        onClick={() => broadcastCourtAnnouncement(
+                          court.id,
+                          court.name,
+                          court.reservedPlayerIds ?? [],
+                          "reserved"
+                        )}
+                        className="inline-flex items-center gap-1 rounded-full border border-brass/35 bg-brass/10 px-2 md:px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest min-h-[32px]"
+                        title="Replay court call announcement"
+                      >
+                        <Megaphone className="h-3 w-3" />
+                        <span className="hidden sm:inline">Announce</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Court body */}
                 {isPlaying ? (
-                  <div className="flex flex-col px-3 md:px-4 py-2.5 md:py-3 gap-2.5 md:gap-3 md:flex-1 md:min-h-0">
-                    {/* Players — stacked teams with VS between */}
-                    <div className="flex flex-1 min-h-0 flex-col gap-2 md:gap-2.5">
-                      <div className="flex flex-col gap-2 md:gap-2.5">
-                        {teamA.length > 0 ? teamA.map((p) => p && (
-                          <TvPlayerCard key={p.id} player={p} playerNote={playerNote(p)} noteIcon={noteIcon(playerNote(p))} getPlayerAvatar={getPlayerAvatar} />
-                        )) : (
-                          <div className="h-14 rounded-xl border border-dashed border-white/10 flex items-center justify-center">
-                            <span className="text-ivory/25 text-sm font-bold">—</span>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-3 py-0.5">
-                        <div className="h-px flex-1 bg-ivory/15" />
-                        <span className="shrink-0 text-sm md:text-lg font-black text-ivory/35 uppercase tracking-[0.2em]">VS</span>
-                        <div className="h-px flex-1 bg-ivory/15" />
-                      </div>
-
-                      <div className="flex flex-col gap-2 md:gap-2.5">
-                        {teamB.length > 0 ? teamB.map((p) => p && (
-                          <TvPlayerCard key={p.id} player={p} playerNote={playerNote(p)} noteIcon={noteIcon(playerNote(p))} getPlayerAvatar={getPlayerAvatar} />
-                        )) : (
-                          <div className="h-14 rounded-xl border border-dashed border-white/10 flex items-center justify-center">
-                            <span className="text-ivory/25 text-sm font-bold">—</span>
-                          </div>
-                        )}
-                      </div>
+                  <div className="flex min-h-0 flex-1 flex-col justify-evenly overflow-hidden px-2.5 py-1.5 md:px-3 md:py-2">
+                    <div className="flex min-h-0 flex-1 flex-col justify-evenly gap-1">
+                      {teamA.length > 0 ? teamA.map((p) => p && (
+                        <TvPlayerCard key={p.id} player={p} playerNote={playerNote(p)} noteIcon={noteIcon(playerNote(p))} getPlayerAvatar={getPlayerAvatar} compact tv />
+                      )) : (
+                        <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-white/10">
+                          <span className="text-ivory/25 text-xs font-bold">—</span>
+                        </div>
+                      )}
                     </div>
 
-                    {/* Timer */}
-                    <div className="shrink-0 flex items-center justify-center gap-3">
-                      <TvElapsedTimer matchId={match!.id} />
+                    <div className="flex shrink-0 items-center gap-2 py-0.5">
+                      <div className="h-px flex-1 bg-ivory/15" />
+                      <span className="shrink-0 text-[9px] md:text-[10px] font-black text-ivory/35 uppercase tracking-[0.16em]">VS</span>
+                      <div className="h-px flex-1 bg-ivory/15" />
+                    </div>
+
+                    <div className="flex min-h-0 flex-1 flex-col justify-evenly gap-1">
+                      {teamB.length > 0 ? teamB.map((p) => p && (
+                        <TvPlayerCard key={p.id} player={p} playerNote={playerNote(p)} noteIcon={noteIcon(playerNote(p))} getPlayerAvatar={getPlayerAvatar} compact tv />
+                      )) : (
+                        <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-white/10">
+                          <span className="text-ivory/25 text-xs font-bold">—</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : isReserved ? (
@@ -5671,7 +5686,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
                       </p>
                     )}
                     {reservedPlayers.length > 0 ? (
-                      <div className="flex w-full max-w-md flex-col gap-2 md:gap-2.5">
+                      <div className="flex w-full max-w-md flex-col justify-evenly gap-1.5 md:gap-2">
                         {reservedPlayers.map((player) => (
                           <TvPlayerCard
                             key={player.id}
@@ -5680,6 +5695,8 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
                             noteIcon={noteIcon(playerNote(player))}
                             getPlayerAvatar={getPlayerAvatar}
                             variant="reserved"
+                            compact
+                            tv
                           />
                         ))}
                       </div>
@@ -5722,34 +5739,54 @@ function TvPlayerCard({
   noteIcon,
   getPlayerAvatar,
   variant = "default",
+  compact = false,
+  tv = false,
 }: {
   player: { id: string; displayName: string; rating: number; avatarUrl?: string; skillLevel: string };
   playerNote: string;
   noteIcon: string;
   getPlayerAvatar: (p: any) => string;
   variant?: "default" | "reserved";
+  compact?: boolean;
+  tv?: boolean;
 }) {
   const borderClass = variant === "reserved" ? "border-amber-400/30 bg-[#173d2c]/90" : "border-[#1e4f3a] bg-[#132e24]";
   const avatarBorderClass = variant === "reserved" ? "border-amber-300/40" : "border-brass/40";
+  const avatarClass = tv
+    ? "h-7 w-7 md:h-8 md:w-8"
+    : compact
+      ? "h-8 w-8 md:h-9 md:w-9"
+      : "h-10 w-10 md:h-12 md:w-12";
+  const nameClass = tv
+    ? "text-[11px] md:text-xs font-black text-ivory leading-tight line-clamp-2"
+    : compact
+      ? "text-xs md:text-sm font-black text-ivory leading-tight"
+      : "text-sm md:text-[clamp(1rem,1.35vw,1.25rem)] font-black text-ivory leading-tight";
+  const metaIndent = tv ? "pl-[2rem] md:pl-[2.25rem]" : compact ? "pl-[2.25rem] md:pl-[2.75rem]" : "pl-[2.875rem] md:pl-[3.75rem]";
+  const shellClass = tv
+    ? "gap-0.5 rounded-lg border px-2 py-1 shadow-sm min-h-0"
+    : compact
+      ? "gap-1 rounded-lg border px-2 py-1.5 md:px-2.5 md:py-2 shadow-md"
+      : "gap-1.5 md:gap-2 rounded-xl md:rounded-2xl border px-3 md:px-3.5 py-2.5 md:py-3 shadow-lg";
 
   return (
-    <div className={`flex min-w-0 flex-col gap-1.5 md:gap-2 rounded-xl md:rounded-2xl border px-3 md:px-3.5 py-2.5 md:py-3 shadow-lg ${borderClass}`}>
-      <div className="flex min-w-0 items-center gap-2.5 md:gap-3">
+    <div className={`flex min-h-0 min-w-0 flex-col ${shellClass} ${borderClass}`}>
+      <div className="flex min-w-0 items-center gap-2">
         <img
           src={getPlayerAvatar(player)}
           alt=""
-          className={`h-10 w-10 md:h-12 md:w-12 shrink-0 rounded-full border-2 object-cover bg-[#0d2e22] shadow-xl ${avatarBorderClass}`}
+          className={`${avatarClass} shrink-0 rounded-full border-2 object-cover bg-[#0d2e22] shadow-xl ${avatarBorderClass}`}
         />
-        <p className="min-w-0 flex-1 break-words text-sm md:text-[clamp(1rem,1.35vw,1.25rem)] font-black text-ivory leading-tight">
+        <p className={`min-w-0 flex-1 break-words ${nameClass}`}>
           {getPlayerDisplayLabel(player)}
         </p>
       </div>
-      <div className="flex min-w-0 items-center gap-2 pl-[2.875rem] md:pl-[3.75rem]">
-        <span className="shrink-0 truncate rounded-md bg-white/10 px-1.5 md:px-2 py-0.5 text-[9px] md:text-[10px] font-black uppercase tracking-wide text-ivory/65 border border-white/10">
+      <div className={`flex min-w-0 items-center gap-1 ${metaIndent}`}>
+        <span className="shrink-0 rounded-md bg-white/10 px-1.5 py-0.5 text-[7px] md:text-[8px] font-black uppercase tracking-wide text-ivory/65 border border-white/10">
           {player.skillLevel}
         </span>
         {playerNote ? (
-          <span className="min-w-0 truncate text-[10px] md:text-xs font-bold text-brass/80 leading-tight">
+          <span className="min-w-0 line-clamp-1 text-[8px] md:text-[9px] font-bold text-brass/80 leading-tight">
             <span className="text-brass">{noteIcon}</span> {playerNote}
           </span>
         ) : null}
@@ -5758,37 +5795,29 @@ function TvPlayerCard({
   );
 }
 
-function TvBillboardPlayerRow({
-  player,
-  getPlayerAvatar,
-}: {
-  player: { displayName: string; avatarUrl?: string; skillLevel: string };
-  getPlayerAvatar: (p: { displayName: string; avatarUrl?: string }) => string;
-}) {
-  return (
-    <div className="flex flex-col gap-2 md:gap-3 rounded-2xl md:rounded-[1.75rem] border border-white/10 bg-[#0b3a2c] px-4 py-3 md:px-6 md:py-5 shadow-2xl">
-      <div className="flex items-center gap-3 md:gap-5">
-        <div className="h-14 w-14 md:h-20 md:w-20 shrink-0 overflow-hidden rounded-full border-2 md:border-[3px] border-brass/40 bg-forest shadow-xl">
-          <img src={getPlayerAvatar(player)} alt={player.displayName} className="h-full w-full object-cover" />
-        </div>
-        <h3 className="min-w-0 flex-1 break-words text-lg md:text-3xl font-black text-white leading-tight">{player.displayName}</h3>
-      </div>
-      <div className="flex items-center gap-2 pl-[4.25rem] md:pl-[6.25rem]">
-        <span className="shrink-0 rounded-full bg-white/10 px-3 py-1 text-[10px] md:text-sm font-black uppercase tracking-wider text-ivory/70 border border-white/5">
-          {player.skillLevel}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function TvElapsedTimer({ matchId }: { matchId: string }) {
+function TvElapsedTimer({ matchId, compact = false }: { matchId: string; compact?: boolean }) {
   const match = useClubStore((state) => state.matches.find((m) => m.id === matchId));
   const durationMinutes = useClubStore((state) => state.matchDurationMinutes);
   const now = useSmoothNow(Boolean(match?.startedAt && !match?.timerPausedAt));
   if (!match?.startedAt) return null;
   const remainingMs = getRemainingMilliseconds(match.startedAt, durationMinutes, now, match.timerPausedAt);
   const overtime = remainingMs < 0;
+
+  if (compact) {
+    return (
+      <div className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 tabular-nums ${
+        overtime ? "border-red-400/35 bg-red-500/10" : "border-brass/30 bg-brass/10"
+      }`}>
+        <span className={`text-sm md:text-base font-black leading-none ${overtime ? "text-red-400" : "text-brass"}`}>
+          <CountdownClock totalMs={Math.abs(remainingMs)} prefix={overtime ? "-" : ""} />
+        </span>
+        <span className="text-[8px] font-black uppercase tracking-wider text-ivory/45">
+          {overtime ? "OT" : "Left"}
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col items-center">
       <span className={`tv-elapsed text-2xl md:text-[clamp(2rem,3.2vw,3.5rem)] font-black leading-none tabular-nums ${overtime ? "text-red-400 animate-pulse" : "text-brass"}`}>
