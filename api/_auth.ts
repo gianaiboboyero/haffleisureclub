@@ -6,6 +6,18 @@ const COOKIE_NAME = "__Secure-haff_session";
 const LEGACY_COOKIE_NAME = "haff_session";
 const SESSION_DAYS = 30;
 
+function sessionCookie(value: string, maxAgeSeconds: number) {
+  const domain = process.env.COOKIE_DOMAIN?.trim();
+  const domainPart = domain ? `; Domain=${domain}` : "";
+  return `${COOKIE_NAME}=${value}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}${domainPart}`;
+}
+
+function legacySessionCookie(value: string, maxAgeSeconds: number) {
+  const domain = process.env.COOKIE_DOMAIN?.trim();
+  const domainPart = domain ? `; Domain=${domain}` : "";
+  return `${LEGACY_COOKIE_NAME}=${value}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}${domainPart}`;
+}
+
 export function hashPassword(password: string) {
   const salt = randomBytes(16).toString("hex");
   const hash = scryptSync(password, salt, 64).toString("hex");
@@ -37,10 +49,7 @@ export async function createSession(userId: string, res: VercelResponse) {
   await prisma.authSession.create({
     data: { userId, tokenHash: hashToken(token), expiresAt }
   });
-  res.setHeader(
-    "Set-Cookie",
-    `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${SESSION_DAYS * 86400}`
-  );
+  res.setHeader("Set-Cookie", sessionCookie(token, SESSION_DAYS * 86400));
 }
 
 export async function clearSession(req: VercelRequest, res: VercelResponse) {
@@ -49,8 +58,8 @@ export async function clearSession(req: VercelRequest, res: VercelResponse) {
     await prisma.authSession.deleteMany({ where: { tokenHash: hashToken(token) } });
   }
   res.setHeader("Set-Cookie", [
-    `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0`,
-    `${LEGACY_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0`
+    sessionCookie("", 0),
+    legacySessionCookie("", 0)
   ]);
 }
 

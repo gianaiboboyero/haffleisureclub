@@ -22,6 +22,7 @@ type CalReservation = Reservation & { publicLabel?: string };
 type Member = { id: string; role: "ADMIN" | "MEMBER"; playerId?: string; displayName: string } | null;
 
 import { getCourtSetting } from "../lib/courtSettings";
+import { apiFetch } from "../lib/api";
 import { COURT_HOURLY_FEE, estimateCourtFee, formatPeso } from "../lib/pricing";
 import {
   MANILA_TZ,
@@ -567,7 +568,7 @@ export function ReservationCalendar() {
   );
 
   React.useEffect(() => {
-    fetch("/api/auth?action=me", { credentials: "include" })
+    apiFetch("/api/auth?action=me")
       .then((r) => r.json())
       .then((d) => setMember(d.user ?? null))
       .catch(() => setMember(null));

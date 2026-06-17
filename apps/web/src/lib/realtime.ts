@@ -1,4 +1,5 @@
 import { Realtime } from "ably";
+import { apiUrl } from "./api";
 
 export type RealtimeEvent = {
   entityId?: string;
@@ -15,7 +16,7 @@ export function subscribeToChannel(
   if (!enabled) return () => undefined;
 
   const client = new Realtime({
-    authUrl: `/api/realtime/token?scope=${encodeURIComponent(scope)}`,
+    authUrl: apiUrl(`/api/realtime/token?scope=${encodeURIComponent(scope)}`),
     authMethod: "GET"
   });
   const channel = client.channels.get(channelName);

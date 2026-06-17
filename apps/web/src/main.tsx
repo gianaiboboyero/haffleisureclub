@@ -6,14 +6,11 @@ import {
   CalendarDays, 
   CheckCircle2, 
   Clock, 
-  Coffee,
   Flame, 
   GripVertical, 
   ListChecks, 
   Lock, 
   Monitor, 
-  Pause, 
-  Play, 
   ShieldCheck, 
   Sparkles, 
   Smartphone, 
@@ -64,7 +61,7 @@ import { COURT_HOURLY_FEE } from "./lib/pricing";
 import { manilaDateTimeIso, reservationDateKey } from "./lib/reservationTime";
 import { useClubStore, subscribeClubStateBroadcast } from "./store/useClubStore";
 import { db } from "./lib/db";
-import { sortCourts, getPlayerAvatar, getActiveCourtMatch, getTvStackGroups, getStackDisplayGroups, reconcileStackOrder, createTvVacantSlot, resolveMatchTeamPlayers, resolvePlayerById, getPlayerStatusNote, getPlayerDisplayLabel, AVATAR_PRESETS, dicebearAvatar, isUsableAvatarUrl } from "./lib/utils";
+import { sortCourts, getPlayerAvatar, getActiveCourtMatch, getTvStackGroups, getStackDisplayGroups, getStackLabel, stackGroupKey, reconcileStackOrder, createTvVacantSlot, resolveMatchTeamPlayers, resolvePlayerById, getPlayerStatusNote, getPlayerDisplayLabel, AVATAR_PRESETS, dicebearAvatar, isUsableAvatarUrl } from "./lib/utils";
 import { getCourtSetting, getCourtSettings, saveCourtSettings, type CourtSettings } from "./lib/courtSettings";
 import {
   PLAY_KUDOS_PILLS,
@@ -75,9 +72,11 @@ import {
 } from "./lib/playerKudos";
 import { getVoiceStyle, isSoundEnabled, playSound, setSoundEnabled, setVoiceStyle, speakAnnouncement, unlockAudio } from "./lib/sound";
 import type { VoiceStyle } from "./lib/sound";
-import type { Court, Match, Player } from "./lib/types";
+import type { Court, Match, Player, TvBroadcast } from "./lib/types";
 import "./styles/globals.css";
 import { Analytics } from "@vercel/analytics/react";
+import { SKIP_ADMIN_LOGIN } from "./lib/devFlags";
+import { apiFetch, apiJson } from "./lib/api";
 
 const LandingView = React.lazy(() =>
   import("./components/LandingView").then((module) => ({ default: module.LandingView }))
@@ -196,9 +195,12 @@ function App() {
         targetView = "landing";
       } else if (path === "play" || hash === "play") {
         targetView = "player";
-      } else if (["admin", "player", "parking", "tv", "calendar", "finance", "community"].includes(path)) {
+      } else if (path === "parking" || hash === "parking") {
+        window.history.replaceState(null, "", "/player");
+        targetView = "player";
+      } else if (["admin", "player", "tv", "calendar", "finance", "community"].includes(path)) {
         targetView = path as ViewMode;
-      } else if (["admin", "player", "parking", "tv", "calendar", "finance", "community"].includes(hash)) {
+      } else if (["admin", "player", "tv", "calendar", "finance", "community"].includes(hash)) {
         targetView = hash as ViewMode;
       } else if (path === "display" || hash === "display") {
         targetView = "tv";
@@ -244,6 +246,7 @@ function App() {
         prevPlayers = state.players;
         prevStackOrder = state.stackOrder;
         prevReservations = state.reservations;
+        if (state.isApplyingRemoteBroadcast()) return;
         if (!sharedStateInitialized) {
           if (state.hydrated) {
             sharedStateInitialized = true;
@@ -263,29 +266,29 @@ function App() {
 
     const timer = window.setInterval(refreshPendingSyncCount, 30000);
     const sharedStateTimer = window.setInterval(() => {
+      if (document.hidden) return;
       if (!socket || !socket.connected) {
-        void useClubStore.getState().refreshSharedState();
+        void useClubStore.getState().refreshSharedState({ allowUnchanged: true });
       }
-    }, 5000);
+    }, 15000);
 
     const applyIncomingStackOrder = (incoming: string[]) => {
-      if (useClubStore.getState().isRefreshSuppressed()) return;
-      const state = useClubStore.getState();
-      const stackOrder = reconcileStackOrder(incoming, state.players, state.matches, state.courts);
-      if (stackOrder.join("|") !== state.stackOrder.join("|")) {
-        localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
-        useClubStore.setState({ stackOrder });
-      }
+      useClubStore.getState().runAsRemoteBroadcast(() => {
+        const state = useClubStore.getState();
+        const stackOrder = reconcileStackOrder(incoming, state.players, state.matches, state.courts);
+        if (stackOrder.join("|") !== state.stackOrder.join("|")) {
+          localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+          useClubStore.setState({ stackOrder });
+        }
+      });
     };
 
     const unsubscribeClubBroadcast = subscribeClubStateBroadcast(
-      () => { void useClubStore.getState().refreshSharedState(); },
+      () => { void useClubStore.getState().refreshSharedState({ force: true }); },
       (stackOrder) => {
         applyIncomingStackOrder(stackOrder);
       },
-      (playerProfiles) => {
-        useClubStore.getState().applyBroadcastPlayerProfiles(playerProfiles);
-      },
+      undefined,
       (broadcast) => {
         useClubStore.setState({ tvBroadcast: broadcast });
       }
@@ -384,7 +387,6 @@ function App() {
           )}
           {view === "admin" && <AdminView key="admin" />}
           {view === "player" && <PlayerView key="player" />}
-          {view === "parking" && <ParkingView key="parking" />}
           {view === "tv" && <DisplayView key="tv" setView={setView} />}
           {view === "calendar" && <React.Suspense fallback={<LoadingScreen />}><ReservationCalendar key="calendar" /></React.Suspense>}
           {view === "finance" && <FinanceView key="finance" />}
@@ -401,7 +403,7 @@ function App() {
           )}
         </AnimatePresence>
       </div>
-      {view !== "tv" && <FloatingDock view={view} setView={setView} isAdmin={sessionMember?.role === "ADMIN"} />}
+      {view !== "tv" && <FloatingDock view={view} setView={setView} isAdmin={SKIP_ADMIN_LOGIN || sessionMember?.role === "ADMIN"} />}
       <Toasts />
     </main>
   );
@@ -440,7 +442,7 @@ function AccountMenu({
             <p className="text-[10px] text-ivory/45">HAFF member account</p>
           </div>
           <button className="mt-1 flex min-h-10 w-full items-center gap-2 rounded-xl px-3 text-left text-xs font-bold text-ivory/75 hover:bg-ivory/10 hover:text-ivory" onClick={async () => {
-            await fetch("/api/auth?action=logout", { method: "POST", credentials: "include" });
+            await apiFetch("/api/auth?action=logout", { method: "POST" });
             localStorage.removeItem("haff-player-account-id");
             onSignedOut();
             setOpen(false);
@@ -520,7 +522,7 @@ function useSmoothNow(enabled = true) {
   return now;
 }
 
-type ViewMode = "landing" | "admin" | "player" | "parking" | "tv" | "calendar" | "finance" | "community";
+type ViewMode = "landing" | "admin" | "player" | "tv" | "calendar" | "finance" | "community";
 
 function TopBar({ 
   view, 
@@ -650,7 +652,7 @@ function InlineAccountMenu({
   }
   const avatar = isUsableAvatarUrl(member.avatarUrl) ? member.avatarUrl : dicebearAvatar(member.displayName, "fun-emoji");
   const signOut = async () => {
-    await fetch("/api/auth?action=logout", { method: "POST", credentials: "include" });
+    await apiFetch("/api/auth?action=logout", { method: "POST" });
     localStorage.removeItem("haff-player-account-id");
     onSignedOut();
     setOpen(false);
@@ -690,7 +692,6 @@ function FloatingDock({ view, setView, isAdmin }: { view: string; setView: (view
     { key: "landing", label: "Home", icon: Home },
     { key: "player", label: "Players", icon: UserRound },
     { key: "calendar", label: "Reserve", icon: Calendar },
-    { key: "parking", label: "Parking", icon: Coffee },
     { key: "tv", label: "TV", icon: Monitor },
   ];
   const adminItems = [
@@ -698,7 +699,6 @@ function FloatingDock({ view, setView, isAdmin }: { view: string; setView: (view
     { key: "admin", label: "Admin", icon: Sliders },
     { key: "player", label: "Players", icon: UserRound },
     { key: "calendar", label: "Calendar", icon: Calendar },
-    { key: "parking", label: "Parking", icon: Coffee },
     { key: "finance", label: "Finance", icon: DollarSign },
     { key: "tv", label: "TV Display", icon: Monitor },
   ];
@@ -790,181 +790,17 @@ function PlayerProfileSheet({
   );
 }
 
-function ParkingView() {
-  const { players, courts, matches, setPlayerParked, setView, refreshSharedState } = useClubStore();
-  const [member, setMember] = React.useState<{ role: string; playerId?: string; displayName: string } | null>(null);
-  const [checking, setChecking] = React.useState(true);
-  const [profilePlayerId, setProfilePlayerId] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    Promise.all([
-      fetch("/api/auth?action=me", { credentials: "include", cache: "no-store" }).then(async (response) =>
-        response.headers.get("content-type")?.includes("application/json") ? response.json() : { user: null }
-      ),
-      refreshSharedState()
-    ])
-      .then(([data]) => setMember(data.user ?? null))
-      .catch(() => setMember(null))
-      .finally(() => setChecking(false));
-  }, [refreshSharedState]);
-
-  React.useEffect(() => {
-    const timer = window.setInterval(() => { void refreshSharedState(); }, 15000);
-    return () => window.clearInterval(timer);
-  }, [refreshSharedState]);
-
-  if (checking) return <LoadingScreen />;
-  if (!member) {
-    return (
-      <section className="mx-auto max-w-xl px-4 py-12 pb-32 text-center text-ivory">
-        <div className="rounded-3xl border border-ivory/20 bg-white/5 backdrop-blur-xl p-8 shadow-2xl">
-          <Coffee className="mx-auto text-brass" size={34} />
-          <h1 className="mt-4 font-display text-4xl font-black">Parking Area</h1>
-          <p className="mt-2 text-sm leading-6 text-ivory/65">Sign in to see your paid check-in status and control your rotation availability.</p>
-          <button className="mt-6 min-h-12 w-full rounded-full bg-brass px-6 font-black text-forest" onClick={() => setView("player")}>Sign in</button>
-        </div>
-      </section>
-    );
-  }
-
-  const parkedPlayers = players.filter((player) => player.checkedIn && player.parked);
-  const readyPlayers = players.filter((player) => player.checkedIn && !player.parked);
-  const canManage = (playerId: string) => member.role === "ADMIN" || member.playerId === playerId;
-
-  const activeMatches = matches.filter(m => m.status === "InProgress");
-  const getPlayingMatch = (playerId: string) => activeMatches.find(m => m.teamAPlayerIds.includes(playerId) || m.teamBPlayerIds.includes(playerId));
-  const getCourt = (matchId: string) => courts.find(c => c.currentMatchId === matchId);
-
-  const profilePlayer = profilePlayerId ? players.find((p) => p.id === profilePlayerId) : null;
-
-  return (
-    <motion.section
-      initial={{ opacity: 0, y: 14 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="mx-auto max-w-6xl px-4 py-5 pb-32 text-ivory"
-    >
-      <div className="relative overflow-hidden rounded-3xl bg-white/5 backdrop-blur-xl border border-white/10 p-6 shadow-[0_18px_46px_rgba(0,0,0,0.22)] sm:p-8">
-        <Coffee className="absolute -right-5 -top-7 h-40 w-40 text-brass opacity-[0.07]" />
-        <p className="text-xs font-black uppercase tracking-[0.22em] text-brass">Paid and checked in</p>
-        <h1 className="mt-2 font-display text-4xl font-black sm:text-5xl">Parking Area</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-linen/75">
-          Players here are cleared by the desk but are not included in the active stack. Resume when ready; park again whenever you need a break.
-        </p>
-        <div className="mt-5 flex flex-wrap gap-2">
-          <Badge>{parkedPlayers.length} parked</Badge>
-          <Badge>{readyPlayers.length} in rotation</Badge>
-        </div>
-      </div>
-
-      <div className="mt-5 grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
-        <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-brass">Cleared lounge</p>
-              <h2 className="font-display text-3xl font-black">Parked Players</h2>
-            </div>
-            <Coffee className="text-brass" size={26} />
-          </div>
-          <div className="mt-5 space-y-3">
-            {parkedPlayers.map((player) => (
-              <button
-                type="button"
-                key={player.id}
-                onClick={() => setProfilePlayerId(player.id)}
-                className="flex w-full items-center gap-3 rounded-2xl bg-ivory/[0.06] p-3 text-left transition hover:bg-ivory/[0.1]"
-              >
-                <img className="h-11 w-11 rounded-full bg-white object-cover" src={getPlayerAvatar(player)} alt="" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-black">{player.displayName}</p>
-                  <p className="text-xs text-linen/70">{player.skillLevel} · {player.totalGamesPlayed} games · Paid · outside rotation</p>
-                  {player.statusNote && (
-                    <p className="mt-1 truncate text-[11px] font-bold text-brass/90">💬 {player.statusNote}</p>
-                  )}
-                </div>
-                {canManage(player.id) && (
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => { e.stopPropagation(); void setPlayerParked(player.id, false); }}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); void setPlayerParked(player.id, false); } }}
-                    className="min-h-10 rounded-full bg-brass px-4 text-xs font-black text-forest hover:bg-linen transition"
-                  >
-                    Join rotation
-                  </span>
-                )}
-              </button>
-            ))}
-            {parkedPlayers.length === 0 && <p className="rounded-2xl bg-ivory/[0.04] p-6 text-center text-sm text-linen/60">No players are parked right now.</p>}
-          </div>
-        </Card>
-
-        <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory">
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-brass">Active queue</p>
-          <h2 className="font-display text-3xl font-black">In Rotation</h2>
-          <div className="mt-5 space-y-3">
-            {readyPlayers.map((player) => {
-              const match = getPlayingMatch(player.id);
-              const court = match ? getCourt(match.id) : null;
-              
-              return (
-                <button
-                  type="button"
-                  key={player.id}
-                  onClick={() => setProfilePlayerId(player.id)}
-                  className="flex w-full items-center gap-3 rounded-2xl bg-ivory/[0.08] p-3 text-left transition hover:bg-ivory/[0.12]"
-                >
-                  {match ? (
-                    <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-amber-400 animate-pulse" title="Playing" />
-                  ) : (
-                    <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-400" title="Waiting" />
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-bold">{player.displayName}</p>
-                    {court && <p className="text-xs text-amber-200 mt-0.5">Playing on {court.name}</p>}
-                    {!court && <p className="text-xs text-linen/60 mt-0.5">{player.skillLevel} · {player.totalGamesPlayed} games</p>}
-                    {player.statusNote && (
-                      <p className="mt-1 truncate text-[11px] font-bold text-brass/90">💬 {player.statusNote}</p>
-                    )}
-                  </div>
-                  {canManage(player.id) && !match && (
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={(e) => { e.stopPropagation(); void setPlayerParked(player.id, true); }}
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); void setPlayerParked(player.id, true); } }}
-                      className="min-h-9 rounded-full bg-brass px-3 text-xs font-black text-forest"
-                    >
-                      Park
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-            {readyPlayers.length === 0 && <p className="text-sm text-ivory/50">Nobody is in the rotation yet.</p>}
-          </div>
-        </Card>
-      </div>
-      {profilePlayer && (
-        <PlayerProfileSheet
-          player={profilePlayer}
-          onClose={() => setProfilePlayerId(null)}
-        />
-      )}
-    </motion.section>
-  );
-}
-
-type AdminTab = "control" | "players" | "lounge" | "reservations" | "history" | "settings";
+type AdminTab = "control" | "players" | "reservations" | "history" | "settings";
 
 function AdminView() {
-  const { players, courts, matches, sessions, currentSessionId, clubStatus, reservations } = useClubStore();
+  const { sessions, currentSessionId, reservations } = useClubStore();
   const [activeTab, setActiveTab] = React.useState<AdminTab>("control");
   const [isQrOpen, setIsQrOpen] = React.useState(false);
 
   React.useEffect(() => {
     const openAdminTab = (event: Event) => {
       const tab = (event as CustomEvent<AdminTab>).detail;
-      if (["control", "players", "lounge", "reservations", "history", "settings"].includes(tab)) {
+      if (["control", "players", "reservations", "history", "settings"].includes(tab)) {
         setActiveTab(tab);
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
@@ -975,24 +811,21 @@ function AdminView() {
 
   // Admin Portal Authentication — use localStorage (set on login, cleared on sign-out)
   const [isAuthenticated, setIsAuthenticated] = React.useState(
-    () => localStorage.getItem("haff_admin_authenticated") === "true"
+    () => SKIP_ADMIN_LOGIN || localStorage.getItem("haff_admin_authenticated") === "true"
   );
   const [email, setEmail] = React.useState("gianaibo.dev@gmail.com");
   const [password, setPassword] = React.useState("");
   const [authError, setAuthError] = React.useState("");
 
-  const checkedIn = players.filter((player) => player.checkedIn);
   const activeSession = sessions.find((s) => s.id === currentSessionId);
-  const waiting = checkedIn.length - matches.filter((match) => match.status === "InProgress").length * 4;
   const pendingReservations = reservations.filter((r) => r.status === "Requested").length;
 
   if (!isAuthenticated) {
     const handleLogin = async (e: React.FormEvent) => {
       e.preventDefault();
       setAuthError("");
-      const response = await fetch("/api/auth?action=login", {
+      const response = await apiFetch("/api/auth?action=login", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password })
       });
@@ -1074,77 +907,12 @@ function AdminView() {
 
   return (
     <section className="mx-auto max-w-7xl px-4 py-4">
-      {/* Header Panel */}
-      <section className="relative overflow-hidden rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10 p-5 text-ivory shadow-[0_18px_46px_rgba(0,0,0,0.2)] sm:p-6">
-        <div className="absolute -right-8 -top-12 opacity-[0.06]"><LogoMark size="large" /></div>
-        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-linen/80">
-          {activeSession ? `${activeSession.name} (${activeSession.location || "HAFF Leisure Club"})` : "No active session"}
-        </p>
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-1">
-          <h1 className="font-display text-4xl font-semibold leading-tight tracking-normal sm:text-5xl">
-            Open Play Control
-          </h1>
-          <div className="flex gap-2">
-            <Button
-              onClick={() => setIsQrOpen(true)}
-              className="bg-ivory/15 text-ivory hover:bg-ivory/25 font-bold px-5 py-3 rounded-full flex items-center gap-2"
-            >
-              <QrCode size={16} /> Player QR
-            </Button>
-            <Button
-              onClick={() => {
-                localStorage.removeItem("haff_admin_authenticated");
-                setIsAuthenticated(false);
-                playSound("complete");
-              }}
-              className="bg-ivory/15 text-ivory hover:bg-ivory/25 font-bold px-5 py-3 rounded-full flex items-center gap-2"
-            >
-              Sign Out
-            </Button>
-            {activeSession && (
-              <Button
-                onClick={async () => {
-                  const res = await useClubStore.getState().endSession();
-                  if (res?.hasActiveCourts) {
-                    if (confirm("There are still active/reserved courts in progress. Force ending the session will finish all matches and clear the courts. Proceed?")) {
-                      await useClubStore.getState().endSession(true);
-                    }
-                  }
-                }}
-                className="bg-clay text-ivory hover:bg-clay/90 font-bold px-5 py-3 rounded-full shadow-md"
-              >
-                End Session
-              </Button>
-            )}
-          </div>
-        </div>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-linen/85">
-          Check players in, park players who are taking a break, drag names into stacks, then assign the next stack to an available court.
-        </p>
-        {clubStatus && (
-          <div className="mt-4 flex items-start gap-3 rounded-xl bg-brass px-4 py-3 text-forest">
-            <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-clay" />
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.16em]">Live club status</p>
-              <p className="mt-0.5 font-bold leading-snug">{clubStatus}</p>
-            </div>
-          </div>
-        )}
-        <div className="mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-ivory/12 sm:grid-cols-4">
-          <Metric label="Checked in" value={checkedIn.length} />
-          <Metric label="Courts" value={courts.length} />
-          <Metric label="Completed" value={matches.filter((match) => match.status === "Completed").length} />
-          <Metric label="Waiting" value={Math.max(0, waiting)} />
-        </div>
-      </section>
-
       {/* Tab Navigation */}
-      <div className="my-4">
-        <div className="flex gap-1 overflow-x-auto rounded-xl bg-black/10 p-1 scrollbar-none">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex gap-1 overflow-x-auto rounded-xl bg-black/10 p-1 scrollbar-none sm:flex-1">
           {[
             { id: "control", label: "Play Rotation" },
             { id: "players", label: "Manage Players" },
-            { id: "lounge", label: "Park Lounge" },
             { id: "reservations", label: pendingReservations > 0 ? `Reservations (${pendingReservations})` : "Reservations" },
             { id: "history", label: "History" },
             { id: "settings", label: "Backup & Settings" }
@@ -1162,13 +930,45 @@ function AdminView() {
             </button>
           ))}
         </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button
+            onClick={() => setIsQrOpen(true)}
+            className="min-h-10 gap-2 bg-ivory/15 px-4 text-xs font-bold text-ivory hover:bg-ivory/25"
+          >
+            <QrCode size={14} /> Player QR
+          </Button>
+          <Button
+            onClick={() => {
+              localStorage.removeItem("haff_admin_authenticated");
+              setIsAuthenticated(SKIP_ADMIN_LOGIN);
+              playSound("complete");
+            }}
+            className="min-h-10 gap-2 bg-ivory/15 px-4 text-xs font-bold text-ivory hover:bg-ivory/25"
+          >
+            Sign Out
+          </Button>
+          {activeSession && (
+            <Button
+              onClick={async () => {
+                const res = await useClubStore.getState().endSession();
+                if (res?.hasActiveCourts) {
+                  if (confirm("There are still active/reserved courts in progress. Force ending the session will finish all matches and clear the courts. Proceed?")) {
+                    await useClubStore.getState().endSession(true);
+                  }
+                }
+              }}
+              className="min-h-10 bg-clay px-4 text-xs font-bold text-ivory hover:bg-clay/90"
+            >
+              End Session
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Tab Contents */}
       <div key={activeTab}>
         {activeTab === "control" && <PlayRotationTab />}
         {activeTab === "players" && <PlayersCrudTab />}
-        {activeTab === "lounge" && <ParkLoungeTab />}
         {activeTab === "reservations" && <AdminReservationsTab />}
         {activeTab === "history" && <HistoryTab />}
         {activeTab === "settings" && <SettingsTab />}
@@ -1275,12 +1075,12 @@ function AdminCourtCard({
   const isOvertime = court.status === "InUse" && elapsedSeconds >= matchDurationMinutes * 60;
   const isTimerPaused = Boolean(match?.timerPausedAt);
 
-  const persistMatch = async (updatedMatch: Match) => {
+  const persistMatch = async (updatedMatch: Match, options?: { force?: boolean }) => {
     await db.matches.put(updatedMatch);
     useClubStore.setState({
       matches: useClubStore.getState().matches.map((item) => (item.id === updatedMatch.id ? updatedMatch : item)),
     });
-    await useClubStore.getState().publishSharedState();
+    await useClubStore.getState().publishSharedState({ force: options?.force });
   };
 
   const toggleReservedStatus = async () => {
@@ -1326,12 +1126,12 @@ function AdminCourtCard({
     if (!match?.startedAt) return;
     const currentStart = new Date(match.startedAt).getTime();
     const newStart = new Date(currentStart - seconds * 1000).toISOString();
-    await persistMatch({ ...match, startedAt: newStart, timerPausedAt: undefined });
+    await persistMatch({ ...match, startedAt: newStart, timerPausedAt: undefined }, { force: true });
   };
 
   const resetWarmUp = async () => {
     if (!match) return;
-    await persistMatch({ ...match, startedAt: new Date().toISOString(), timerPausedAt: undefined });
+    await persistMatch({ ...match, startedAt: new Date().toISOString(), timerPausedAt: undefined }, { force: true });
   };
 
   const toggleTimerPause = async () => {
@@ -1339,10 +1139,10 @@ function AdminCourtCard({
     if (match.timerPausedAt) {
       const pauseDuration = Date.now() - new Date(match.timerPausedAt).getTime();
       const newStart = new Date(new Date(match.startedAt).getTime() + pauseDuration).toISOString();
-      await persistMatch({ ...match, startedAt: newStart, timerPausedAt: undefined });
+      await persistMatch({ ...match, startedAt: newStart, timerPausedAt: undefined }, { force: true });
       return;
     }
-    await persistMatch({ ...match, timerPausedAt: new Date().toISOString() });
+    await persistMatch({ ...match, timerPausedAt: new Date().toISOString() }, { force: true });
   };
 
   return (
@@ -1476,7 +1276,7 @@ function AdminCourtCard({
             </Button>
           )}
           {activeMatch ? (
-            <Button type="button" onClick={() => { playSound("complete"); void finishCourt(court.id); }} className="h-8 min-h-0 bg-brass hover:bg-brass/90 px-3 text-[10px] text-forest font-black uppercase tracking-wider rounded-lg flex items-center gap-1 shadow-sm">
+            <Button type="button" onClick={() => { void finishCourt(court.id); }} className="h-8 min-h-0 bg-brass hover:bg-brass/90 px-3 text-[10px] text-forest font-black uppercase tracking-wider rounded-lg flex items-center gap-1 shadow-sm">
               <CheckCircle2 size={12} /> Finish
             </Button>
           ) : court.status === "Reserved" ? (
@@ -1537,7 +1337,6 @@ function PlayRotationTab() {
     stackOrder, 
     checkIn, 
     checkOut,
-    setPlayerParked,
     generateMatches, 
     reserveCourt, 
     startReservedCourt, 
@@ -1598,8 +1397,28 @@ function PlayRotationTab() {
           border: 1.5px solid rgba(239, 68, 68, 0.6) !important;
         }
       `}} />
-      {/* Quick-action sticky bar */}
-      <div className="sticky top-16 z-30 -mx-1 rounded-2xl border border-white/10 bg-[#0a1f18]/95 px-4 py-3 backdrop-blur-xl shadow-[0_8px_32px_rgba(0,0,0,0.3)]">
+
+      <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {sortCourts(courts).map((court) => {
+          const match = getActiveCourtMatch(court, matches);
+          return (
+            <AdminCourtCard
+              key={court.id}
+              court={court}
+              match={match}
+              matches={matches}
+              matchDurationMinutes={matchDurationMinutes}
+              assignPlayerToCourt={assignPlayerToCourt}
+              startReservedCourt={startReservedCourt}
+              returnReservedToQueue={returnReservedToQueue}
+              clearCourt={clearCourt}
+              reserveCourt={reserveCourt}
+            />
+          );
+        })}
+      </div>
+
+      <div className="rounded-2xl border border-white/10 bg-[#0a1f18]/95 px-4 py-3 backdrop-blur-xl shadow-[0_8px_32px_rgba(0,0,0,0.3)]">
         <div className="flex flex-wrap items-center gap-2">
           <span className="mr-2 text-[10px] font-black uppercase tracking-[0.2em] text-brass">Quick Actions</span>
           <Button
@@ -1641,30 +1460,9 @@ function PlayRotationTab() {
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-        <div className="space-y-4">
-          <StackBuilder players={players} courts={courts} matches={matches} stackOrder={stackOrder} />
-        <div className="grid gap-4 md:grid-cols-2">
-          {sortCourts(courts).map((court) => {
-            const match = getActiveCourtMatch(court, matches);
-            return (
-              <AdminCourtCard
-                key={court.id}
-                court={court}
-                match={match}
-                matches={matches}
-                matchDurationMinutes={matchDurationMinutes}
-                assignPlayerToCourt={assignPlayerToCourt}
-                startReservedCourt={startReservedCourt}
-                returnReservedToQueue={returnReservedToQueue}
-                clearCourt={clearCourt}
-                reserveCourt={reserveCourt}
-              />
-            );
-          })}
-        </div>
-      </div>
-      <aside className="space-y-5">
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_min(20rem,24vw)]">
+        <StackBuilder players={players} courts={courts} matches={matches} stackOrder={stackOrder} />
+        <aside className="min-w-0 space-y-5">
         <Card className="work-surface">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -1881,7 +1679,7 @@ function PlayRotationTab() {
                     <div className="min-w-0 flex-1">
                       <p className="font-semibold text-ivory">{player.displayName}</p>
                       <p className="text-xs text-linen/75">
-                        {isPlaying ? "Playing" : player.parked ? "Parked" : player.skillLevel} · {player.totalGamesPlayed} games
+                        {isPlaying ? "Playing" : player.skillLevel} · {player.totalGamesPlayed} games
                       </p>
                       {player.statusNote && (
                         <p className="mt-1 max-w-full truncate text-[10px] font-bold text-linen/70" title={player.statusNote}>
@@ -1903,24 +1701,12 @@ function PlayRotationTab() {
                         Playing
                       </span>
                     ) : (
-                      <>
-                        <Button
-                          onClick={() => setPlayerParked(player.id, !player.parked)}
-                          className={`min-h-10 px-3 text-xs font-bold transition ${
-                            player.parked
-                              ? "bg-brass text-forest hover:bg-brass/90"
-                              : "bg-[#0b3a2c] text-ivory hover:bg-[#0b3a2c]/90"
-                          }`}
-                        >
-                          {player.parked ? "Resume" : "Park"}
-                        </Button>
-                        <Button
-                          onClick={() => checkOut(player.id)}
-                          className="min-h-10 px-3 text-xs font-bold bg-clay text-ivory hover:bg-clay/90"
-                        >
-                          Out
-                        </Button>
-                      </>
+                      <Button
+                        onClick={() => checkOut(player.id)}
+                        className="min-h-10 px-3 text-xs font-bold bg-clay text-ivory hover:bg-clay/90"
+                      >
+                        Out
+                      </Button>
                     )}
                   </div>
                 </div>
@@ -1972,8 +1758,8 @@ function PlayRotationTab() {
             </Button>
           </div>
         </Card>
-      </aside>
-    </div>
+          </aside>
+        </div>
     </div>
   );
 }
@@ -2780,91 +2566,6 @@ function CourtSchedulePanel({ courts }: { courts: ReturnType<typeof useClubStore
   );
 }
 
-function ParkLoungeTab() {
-  const { players, courts, matches, setPlayerParked } = useClubStore();
-  const [profilePlayerId, setProfilePlayerId] = React.useState<string | null>(null);
-
-  const checkedIn = players.filter((p) => p.isActive !== false && p.checkedIn);
-  const parkedPlayers = checkedIn.filter((p) => p.parked);
-  const inRotation = checkedIn.filter((p) => !p.parked);
-  const profilePlayer = profilePlayerId ? players.find((p) => p.id === profilePlayerId) : null;
-
-  const activeMatches = matches.filter((m) => m.status === "InProgress");
-  const getPlayingMatch = (playerId: string) =>
-    activeMatches.find((m) => m.teamAPlayerIds.includes(playerId) || m.teamBPlayerIds.includes(playerId));
-  const getCourt = (matchId: string) => courts.find((c) => c.currentMatchId === matchId);
-
-  const renderPlayerRow = (player: (typeof players)[number], parked: boolean) => {
-    const match = getPlayingMatch(player.id);
-    const court = match ? getCourt(match.id) : null;
-    return (
-      <div
-        key={player.id}
-        className="flex items-center gap-3 rounded-2xl bg-white/8 p-3 transition hover:bg-white/12"
-      >
-        <button type="button" onClick={() => setProfilePlayerId(player.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
-          <img src={getPlayerAvatar(player)} alt="" className="h-11 w-11 rounded-full object-cover bg-white/10" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate font-black text-ivory">{player.displayName}</p>
-            <p className="text-xs text-linen/70">
-              {match ? `Playing on ${court?.name}` : `${player.skillLevel} · ${player.totalGamesPlayed} games`}
-            </p>
-            {player.statusNote && (
-              <p className="mt-1 truncate text-[11px] font-bold text-brass">💬 {player.statusNote}</p>
-            )}
-          </div>
-        </button>
-        <Button
-          onClick={() => void setPlayerParked(player.id, !parked)}
-          className={`min-h-9 shrink-0 px-3 text-xs font-black ${parked ? "bg-brass text-forest" : "bg-white/10 text-ivory"}`}
-        >
-          {parked ? "Resume" : "Park"}
-        </Button>
-      </div>
-    );
-  };
-
-  return (
-    <div className="space-y-5">
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Card className="work-surface">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.2em] text-brass">Cleared lounge</p>
-              <h2 className="font-display text-3xl">Parked ({parkedPlayers.length})</h2>
-            </div>
-            <Coffee className="text-brass" size={26} />
-          </div>
-          <div className="mt-4 space-y-2 max-h-[420px] overflow-y-auto pr-1">
-            {parkedPlayers.map((p) => renderPlayerRow(p, true))}
-            {parkedPlayers.length === 0 && <p className="text-sm text-linen/55 py-6 text-center">Nobody is parked right now.</p>}
-          </div>
-        </Card>
-
-        <Card className="work-surface">
-          <div>
-            <p className="text-xs font-black uppercase tracking-[0.2em] text-brass">Active queue</p>
-            <h2 className="font-display text-3xl">In Rotation ({inRotation.length})</h2>
-          </div>
-          <div className="mt-4 space-y-2 max-h-[420px] overflow-y-auto pr-1">
-            {inRotation.map((p) => renderPlayerRow(p, false))}
-            {inRotation.length === 0 && <p className="text-sm text-linen/55 py-6 text-center">No players in rotation.</p>}
-          </div>
-        </Card>
-      </div>
-
-      <CourtSchedulePanel courts={courts} />
-
-      {profilePlayer && (
-        <PlayerProfileSheet
-          player={profilePlayer}
-          onClose={() => setProfilePlayerId(null)}
-        />
-      )}
-    </div>
-  );
-}
-
 // ----------------------------------------------------
 // PLAY HISTORY TAB
 // ----------------------------------------------------
@@ -3037,7 +2738,7 @@ function CalendarView() {
   const [authError, setAuthError] = React.useState("");
 
   React.useEffect(() => {
-    fetch("/api/auth?action=me", { credentials: "include" })
+    apiFetch("/api/auth?action=me")
       .then((response) => response.json())
       .then((data) => setIsAuthenticated(data.user?.role === "ADMIN"))
       .finally(() => setCheckingAuth(false));
@@ -3047,9 +2748,8 @@ function CalendarView() {
   if (!isAuthenticated) {
     const handleLogin = async (e: React.FormEvent) => {
       e.preventDefault();
-      const response = await fetch("/api/auth?action=login", {
+      const response = await apiFetch("/api/auth?action=login", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password })
       });
@@ -3150,7 +2850,7 @@ function FinanceView() {
   const [authError, setAuthError] = React.useState("");
 
   React.useEffect(() => {
-    fetch("/api/auth?action=me", { credentials: "include" })
+    apiFetch("/api/auth?action=me")
       .then((response) => response.json())
       .then((data) => setIsAuthenticated(data.user?.role === "ADMIN"))
       .finally(() => setCheckingAuth(false));
@@ -3160,9 +2860,8 @@ function FinanceView() {
   if (!isAuthenticated) {
     const handleLogin = async (e: React.FormEvent) => {
       e.preventDefault();
-      const response = await fetch("/api/auth?action=login", {
+      const response = await apiFetch("/api/auth?action=login", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password })
       });
@@ -3892,7 +3591,6 @@ function PlayerView() {
     courts,
     matches,
     stackOrder,
-    setPlayerParked,
     matchDurationMinutes,
     updatePlayer,
     submitMatchFeedback,
@@ -3952,7 +3650,7 @@ function PlayerView() {
   }, [refreshSharedState]);
 
   React.useEffect(() => {
-    fetch("/api/auth?action=me", { credentials: "include" })
+    apiFetch("/api/auth?action=me")
       .then((response) => response.json())
       .then((data) => {
         const member = data.user as { playerId?: string; displayName: string } | null;
@@ -4147,8 +3845,6 @@ function PlayerView() {
           className={`mt-3 flex items-center gap-3 rounded-2xl px-4 py-3 font-bold ${
             assignedMatch
               ? "bg-brass text-forest"
-              : player.parked
-              ? "bg-amber-500/20 border border-amber-500/30 text-amber-200"
               : player.checkedIn
               ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-200"
               : "bg-ivory/10 border border-ivory/10 text-ivory/60"
@@ -4156,15 +3852,12 @@ function PlayerView() {
         >
           <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${
             assignedMatch ? "bg-forest animate-pulse" :
-            player.parked ? "bg-amber-400" :
             player.checkedIn ? "bg-emerald-400 animate-pulse" :
             "bg-ivory/30"
           }`} />
           <span className="flex-1 text-sm">
             {assignedMatch
               ? `🎾 It's your turn! Head to ${assignedCourt?.name ?? "the court"} now.`
-              : player.parked
-              ? "⏸ You are parked — rejoin rotation when ready."
               : player.checkedIn
               ? `📍 ${status.label} — ${status.stackDetail}`
               : "You are not checked in yet. Check in at the desk."}
@@ -4377,20 +4070,16 @@ function PlayerView() {
                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brass">Rotation Status</p>
                   <div className="mt-1 flex items-baseline gap-2">
                     <span className={`inline-block h-2.5 w-2.5 rounded-full ${
-                      player.parked 
-                        ? "bg-amber-400" 
-                        : player.checkedIn 
+                      player.checkedIn 
                         ? "bg-emerald-400 animate-pulse" 
                         : "bg-red-500"
                     }`} />
                     <span className="text-2xl font-black tracking-normal uppercase">
-                      {player.parked ? "Parked" : player.checkedIn ? "Active" : "Not Checked In"}
+                      {player.checkedIn ? "Active" : "Not Checked In"}
                     </span>
                   </div>
                   <p className="text-xs text-linen/82 mt-1 font-semibold">
-                    {player.parked 
-                      ? "Paid and checked in · Outside rotation" 
-                      : player.checkedIn 
+                    {player.checkedIn 
                       ? status.label.includes("Court") 
                         ? "On Court" 
                         : "Waiting in Rotation Queue"
@@ -4425,7 +4114,7 @@ function PlayerView() {
               )}
 
               {/* Queue Wait Time Box */}
-              {player.checkedIn && !player.parked && (
+              {player.checkedIn && (
                 <div className="mt-3 rounded-xl bg-[#edf2ed] p-4 text-ink shadow-[0_12px_28px_rgba(6,36,27,0.18)]">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-1.5 text-clay">
@@ -4452,25 +4141,13 @@ function PlayerView() {
               )}
 
               {/* Status Action Button */}
-              {!player.checkedIn ? (
+              {!player.checkedIn && (
                 <div className="mt-4 rounded-2xl bg-[#06241B] px-4 py-3.5 ring-1 ring-forest/30 text-center">
                   <p className="text-xs font-black uppercase tracking-[0.12em] text-brass">Check In at the Front Desk</p>
                   <p className="mt-1 text-[11px] leading-relaxed text-linen/65">
                     Please see the admin at the front desk to complete your check-in and join the queue.
                   </p>
                 </div>
-              ) : (
-                <Button 
-                  onClick={() => setPlayerParked(player.id, !player.parked)} 
-                  className={`mt-4 w-full font-black py-3 rounded-2xl shadow-lg flex items-center justify-center gap-2 transition-transform hover:scale-[1.01] active:scale-95 border-none ${
-                    player.parked 
-                      ? "bg-brass text-ink hover:bg-ivory" 
-                      : "bg-clay text-ivory hover:bg-[#D97757]"
-                  }`}
-                >
-                  {player.parked ? <Play size={16} /> : <Pause size={16} />}
-                  {player.parked ? "Join Play Rotation" : "Park Me"}
-                </Button>
               )}
             </div>
 
@@ -5094,13 +4771,28 @@ function RankBadge({ skillLevel, compact = false, className = "" }: { skillLevel
   );
 }
 
+const TV_BROADCAST_REPLAY_WINDOW_MS = 45_000;
+
+const tvAnnouncementMemory = {
+  seenMatchIds: new Set<string>(),
+  handledBroadcastIds: new Set<string>(),
+};
+
+function isFreshTvBroadcast(broadcast: TvBroadcast) {
+  const createdAt = Date.parse(broadcast.createdAt);
+  if (!Number.isFinite(createdAt)) return false;
+  return Date.now() - createdAt < TV_BROADCAST_REPLAY_WINDOW_MS;
+}
+
 function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void }) {
-  const { courts, matches, players, stackOrder, clubStatus, refreshSharedState, goBackFromTv, tvBroadcast } = useClubStore();
+  const { courts, matches, players, stackOrder, clubStatus, refreshSharedState, goBackFromTv, tvBroadcast, online, syncDegraded } = useClubStore();
   const now = useNow();
 
   React.useEffect(() => {
-    void refreshSharedState();
-    const timer = window.setInterval(() => { void refreshSharedState(); }, 2000);
+    void refreshSharedState({ force: true });
+    const timer = window.setInterval(() => {
+      void refreshSharedState({ allowUnchanged: true });
+    }, 15000);
     return () => window.clearInterval(timer);
   }, [refreshSharedState]);
 
@@ -5116,7 +4808,8 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
     variant: "active" | "reserved";
   } | null>(null);
 
-  const seenMatchIdsRef = React.useRef<Set<string>>(new Set());
+  const seenMatchIdsRef = React.useRef(tvAnnouncementMemory.seenMatchIds);
+  const isInitialCourtSeedRef = React.useRef(true);
   const billboardDismissTimerRef = React.useRef<number | undefined>(undefined);
   const messageBillboardTimerRef = React.useRef<number | undefined>(undefined);
   const handledBroadcastIdRef = React.useRef<string | null>(null);
@@ -5171,9 +4864,31 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
     );
   }, [activeBillboard, triggerCourtAnnouncement]);
 
-  React.useEffect(() => {
-    if (!tvBroadcast?.id || handledBroadcastIdRef.current === tvBroadcast.id) return;
+  React.useLayoutEffect(() => {
+    if (!isInitialCourtSeedRef.current || courts.length === 0) return;
+    courts.forEach((court) => {
+      if (court.currentMatchId) tvAnnouncementMemory.seenMatchIds.add(court.currentMatchId);
+    });
+    isInitialCourtSeedRef.current = false;
+  }, [courts]);
+
+  React.useLayoutEffect(() => {
+    if (!tvBroadcast?.id || isFreshTvBroadcast(tvBroadcast)) return;
+    tvAnnouncementMemory.handledBroadcastIds.add(tvBroadcast.id);
     handledBroadcastIdRef.current = tvBroadcast.id;
+  }, [tvBroadcast?.id]);
+
+  React.useEffect(() => {
+    if (!tvBroadcast?.id) return;
+    if (
+      handledBroadcastIdRef.current === tvBroadcast.id ||
+      tvAnnouncementMemory.handledBroadcastIds.has(tvBroadcast.id)
+    ) {
+      handledBroadcastIdRef.current = tvBroadcast.id;
+      return;
+    }
+    handledBroadcastIdRef.current = tvBroadcast.id;
+    tvAnnouncementMemory.handledBroadcastIds.add(tvBroadcast.id);
 
     if (tvBroadcast.kind === "message" && tvBroadcast.message) {
       void unlockAudio();
@@ -5232,15 +4947,6 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
   React.useEffect(() => () => {
     window.clearTimeout(billboardDismissTimerRef.current);
     window.clearTimeout(messageBillboardTimerRef.current);
-  }, []);
-
-  // Populate initial match IDs so we don't billboard them on initial mount
-  React.useEffect(() => {
-    courts.forEach((court) => {
-      if (court.currentMatchId) {
-        seenMatchIdsRef.current.add(court.currentMatchId);
-      }
-    });
   }, []);
 
   // Monitor for new matches assigned to courts
@@ -5359,6 +5065,16 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
         .tv-elapsed {
           letter-spacing: -0.02em;
         }
+        .tv-court-name {
+          font-size: clamp(1.75rem, 4.5vw, 3.5rem);
+          line-height: 0.95;
+        }
+        .tv-player-name {
+          font-size: clamp(0.875rem, 1.75vw, 1.35rem);
+        }
+        .tv-timer-digits {
+          font-size: clamp(1.35rem, 2.8vw, 2.5rem);
+        }
       `}} />
 
       {/* ── Text announcement overlay ── */}
@@ -5467,16 +5183,30 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
         </button>
       </div>
 
+      {/* ── Auth warning ── */}
+        {!online && (
+          <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-xl border border-red-400/40 bg-[#1a0a0a]/90 px-4 py-2.5 shadow-xl backdrop-blur">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-red-400 animate-pulse" />
+            <span className="text-xs font-black uppercase tracking-wider text-red-300">Not signed in — live sync paused. <button onClick={() => _setView("player")} className="underline decoration-dotted">Sign in</button></span>
+          </div>
+        )}
+        {online && syncDegraded && (
+          <div className="fixed bottom-4 left-4 z-50 flex items-center gap-2 rounded-xl border border-amber-400/40 bg-[#1a1408]/90 px-4 py-2.5 shadow-xl backdrop-blur">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400 animate-pulse" />
+            <span className="text-xs font-black uppercase tracking-wider text-amber-200">Sync slowed — retrying automatically</span>
+          </div>
+        )}
+
       {/* ── Main layout ── */}
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden px-4 pb-2 pt-14 md:gap-2.5 md:px-5 md:pb-3 md:pt-4">
+      <div className="mx-auto flex min-h-0 w-full max-w-[1920px] flex-1 flex-col gap-2 overflow-hidden px-3 pb-2 pt-12 sm:px-4 md:gap-3 md:px-6 md:pb-3 md:pt-4">
 
         {/* ── Header ── */}
-        <header className="shrink-0 flex items-start md:items-end justify-between gap-3 flex-wrap">
+        <header className="shrink-0 flex flex-col items-center gap-2 text-center md:flex-row md:items-end md:justify-between md:text-left">
           <div>
-            <p className="text-[9px] md:text-[11px] font-black uppercase tracking-[0.22em] text-ivory/60 leading-none">HAFF LEISURE CLUB</p>
-            <h1 className="text-2xl md:text-[clamp(2.2rem,3.8vw,4rem)] font-black leading-none tracking-tighter uppercase text-ivory mt-0.5">NOW PLAYING</h1>
+            <p className="text-[10px] sm:text-[11px] font-black uppercase tracking-[0.22em] text-ivory/60 leading-none">HAFF LEISURE CLUB</p>
+            <h1 className="font-display text-[clamp(1.75rem,4vw,3.5rem)] font-black leading-none tracking-tighter uppercase text-ivory mt-1">NOW PLAYING</h1>
           </div>
-          <div className="flex items-center gap-2 md:gap-4 flex-wrap justify-end">
+          <div className="flex items-center justify-center gap-2 md:gap-3 flex-wrap">
             {clubStatus && (
               <span className="flex items-center gap-1.5 rounded-full bg-brass/15 border border-brass/30 px-3 md:px-4 py-1 md:py-1.5 text-[10px] md:text-sm font-black text-brass uppercase tracking-wider">
                 <span className="h-1.5 w-1.5 rounded-full bg-brass animate-pulse" />
@@ -5495,30 +5225,30 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
           </div>
         </header>
 
-        {/* ── Stack Queue — Mobile: compact 2-column ── */}
-        <div className="md:hidden shrink-0 rounded-2xl border border-[#1e4f3a] bg-[#0d2e22] px-3 py-3">
-          <p className="text-[9px] font-black uppercase tracking-[0.22em] text-ivory/40 mb-2">STACK QUEUE</p>
+        {/* ── Stack Queue — Mobile ── */}
+        <div className="md:hidden shrink-0 rounded-2xl border border-[#1e4f3a] bg-[#0d2e22] px-3 py-2.5">
+          <p className="text-center text-[10px] font-black uppercase tracking-[0.22em] text-ivory/40 mb-2">Stack queue</p>
           <div className="grid grid-cols-2 gap-2">
             {displayQueueGroups.slice(0, 4).map((group, index) => {
               const realCount = group.filter((p) => !p.isVacant).length;
-              const isUpNext = index === 0;
+              const isStackNext = index === 0;
               return (
                 <div key={index} className="rounded-xl overflow-hidden border border-[#1e4f3a]">
-                  <div className={`flex items-center justify-between px-2.5 py-1.5 ${isUpNext ? "bg-brass" : "bg-[#173d2c]"}`}>
-                    <span className={`truncate text-[10px] font-black uppercase tracking-wide ${isUpNext ? "text-forest" : "text-ivory/70"}`}>
-                      {isUpNext ? "UP NEXT" : `Stack ${index + 1}`}
+                  <div className={`flex items-center justify-between px-2.5 py-2 ${isStackNext ? "bg-brass" : "bg-[#173d2c]"}`}>
+                    <span className={`truncate text-[11px] font-black uppercase tracking-wide ${isStackNext ? "text-forest" : "text-ivory/70"}`}>
+                      {getStackLabel(index)}
                     </span>
-                    <span className={`ml-1.5 shrink-0 text-[10px] font-black tabular-nums ${isUpNext ? "text-forest" : "text-ivory/50"}`}>{realCount}/4</span>
+                    <span className={`ml-1.5 shrink-0 text-[11px] font-black tabular-nums ${isStackNext ? "text-forest" : "text-ivory/50"}`}>{realCount}/4</span>
                   </div>
                   <div className="divide-y divide-[#1a3f2e]">
                     {group.map((player) => (
-                      <div key={player.id} className="flex items-center gap-2 bg-[#0d2e22] px-2 py-2 min-h-[40px]">
+                      <div key={player.id} className="flex items-center gap-2.5 bg-[#0d2e22] px-2.5 py-2.5 min-h-[44px]">
                         <img
                           src={getPlayerAvatar(player)}
                           alt=""
-                          className={`h-6 w-6 shrink-0 rounded-full object-cover border ${player.isVacant ? "border-white/10 opacity-20" : "border-brass/30"} bg-[#173d2c]`}
+                          className={`h-8 w-8 shrink-0 rounded-full object-cover border ${player.isVacant ? "border-white/10 opacity-20" : "border-brass/30"} bg-[#173d2c]`}
                         />
-                        <p className={`break-words text-[11px] font-bold leading-tight ${player.isVacant ? "text-ivory/25 italic" : "text-ivory"}`}>
+                        <p className={`break-words text-xs font-bold leading-tight ${player.isVacant ? "text-ivory/25 italic" : "text-ivory"}`}>
                           {getPlayerDisplayLabel(player)}
                         </p>
                       </div>
@@ -5530,49 +5260,37 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
           </div>
         </div>
 
-        {/* ── Stack Queue — Desktop: 4-column full ── */}
-        <div className="hidden md:block shrink-0 rounded-2xl border border-[#1e4f3a] bg-[#0d2e22] px-4 py-3">
-          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-ivory/40 mb-2.5">STACK QUEUE</p>
-          <div className="grid grid-cols-4 gap-3">
+        {/* ── Stack Queue — Desktop ── */}
+        <div className="hidden md:block shrink-0 rounded-2xl border border-[#1e4f3a] bg-[#0d2e22] px-4 py-2.5">
+          <p className="text-center text-[11px] font-black uppercase tracking-[0.22em] text-ivory/40 mb-2">Stack queue</p>
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4 lg:gap-3">
             {displayQueueGroups.slice(0, 4).map((group, index) => {
               const realCount = group.filter((p) => !p.isVacant).length;
-              const isUpNext = index === 0;
+              const isStackNext = index === 0;
               return (
                 <div key={index} className="rounded-xl overflow-hidden border border-[#1e4f3a]">
-                  <div className={`flex items-center justify-between px-3 py-1.5 ${isUpNext ? "bg-brass" : "bg-[#173d2c]"}`}>
-                    <div className="flex items-center gap-1.5">
-                      {isUpNext && (
-                        <span className="rounded-sm bg-[#0d2e22] px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-brass">UP NEXT</span>
-                      )}
-                      <span className={`text-[11px] font-black uppercase tracking-wider ${isUpNext ? "text-forest" : "text-ivory/70"}`}>
-                        Stack {index + 1}
-                      </span>
-                    </div>
-                    <span className={`text-[11px] font-black tabular-nums ${isUpNext ? "text-forest" : "text-ivory/50"}`}>{realCount}/4</span>
+                  <div className={`flex items-center justify-between px-3 py-2 ${isStackNext ? "bg-brass" : "bg-[#173d2c]"}`}>
+                    <span className={`text-xs font-black uppercase tracking-wider ${isStackNext ? "text-forest" : "text-ivory/70"}`}>
+                      {getStackLabel(index)}
+                    </span>
+                    <span className={`text-xs font-black tabular-nums ${isStackNext ? "text-forest" : "text-ivory/50"}`}>{realCount}/4</span>
                   </div>
                   <div className="grid grid-cols-2 gap-px bg-[#1a3f2e]">
                     {group.map((player) => (
-                      <div key={player.id} className="flex items-center gap-2 bg-[#0d2e22] px-2.5 py-2">
+                      <div key={player.id} className="flex items-center gap-2 bg-[#0d2e22] px-2.5 py-2.5">
                         <img
                           src={getPlayerAvatar(player)}
                           alt=""
-                          className={`h-7 w-7 shrink-0 rounded-full object-cover border ${player.isVacant ? "border-white/10 opacity-20" : "border-brass/30"} bg-[#173d2c]`}
+                          className={`h-8 w-8 shrink-0 rounded-full object-cover border ${player.isVacant ? "border-white/10 opacity-20" : "border-brass/30"} bg-[#173d2c]`}
                         />
-                        <div className="min-w-0 flex-1">
-                          <p className={`break-words text-[11px] font-black leading-tight ${player.isVacant ? "text-ivory/25 italic" : "text-ivory"}`}>
+                        <div className="min-w-0 flex-1 text-center sm:text-left">
+                          <p className={`break-words text-xs font-black leading-tight ${player.isVacant ? "text-ivory/25 italic" : "text-ivory"}`}>
                             {getPlayerDisplayLabel(player)}
                           </p>
                           {!player.isVacant && (
-                            <div className="mt-1 flex min-w-0 items-center gap-1">
-                              <span className="shrink-0 truncate rounded bg-white/10 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-ivory/55 max-w-full">
-                                {player.skillLevel}
-                              </span>
-                            </div>
-                          )}
-                          {!player.isVacant && playerNote(player) && (
-                            <p className="mt-0.5 truncate text-[9px] font-bold text-brass/75 leading-tight">
-                              {noteIcon(playerNote(player))} {playerNote(player)}
-                            </p>
+                            <span className="mt-1 inline-block truncate rounded bg-white/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-ivory/55 max-w-full">
+                              {player.skillLevel}
+                            </span>
                           )}
                         </div>
                       </div>
@@ -5585,45 +5303,53 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
         </div>
 
         {/* ── Courts ── */}
-        <div className={`grid min-h-0 flex-1 gap-2 overflow-hidden md:gap-3 grid-cols-1 ${sortedCourts.length <= 3 ? "md:grid-cols-3 md:grid-rows-1" : "md:grid-cols-2 md:grid-rows-2"}`}>
+        <div className={`mx-auto grid min-h-0 w-full flex-1 gap-2 overflow-hidden sm:gap-3 ${
+          sortedCourts.length <= 1
+            ? "grid-cols-1 max-w-3xl"
+            : sortedCourts.length === 2
+              ? "grid-cols-1 sm:grid-cols-2 max-w-6xl"
+              : sortedCourts.length === 3
+                ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+                : "grid-cols-1 sm:grid-cols-2"
+        }`}>
           {sortedCourts.map((court) => {
             const match = getActiveCourtMatch(court, matches);
-            const teamA = match ? resolveMatchTeamPlayers(match.teamAPlayerIds, players).filter((player) => !player.isVacant) : [];
-            const teamB = match ? resolveMatchTeamPlayers(match.teamBPlayerIds, players).filter((player) => !player.isVacant) : [];
+            const teamA = match ? resolveMatchTeamPlayers(match.teamAPlayerIds, players).filter((player) => !player.isVacant && !isUnresolvedPlayerStub(player)) : [];
+            const teamB = match ? resolveMatchTeamPlayers(match.teamBPlayerIds, players).filter((player) => !player.isVacant && !isUnresolvedPlayerStub(player)) : [];
             const isPlaying = Boolean(match);
             const isReserved = !isPlaying && court.status === "Reserved";
             const reservedPlayers = (court.reservedPlayerIds ?? [])
               .map((id) => resolvePlayerById(id, players))
               .filter((player) => !player.isVacant);
             return (
-              <div key={court.id} className={`flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border bg-[#0d2e22] ${
+              <div key={court.id} className={`flex h-full min-h-[min(38vh,360px)] sm:min-h-[min(42vh,400px)] flex-col overflow-hidden rounded-2xl border bg-[#0d2e22] ${
                 isReserved ? "border-amber-400/45 shadow-[0_0_24px_rgba(251,191,36,0.12)]" : "border-[#1e4f3a]"
               }`}>
                 {/* Court header */}
-                <div className="flex shrink-0 items-center border-b border-[#1e4f3a] px-3 md:px-4 py-2 md:py-2.5 gap-2">
-                  <h2 className="shrink-0 text-base md:text-[clamp(1.1rem,1.6vw,1.5rem)] font-black uppercase tracking-wide text-ivory">{court.name.toUpperCase()}</h2>
-                  <span className={`flex shrink-0 items-center gap-1 rounded-full px-2 md:px-2.5 py-0.5 text-[9px] md:text-[10px] font-black uppercase tracking-wider ${
+                <div className={`flex shrink-0 flex-col items-center border-b border-[#1e4f3a] text-center ${
+                  isPlaying ? "px-2 py-2 sm:px-3" : "px-3 py-3 sm:px-4 sm:py-4"
+                }`}>
+                  <h2 className="font-display tv-court-name font-black uppercase tracking-tight text-ivory">{court.name.toUpperCase()}</h2>
+                  <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+                  <span className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[10px] sm:text-xs font-black uppercase tracking-wider ${
                     isPlaying ? "bg-emerald-400/20 text-emerald-300 border border-emerald-400/30" :
                     court.status === "Maintenance" ? "bg-red-400/20 text-red-300 border border-red-400/30" :
                     court.status === "Paused" ? "bg-ivory/20 text-ivory/70 border border-white/20" :
                     isReserved ? "bg-amber-400/20 text-amber-300 border border-amber-400/30" :
                     "bg-brass/20 text-brass border border-brass/30"
                   }`}>
-                    <span className={`h-1.5 w-1.5 rounded-full ${isPlaying ? "bg-emerald-400 animate-pulse" : "bg-current"}`} />
-                    <span className="hidden sm:inline">{isPlaying ? "PLAYING" : court.status === "Maintenance" ? "MAINTENANCE" : court.status === "Paused" ? "PAUSED" : isReserved ? "RESERVED" : "AVAILABLE"}</span>
-                    <span className="sm:hidden">{isPlaying ? "LIVE" : court.status === "Maintenance" ? "MAINT" : court.status === "Paused" ? "PAUSED" : isReserved ? "RESV" : "FREE"}</span>
+                    <span className={`h-2 w-2 rounded-full ${isPlaying ? "bg-emerald-400 animate-pulse" : "bg-current"}`} />
+                    <span>{isPlaying ? "PLAYING" : court.status === "Maintenance" ? "MAINTENANCE" : court.status === "Paused" ? "PAUSED" : isReserved ? "RESERVED" : "AVAILABLE"}</span>
                   </span>
-                  <div className="ml-auto flex shrink-0 items-center gap-2">
-                    {isPlaying && match && <TvElapsedTimer matchId={match.id} compact />}
                     {isPlaying && match && (
                       <button
                         type="button"
                         onClick={() => broadcastCourtAnnouncement(court.id, court.name, [...match.teamAPlayerIds, ...match.teamBPlayerIds], "active")}
-                        className="inline-flex items-center gap-1 rounded-full border border-brass/35 bg-brass/10 px-2 md:px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest min-h-[32px]"
+                        className="inline-flex items-center gap-1.5 rounded-full border border-brass/35 bg-brass/10 px-3 py-1.5 text-[10px] sm:text-xs font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest min-h-[36px]"
                         title="Replay court call announcement"
                       >
-                        <RotateCcw className="h-3 w-3" />
-                        <span className="hidden sm:inline">Announce</span>
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        <span>Announce</span>
                       </button>
                     )}
                     {isReserved && !isPlaying && (
@@ -5635,11 +5361,11 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
                           court.reservedPlayerIds ?? [],
                           "reserved"
                         )}
-                        className="inline-flex items-center gap-1 rounded-full border border-brass/35 bg-brass/10 px-2 md:px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest min-h-[32px]"
+                        className="inline-flex items-center gap-1.5 rounded-full border border-brass/35 bg-brass/10 px-3 py-1.5 text-[10px] sm:text-xs font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest min-h-[36px]"
                         title="Replay court call announcement"
                       >
-                        <Megaphone className="h-3 w-3" />
-                        <span className="hidden sm:inline">Announce</span>
+                        <Megaphone className="h-3.5 w-3.5" />
+                        <span>Announce</span>
                       </button>
                     )}
                   </div>
@@ -5647,46 +5373,44 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
 
                 {/* Court body */}
                 {isPlaying ? (
-                  <div className="flex min-h-0 flex-1 flex-col justify-evenly overflow-hidden px-2.5 py-1.5 md:px-3 md:py-2">
-                    <div className="flex min-h-0 flex-1 flex-col justify-evenly gap-1">
+                  <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch gap-x-1.5 overflow-hidden px-2 py-2 sm:gap-x-2 sm:px-3 sm:py-2.5">
+                    <div className="flex min-h-0 flex-col justify-center gap-1 sm:gap-1.5">
                       {teamA.length > 0 ? teamA.map((p) => p && (
-                        <TvPlayerCard key={p.id} player={p} playerNote={playerNote(p)} noteIcon={noteIcon(playerNote(p))} getPlayerAvatar={getPlayerAvatar} compact tv />
+                        <TvPlayerCard key={p.id} player={p} playerNote={playerNote(p)} noteIcon={noteIcon(playerNote(p))} getPlayerAvatar={getPlayerAvatar} tvCourt />
                       )) : (
-                        <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-white/10">
+                        <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-[#1e4f3a]/80 bg-[#05241c]/40 py-3">
                           <span className="text-ivory/25 text-xs font-bold">—</span>
                         </div>
                       )}
                     </div>
 
-                    <div className="flex shrink-0 items-center gap-2 py-0.5">
-                      <div className="h-px flex-1 bg-ivory/15" />
-                      <span className="shrink-0 text-[9px] md:text-[10px] font-black text-ivory/35 uppercase tracking-[0.16em]">VS</span>
-                      <div className="h-px flex-1 bg-ivory/15" />
+                    <div className="flex shrink-0 items-center justify-center px-0.5">
+                      {match && <TvElapsedTimer matchId={match.id} variant="compact" />}
                     </div>
 
-                    <div className="flex min-h-0 flex-1 flex-col justify-evenly gap-1">
+                    <div className="flex min-h-0 flex-col justify-center gap-1 sm:gap-1.5">
                       {teamB.length > 0 ? teamB.map((p) => p && (
-                        <TvPlayerCard key={p.id} player={p} playerNote={playerNote(p)} noteIcon={noteIcon(playerNote(p))} getPlayerAvatar={getPlayerAvatar} compact tv />
+                        <TvPlayerCard key={p.id} player={p} playerNote={playerNote(p)} noteIcon={noteIcon(playerNote(p))} getPlayerAvatar={getPlayerAvatar} tvCourt />
                       )) : (
-                        <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-white/10">
+                        <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-[#1e4f3a]/80 bg-[#05241c]/40 py-3">
                           <span className="text-ivory/25 text-xs font-bold">—</span>
                         </div>
                       )}
                     </div>
                   </div>
                 ) : isReserved ? (
-                  <div className="flex flex-col items-center justify-center gap-2.5 md:gap-3 p-4 md:p-5 min-h-[100px] md:flex-1 bg-gradient-to-b from-amber-500/[0.14] to-transparent">
-                    <div className="flex items-center gap-2 rounded-full border border-amber-400/35 bg-amber-400/10 px-3 py-1.5">
-                      <Lock className="h-4 w-4 md:h-5 md:w-5 text-amber-300" />
-                      <span className="text-sm md:text-xl font-black uppercase tracking-[0.18em] text-amber-200">Court Reserved</span>
+                  <div className="flex flex-1 flex-col items-center justify-center gap-3 p-4 sm:p-5 bg-gradient-to-b from-amber-500/[0.14] to-transparent text-center">
+                    <div className="flex items-center gap-2 rounded-full border border-amber-400/35 bg-amber-400/10 px-4 py-2">
+                      <Lock className="h-5 w-5 text-amber-300" />
+                      <span className="text-base sm:text-xl font-black uppercase tracking-[0.18em] text-amber-200">Court Reserved</span>
                     </div>
                     {court.reservedFor && (
-                      <p className="text-center text-xs md:text-base font-bold text-amber-100/90 break-words max-w-full px-2">
+                      <p className="text-center text-sm sm:text-lg font-bold text-amber-100/90 break-words max-w-full px-2">
                         {court.reservedFor}
                       </p>
                     )}
                     {reservedPlayers.length > 0 ? (
-                      <div className="flex w-full max-w-md flex-col justify-evenly gap-1.5 md:gap-2">
+                      <div className="grid w-full max-w-md grid-cols-2 gap-1.5 sm:gap-2">
                         {reservedPlayers.map((player) => (
                           <TvPlayerCard
                             key={player.id}
@@ -5695,26 +5419,64 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
                             noteIcon={noteIcon(playerNote(player))}
                             getPlayerAvatar={getPlayerAvatar}
                             variant="reserved"
-                            compact
-                            tv
+                            tvCourt
                           />
                         ))}
                       </div>
                     ) : (
-                      <p className="text-[10px] md:text-xs font-bold uppercase tracking-[0.2em] text-amber-200/70">Held for upcoming play</p>
+                      <p className="text-xs sm:text-sm font-bold uppercase tracking-[0.2em] text-amber-200/70">Held for upcoming play</p>
                     )}
-                    <p className="text-[9px] md:text-[10px] font-bold uppercase tracking-widest text-ivory/35">Not open for walk-ups</p>
+                    <p className="text-[10px] sm:text-xs font-bold uppercase tracking-widest text-ivory/35">Not open for walk-ups</p>
                   </div>
                 ) : (
-                  <div className="flex flex-col items-center justify-center gap-1.5 p-4 min-h-[80px] md:flex-1">
+                  <div className="flex flex-1 flex-col items-center justify-center gap-3 sm:gap-4 p-4 sm:p-6 text-center">
                     {court.status === "Maintenance" ? (
-                      <p className="text-base md:text-2xl font-black uppercase text-red-400 tracking-wider">Under Maintenance</p>
+                      <>
+                        <div className="rounded-full bg-red-500/10 p-4 sm:p-6 border border-red-400/20">
+                          <svg className="h-12 w-12 sm:h-16 sm:w-16 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                          </svg>
+                        </div>
+                        <p className="text-xl sm:text-3xl font-black uppercase text-red-400 tracking-wider">Under Maintenance</p>
+                        <p className="text-xs sm:text-sm font-bold text-red-300/50 uppercase tracking-wide">Temporarily out of service</p>
+                      </>
                     ) : court.status === "Paused" ? (
-                      <p className="text-base md:text-2xl font-black uppercase text-ivory/50 tracking-wider">Paused</p>
+                      <>
+                        <div className="rounded-full bg-amber-500/10 p-4 sm:p-6 border border-amber-400/20">
+                          <svg className="h-12 w-12 sm:h-16 sm:w-16 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        </div>
+                        <p className="text-xl sm:text-3xl font-black uppercase text-amber-400 tracking-wider">Paused</p>
+                        <p className="text-xs sm:text-sm font-bold text-amber-300/50 uppercase tracking-wide">Play will resume shortly</p>
+                      </>
                     ) : (
                       <>
-                        <span className="text-xl md:text-3xl font-black uppercase text-brass tracking-wider">Available</span>
-                        <p className="text-[10px] font-bold text-ivory/30 uppercase tracking-widest">Waiting for players</p>
+                        <div className="relative">
+                          <div className="absolute inset-0 bg-brass/20 blur-2xl rounded-full animate-pulse" />
+                          <div className="relative rounded-full bg-gradient-to-br from-brass/20 to-emerald-500/10 p-5 sm:p-7 border-2 border-brass/30 shadow-[0_0_30px_rgba(201,168,76,0.15)]">
+                            <svg className="h-14 w-14 sm:h-20 sm:w-20 text-brass" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                            </svg>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <span className="block text-2xl sm:text-[clamp(2.5rem,5vw,4rem)] font-black uppercase text-brass tracking-wider drop-shadow-[0_2px_8px_rgba(201,168,76,0.3)]">
+                            Ready to Play
+                          </span>
+                          <div className="flex flex-col gap-1">
+                            <p className="text-sm sm:text-lg font-bold text-emerald-300/90 uppercase tracking-wide">
+                              Court is open
+                            </p>
+                            <p className="text-xs sm:text-sm font-medium text-ivory/40 tracking-wide">
+                              Join the queue or start a match
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-2 flex items-center gap-2 rounded-full bg-brass/5 border border-brass/20 px-4 py-2">
+                          <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
+                          <span className="text-[10px] sm:text-xs font-black uppercase tracking-widest text-brass/80">Available Now</span>
+                        </div>
                       </>
                     )}
                   </div>
@@ -5741,6 +5503,7 @@ function TvPlayerCard({
   variant = "default",
   compact = false,
   tv = false,
+  tvCourt = false,
 }: {
   player: { id: string; displayName: string; rating: number; avatarUrl?: string; skillLevel: string };
   playerNote: string;
@@ -5749,25 +5512,66 @@ function TvPlayerCard({
   variant?: "default" | "reserved";
   compact?: boolean;
   tv?: boolean;
+  tvCourt?: boolean;
 }) {
-  const borderClass = variant === "reserved" ? "border-amber-400/30 bg-[#173d2c]/90" : "border-[#1e4f3a] bg-[#132e24]";
+  const borderClass = variant === "reserved" ? "border-amber-400/30 bg-[#173d2c]/90" : "border-[#1e4f3a] bg-[#132e24] shadow-[inset_0_1px_0_rgba(201,168,76,0.06)]";
   const avatarBorderClass = variant === "reserved" ? "border-amber-300/40" : "border-brass/40";
-  const avatarClass = tv
-    ? "h-7 w-7 md:h-8 md:w-8"
-    : compact
-      ? "h-8 w-8 md:h-9 md:w-9"
-      : "h-10 w-10 md:h-12 md:w-12";
-  const nameClass = tv
-    ? "text-[11px] md:text-xs font-black text-ivory leading-tight line-clamp-2"
-    : compact
-      ? "text-xs md:text-sm font-black text-ivory leading-tight"
-      : "text-sm md:text-[clamp(1rem,1.35vw,1.25rem)] font-black text-ivory leading-tight";
-  const metaIndent = tv ? "pl-[2rem] md:pl-[2.25rem]" : compact ? "pl-[2.25rem] md:pl-[2.75rem]" : "pl-[2.875rem] md:pl-[3.75rem]";
-  const shellClass = tv
-    ? "gap-0.5 rounded-lg border px-2 py-1 shadow-sm min-h-0"
-    : compact
-      ? "gap-1 rounded-lg border px-2 py-1.5 md:px-2.5 md:py-2 shadow-md"
-      : "gap-1.5 md:gap-2 rounded-xl md:rounded-2xl border px-3 md:px-3.5 py-2.5 md:py-3 shadow-lg";
+
+  if (tvCourt) {
+    return (
+      <div className={`flex min-h-0 min-w-0 items-center gap-2 rounded-lg border px-2 py-1.5 sm:px-2.5 sm:py-2 ${borderClass}`}>
+        <img
+          src={getPlayerAvatar(player)}
+          alt=""
+          className={`h-8 w-8 sm:h-9 sm:w-9 shrink-0 rounded-full border-2 object-cover bg-[#0d2e22] ${avatarBorderClass}`}
+        />
+        <div className="min-w-0 flex-1 text-left">
+          <p className="tv-player-name truncate text-xs sm:text-sm font-black text-ivory leading-tight">
+            {getPlayerDisplayLabel(player)}
+          </p>
+          <p className="truncate text-[8px] sm:text-[9px] font-black uppercase tracking-wide text-ivory/55">
+            {player.skillLevel}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (tv) {
+    return (
+      <div className={`flex min-h-0 min-w-0 flex-col items-center text-center gap-1.5 rounded-xl border px-3 py-2.5 sm:px-4 sm:py-3 ${borderClass}`}>
+        <img
+          src={getPlayerAvatar(player)}
+          alt=""
+          className={`h-10 w-10 sm:h-12 sm:w-12 md:h-14 md:w-14 shrink-0 rounded-full border-2 object-cover bg-[#0d2e22] shadow-xl ${avatarBorderClass}`}
+        />
+        <p className="tv-player-name min-w-0 w-full break-words font-black text-ivory leading-tight line-clamp-2">
+          {getPlayerDisplayLabel(player)}
+        </p>
+        <div className="flex min-w-0 flex-wrap items-center justify-center gap-1.5">
+          <span className="shrink-0 rounded-md bg-white/10 px-2 py-0.5 text-[9px] sm:text-[10px] font-black uppercase tracking-wide text-ivory/65 border border-white/10">
+            {player.skillLevel}
+          </span>
+          {playerNote ? (
+            <span className="min-w-0 max-w-full line-clamp-1 text-[9px] sm:text-[10px] font-bold text-brass/80 leading-tight">
+              <span className="text-brass">{noteIcon}</span> {playerNote}
+            </span>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  const avatarClass = compact
+    ? "h-8 w-8 md:h-9 md:w-9"
+    : "h-10 w-10 md:h-12 md:w-12";
+  const nameClass = compact
+    ? "text-xs md:text-sm font-black text-ivory leading-tight"
+    : "text-sm md:text-[clamp(1rem,1.35vw,1.25rem)] font-black text-ivory leading-tight";
+  const metaIndent = compact ? "pl-[2.25rem] md:pl-[2.75rem]" : "pl-[2.875rem] md:pl-[3.75rem]";
+  const shellClass = compact
+    ? "gap-1 rounded-lg border px-2 py-1.5 md:px-2.5 md:py-2 shadow-md"
+    : "gap-1.5 md:gap-2 rounded-xl md:rounded-2xl border px-3 md:px-3.5 py-2.5 md:py-3 shadow-lg";
 
   return (
     <div className={`flex min-h-0 min-w-0 flex-col ${shellClass} ${borderClass}`}>
@@ -5795,13 +5599,47 @@ function TvPlayerCard({
   );
 }
 
-function TvElapsedTimer({ matchId, compact = false }: { matchId: string; compact?: boolean }) {
+function TvElapsedTimer({ matchId, compact = false, variant = "default" }: { matchId: string; compact?: boolean; variant?: "default" | "divider" | "compact" }) {
   const match = useClubStore((state) => state.matches.find((m) => m.id === matchId));
   const durationMinutes = useClubStore((state) => state.matchDurationMinutes);
   const now = useSmoothNow(Boolean(match?.startedAt && !match?.timerPausedAt));
-  if (!match?.startedAt) return null;
+  if (!match?.startedAt || match.status === "Completed") return null;
   const remainingMs = getRemainingMilliseconds(match.startedAt, durationMinutes, now, match.timerPausedAt);
   const overtime = remainingMs < 0;
+
+  if (variant === "divider") {
+    return (
+      <div className="flex shrink-0 w-full items-center gap-2 py-1.5 sm:py-2" aria-label={overtime ? "Overtime" : "Time remaining"}>
+        <div className="h-px flex-1 bg-gradient-to-r from-transparent via-[#1e4f3a] to-brass/35" />
+        <div className={`flex flex-col items-center rounded-xl border px-4 py-1.5 sm:px-5 sm:py-2 tabular-nums ${
+          overtime ? "border-red-400/35 bg-red-500/10" : "border-brass/35 bg-[#05241c]/80"
+        }`}>
+          <span className={`tv-timer-digits font-black leading-none ${overtime ? "text-red-400 animate-pulse" : "text-brass"}`}>
+            <CountdownClock totalMs={Math.abs(remainingMs)} prefix={overtime ? "-" : ""} />
+          </span>
+          <span className="mt-1 text-[8px] sm:text-[9px] font-black uppercase tracking-[0.18em] text-ivory/40">
+            {overtime ? "OVERTIME" : "TIME LEFT"}
+          </span>
+        </div>
+        <div className="h-px flex-1 bg-gradient-to-l from-transparent via-[#1e4f3a] to-brass/35" />
+      </div>
+    );
+  }
+
+  if (variant === "compact") {
+    return (
+      <div className={`flex min-h-0 min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg border px-2 py-2 tabular-nums ${
+        overtime ? "border-red-400/35 bg-red-500/10" : "border-brass/35 bg-[#05241c]/80"
+      }`} aria-label={overtime ? "Overtime" : "Time remaining"}>
+        <span className={`tv-timer-digits text-lg sm:text-xl font-black leading-none ${overtime ? "text-red-400 animate-pulse" : "text-brass"}`}>
+          <CountdownClock totalMs={Math.abs(remainingMs)} prefix={overtime ? "-" : ""} />
+        </span>
+        <span className="text-[7px] sm:text-[8px] font-black uppercase tracking-wider text-ivory/40">
+          {overtime ? "OT" : "LEFT"}
+        </span>
+      </div>
+    );
+  }
 
   if (compact) {
     return (
@@ -5830,10 +5668,15 @@ function TvElapsedTimer({ matchId, compact = false }: { matchId: string; compact
   );
 }
 
+function isUnresolvedPlayerStub(player: Pick<Player, "displayName" | "isVacant">) {
+  const name = player.displayName?.trim();
+  return !player.isVacant && (name === "Player" || name === "Queued");
+}
+
 function announceCourtOvertime(courtName: string, playerIds: string[], players: Player[]) {
   const names = playerIds
     .map((playerId) => resolvePlayerById(playerId, players))
-    .filter((player) => !player.isVacant)
+    .filter((player) => !player.isVacant && !isUnresolvedPlayerStub(player))
     .map((player) => player.displayName);
   const playerList = formatSpokenNames(names);
   const courtLabel = courtName.replace(/^Court\s*/i, "Court ");
@@ -5846,7 +5689,7 @@ function announceCourtOvertime(courtName: string, playerIds: string[], players: 
 function announceNextPlayers(courtName: string, playerIds: string[], players: Player[]) {
   const names = playerIds
     .map((playerId) => resolvePlayerById(playerId, players))
-    .filter((player) => !player.isVacant)
+    .filter((player) => !player.isVacant && !isUnresolvedPlayerStub(player))
     .map((player) => player.displayName);
   const playerList = formatSpokenNames(names);
   const courtLabel = courtName.replace(/^Court\s*/i, "Court ");
@@ -5990,7 +5833,7 @@ function getWaitingPlayers(
   const reservedIds = getReservedPlayerIds(courts);
   const eligibleIds = new Set(
     players
-      .filter((p) => p.checkedIn && !p.parked && !activeIds.has(p.id) && !reservedIds.has(p.id))
+      .filter((p) => p.checkedIn && !activeIds.has(p.id) && !reservedIds.has(p.id))
       .map((p) => p.id)
   );
 
@@ -6024,14 +5867,6 @@ function getPlayerWaitStatus(
       label: "Check in first",
       reason: "Once checked in, the system can place you in the waiting order.",
       stackDetail: "You are not in the rotation yet.",
-      estimatedMs: 0
-    };
-  }
-  if (player.parked) {
-    return {
-      label: "Parked",
-      reason: "You are paused from rotation. Tap Resume Play when you are ready to be added back into the stack order.",
-      stackDetail: "Your spot is paused until you resume.",
       estimatedMs: 0
     };
   }
@@ -6209,7 +6044,6 @@ function StackSlotSearchModal({
     (player) =>
       player.isActive !== false &&
       player.checkedIn &&
-      !player.parked &&
       !activeIds.has(player.id) &&
       (query.trim() === "" || player.displayName.toLowerCase().includes(query.trim().toLowerCase()))
   );
@@ -6274,34 +6108,81 @@ function StackBuilder({
   const movePlayerToIndex = useClubStore((state) => state.movePlayerToIndex);
   const moveStackToIndex = useClubStore((state) => state.moveStackToIndex);
   const addEmptyStack = useClubStore((state) => state.addEmptyStack);
+  const removeStackAtIndex = useClubStore((state) => state.removeStackAtIndex);
   const setStackSlotKind = useClubStore((state) => state.setStackSlotKind);
   const waitingGroups = getStackDisplayGroups(stackOrder, players, matches, courts, 24);
   const waiting = getWaitingPlayers(players, matches, courts, stackOrder);
   const stackSlotCount = stackOrder.length;
   const [draggingPlayerId, setDraggingPlayerId] = React.useState<string | null>(null);
   const [draggingStackIndex, setDraggingStackIndex] = React.useState<number | null>(null);
+  const [dragOverStackIndex, setDragOverStackIndex] = React.useState<number | null>(null);
+  const draggingStackIndexRef = React.useRef<number | null>(null);
   const [searchSlotIndex, setSearchSlotIndex] = React.useState<number | null>(null);
   const canDrag = true;
+  const STACK_DRAG_TYPE = "application/x-haff-stack-index";
 
-  const handleStackDrop = (targetGroupIndex: number) => {
-    const fromIndex = draggingStackIndex;
-    if (fromIndex === null || fromIndex === targetGroupIndex) return;
-    void moveStackToIndex(fromIndex, targetGroupIndex);
+  const isStackDrag = (event: React.DragEvent) =>
+    draggingStackIndexRef.current !== null
+    || event.dataTransfer.types.includes(STACK_DRAG_TYPE)
+    || event.dataTransfer.types.includes("text/stack-index");
+
+  const readStackDragIndex = (event: React.DragEvent) => {
+    const raw = event.dataTransfer.getData(STACK_DRAG_TYPE) || event.dataTransfer.getData("text/stack-index");
+    if (raw !== "") {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return draggingStackIndexRef.current;
+  };
+
+  const clearStackDrag = () => {
+    draggingStackIndexRef.current = null;
     setDraggingStackIndex(null);
+    setDragOverStackIndex(null);
+  };
+
+  const handleStackDragOver = (event: React.DragEvent, groupIndex: number) => {
+    if (!isStackDrag(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDragOverStackIndex(groupIndex);
+  };
+
+  const handleStackDropOnGroup = (event: React.DragEvent, targetGroupIndex: number) => {
+    if (!isStackDrag(event)) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    const fromIndex = readStackDragIndex(event);
+    if (fromIndex !== null && Number.isFinite(fromIndex) && fromIndex !== targetGroupIndex) {
+      void moveStackToIndex(fromIndex, targetGroupIndex);
+    }
+    clearStackDrag();
+    return true;
+  };
+
+  const startStackDrag = (event: React.DragEvent, groupIndex: number) => {
+    event.stopPropagation();
+    const payload = String(groupIndex);
+    event.dataTransfer.setData(STACK_DRAG_TYPE, payload);
+    event.dataTransfer.setData("text/stack-index", payload);
+    event.dataTransfer.effectAllowed = "move";
+    draggingStackIndexRef.current = groupIndex;
+    setDraggingStackIndex(groupIndex);
+    setDraggingPlayerId(null);
   };
 
   return (
-    <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory">
-      <div className="flex items-center justify-between gap-3">
-        <div>
+    <Card className="overflow-hidden bg-white/5 backdrop-blur-xl border border-white/10 text-ivory">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <p className="text-xs font-bold uppercase tracking-[0.24em] text-brass">Queue manager</p>
-          <h2 className="font-display text-4xl leading-none">
+          <h2 className="font-display text-2xl leading-tight sm:text-3xl">
             <span className="lg:hidden">Set the play order</span>
             <span className="hidden lg:inline">Drag stacks or players to reorder</span>
           </h2>
         </div>
-        <p className="hidden max-w-xs text-right text-xs leading-5 text-linen/65 sm:block">
-          Use + to add empty stacks. Tap open slots to search players, or mark a slot as reserved.
+        <p className="max-w-xs text-xs leading-5 text-linen/65 sm:text-right">
+          Drag stacks to reorder, use the position menu, or delete empty stacks. Tap + on open slots to add players.
         </p>
       </div>
       {searchSlotIndex !== null && (
@@ -6317,9 +6198,16 @@ function StackBuilder({
         />
       )}
       <div 
-        className="mt-5 grid min-w-0 gap-3 xl:grid-cols-2 2xl:grid-cols-3 min-h-32"
-        onDragOver={(event) => event.preventDefault()}
+        className="mt-4 grid min-w-0 grid-cols-1 gap-3 min-[520px]:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+        onDragOver={(event) => {
+          if (isStackDrag(event)) event.preventDefault();
+        }}
         onDrop={(event) => {
+          if (isStackDrag(event)) {
+            event.preventDefault();
+            clearStackDrag();
+            return;
+          }
           event.preventDefault();
           const droppedId = event.dataTransfer.getData("text/player-id") || draggingPlayerId;
           // If dropped outside a specific player, append to the end of the queue
@@ -6329,81 +6217,89 @@ function StackBuilder({
           setDraggingPlayerId(null);
         }}
       >
-        {waitingGroups.map((group, groupIndex) => (
+        {waitingGroups.map((group, groupIndex) => {
+          const filledCount = group.filter((player) => !player.isVacant && !player.isReservedSlot).length;
+          const stackKey = stackGroupKey(stackOrder, groupIndex);
+          return (
           <div
-            key={groupIndex}
-            className={`min-w-0 min-h-32 rounded-[1.2rem] p-3 transition bg-ivory/8 ${
-              draggingStackIndex === groupIndex ? "opacity-60 ring-2 ring-brass/50" : ""
+            key={stackKey}
+            className={`min-w-0 min-h-32 rounded-xl border border-[#1e4f3a] bg-[#0d2e22] p-3 transition ${
+              groupIndex === 0 ? "border-l-4 border-l-brass" : ""
+            } ${
+              draggingStackIndex === groupIndex ? "opacity-70 ring-2 ring-brass/50" : ""
+            } ${
+              dragOverStackIndex === groupIndex && draggingStackIndex !== null && draggingStackIndex !== groupIndex
+                ? "ring-2 ring-brass border-brass/50"
+                : ""
             }`}
-            onDragOver={(event) => {
-              if (draggingStackIndex !== null) {
-                event.preventDefault();
+            onDragOver={(event) => handleStackDragOver(event, groupIndex)}
+            onDragLeave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+                setDragOverStackIndex((current) => (current === groupIndex ? null : current));
               }
             }}
             onDrop={(event) => {
-              const stackIdxRaw = event.dataTransfer.getData("text/stack-index");
-              const fromIndex = stackIdxRaw !== "" ? Number(stackIdxRaw) : draggingStackIndex;
-              if (fromIndex !== null && Number.isFinite(fromIndex) && fromIndex !== groupIndex) {
-                event.preventDefault();
-                event.stopPropagation();
-                void moveStackToIndex(fromIndex, groupIndex);
-                setDraggingStackIndex(null);
-                return;
-              }
-              if (draggingStackIndex !== null) {
-                event.preventDefault();
-                event.stopPropagation();
-                handleStackDrop(groupIndex);
-              }
+              handleStackDropOnGroup(event, groupIndex);
             }}
           >
             <div
-              className="mb-3 flex items-center justify-between gap-2"
+              className="mb-2 flex cursor-grab items-center justify-between gap-2 active:cursor-grabbing"
               draggable={canDrag}
-              onDragStart={(event) => {
-                event.stopPropagation();
-                event.dataTransfer.setData("text/stack-index", String(groupIndex));
-                event.dataTransfer.effectAllowed = "move";
-                setDraggingStackIndex(groupIndex);
-                setDraggingPlayerId(null);
-              }}
-              onDragEnd={() => setDraggingStackIndex(null)}
+              onDragStart={(event) => startStackDrag(event, groupIndex)}
+              onDragEnd={clearStackDrag}
             >
-              <div className="flex min-w-0 items-center gap-2 lg:cursor-grab lg:active:cursor-grabbing">
-                <GripVertical size={16} className="hidden shrink-0 text-brass/80 lg:block" />
-                <p className="text-sm font-black uppercase tracking-normal text-brass">
-                  {groupIndex === 0 ? "Next Court" : `On Deck (${groupIndex + 1})`}
+              <div className="flex min-w-0 items-center gap-2">
+                <GripVertical size={16} className="shrink-0 text-brass/80" />
+                <p className={`truncate text-sm font-black uppercase tracking-normal ${groupIndex === 0 ? "text-brass" : "text-ivory/80"}`}>
+                  {getStackLabel(groupIndex)}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="rounded-full bg-ivory/10 px-2 py-1 text-xs font-bold text-linen">
-                  {group.filter((player) => !player.isVacant && !player.isReservedSlot).length}/4 filled
-                  {group.some((player) => player.isReservedSlot)
-                    ? ` · ${group.filter((player) => player.isReservedSlot).length} held`
-                    : ""}
+              <div className="flex shrink-0 items-center gap-1.5">
+                <span className="hidden rounded-full border border-[#1e4f3a] bg-[#132e24] px-2 py-1 text-[10px] font-bold text-ivory/70 sm:inline">
+                  {filledCount}/4
                 </span>
-                <label className="relative shrink-0 lg:hidden">
-                  <span className="sr-only">Move stack {groupIndex + 1} to position</span>
+                <label className="relative shrink-0">
+                  <span className="sr-only">Move {getStackLabel(groupIndex)} to position</span>
                   <select
-                    aria-label={`Move stack ${groupIndex + 1} to position`}
-                    className="min-h-9 appearance-none rounded-lg bg-forest py-1.5 pl-2 pr-7 text-[10px] font-bold text-ivory outline-none focus:ring-2 focus:ring-brass"
+                    key={`${stackKey}-pos`}
+                    aria-label={`Move ${getStackLabel(groupIndex)} to position`}
+                    className="min-h-8 max-w-[6.5rem] appearance-none truncate rounded-lg bg-forest py-1 pl-2 pr-6 text-[10px] font-bold text-ivory outline-none focus:ring-2 focus:ring-brass"
                     value={groupIndex}
                     onChange={(event) => {
                       const target = Number(event.target.value);
-                      if (Number.isFinite(target)) void moveStackToIndex(groupIndex, target);
+                      if (Number.isFinite(target) && target !== groupIndex) {
+                        void moveStackToIndex(groupIndex, target);
+                      }
                     }}
                   >
                     {waitingGroups.map((_, optionIndex) => (
                       <option key={optionIndex} value={optionIndex}>
-                        Stack {optionIndex + 1}
+                        {getStackLabel(optionIndex)}
                       </option>
                     ))}
                   </select>
-                  <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-ivory/75" size={12} />
+                  <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 text-ivory/75" size={11} />
                 </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (filledCount > 0) {
+                      const ok = window.confirm(
+                        `Delete ${getStackLabel(groupIndex)}? ${filledCount} player(s) will move back into rotation.`
+                      );
+                      if (!ok) return;
+                    }
+                    void removeStackAtIndex(groupIndex);
+                  }}
+                  className="inline-flex min-h-8 min-w-8 items-center justify-center rounded-lg border border-red-400/25 bg-red-500/10 text-red-300 transition hover:bg-red-500/20 hover:text-red-200"
+                  title={`Delete ${getStackLabel(groupIndex)}`}
+                  aria-label={`Delete ${getStackLabel(groupIndex)}`}
+                >
+                  <Trash2 size={14} />
+                </button>
               </div>
             </div>
-            <div className="grid gap-2">
+            <div className="grid grid-cols-1 gap-1.5">
               {group.map((player, idxInGroup) => {
                 const overallIndex = groupIndex * 4 + idxInGroup;
                 const slotKind = stackOrder[overallIndex];
@@ -6441,19 +6337,24 @@ function StackBuilder({
                     <div
                       key={player.id}
                       onDragOver={(event) => {
+                        if (isStackDrag(event)) {
+                          handleStackDragOver(event, groupIndex);
+                          return;
+                        }
                         event.preventDefault();
                         event.stopPropagation();
                       }}
                       onDrop={(event) => {
+                        if (handleStackDropOnGroup(event, groupIndex)) return;
                         event.preventDefault();
                         event.stopPropagation();
                         const droppedId = event.dataTransfer.getData("text/player-id") || draggingPlayerId;
                         if (droppedId) void movePlayerToIndex(droppedId, overallIndex, true);
                         setDraggingPlayerId(null);
                       }}
-                      className="flex min-h-11 items-center justify-between gap-2 rounded-xl border border-dashed border-ivory/25 bg-ivory/5 px-2.5 py-2"
+                      className="flex min-h-11 items-center justify-between gap-2 rounded-lg border border-dashed border-[#1e4f3a]/70 bg-[#05241c]/50 px-2.5 py-2"
                     >
-                      <span className="text-xs font-bold text-ivory/45">Open slot</span>
+                      <span className="text-xs font-bold text-ivory/40">Open slot</span>
                       <div className="flex shrink-0 items-center gap-1">
                         <button
                           type="button"
@@ -6481,15 +6382,21 @@ function StackBuilder({
                     onDragStart={(event) => {
                       event.stopPropagation();
                       event.dataTransfer.setData("text/player-id", player.id);
+                      draggingStackIndexRef.current = null;
                       setDraggingPlayerId(player.id);
                       setDraggingStackIndex(null);
                     }}
                     onDragEnd={() => setDraggingPlayerId(null)}
                     onDragOver={(event) => {
+                      if (isStackDrag(event)) {
+                        handleStackDragOver(event, groupIndex);
+                        return;
+                      }
                       event.preventDefault();
                       event.stopPropagation();
                     }}
                     onDrop={(event) => {
+                      if (handleStackDropOnGroup(event, groupIndex)) return;
                       event.preventDefault();
                       event.stopPropagation();
                       const droppedId = event.dataTransfer.getData("text/player-id") || draggingPlayerId;
@@ -6498,18 +6405,25 @@ function StackBuilder({
                       }
                       setDraggingPlayerId(null);
                     }}
-                    className={`flex min-w-0 items-center gap-2 overflow-hidden rounded-xl bg-ivory px-2.5 py-2 text-forest shadow-[0_10px_26px_rgba(0,0,0,0.14)] ring-1 ring-forest/10 lg:cursor-grab lg:active:cursor-grabbing transition ${draggingPlayerId === player.id ? "opacity-50" : "hover:bg-white"}`}
+                    className={`flex min-w-0 items-center gap-2 overflow-hidden rounded-lg border border-[#1e4f3a] bg-[#132e24] px-2.5 py-2 text-ivory shadow-sm lg:cursor-grab lg:active:cursor-grabbing transition ${
+                      draggingPlayerId === player.id ? "opacity-50 ring-2 ring-brass/50" : "hover:border-brass/30 hover:bg-[#173d2c]"
+                    }`}
                     title={canDrag ? "Drag player over another to insert" : "Choose a position"}
                   >
-                    <GripVertical size={16} className="hidden shrink-0 text-forest/55 lg:block" />
+                    <GripVertical size={16} className="hidden shrink-0 text-brass/50 lg:block" />
+                    <img
+                      src={getPlayerAvatar(player)}
+                      alt=""
+                      className="h-8 w-8 shrink-0 rounded-full border-2 border-brass/40 object-cover bg-[#0d2e22]"
+                    />
                     <div className="min-w-0 flex flex-1 items-center justify-between gap-2">
                       <div className="min-w-0 flex-1">
-                        <p className="truncate font-semibold leading-tight">
-                          <span className="text-forest/50 mr-1.5 text-xs">#{overallIndex + 1}</span>
+                        <p className="truncate font-semibold leading-tight text-ivory">
+                          <span className="text-brass/60 mr-1.5 text-xs">#{overallIndex + 1}</span>
                           {player.displayName}
                         </p>
                         {player.statusNote && (
-                          <span className="mt-0.5 block max-w-full truncate text-[9px] font-bold text-forest/65" title={player.statusNote}>
+                          <span className="mt-0.5 block max-w-full truncate text-[9px] font-bold text-brass/75" title={player.statusNote}>
                             {player.statusNote}
                           </span>
                         )}
@@ -6540,20 +6454,21 @@ function StackBuilder({
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
         <button
           type="button"
           onClick={() => void addEmptyStack()}
-          className="flex min-h-32 flex-col items-center justify-center gap-2 rounded-[1.2rem] border border-dashed border-brass/35 bg-brass/5 p-4 text-brass transition hover:border-brass/60 hover:bg-brass/10"
+          className="flex min-h-28 w-full flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-brass/35 bg-[#0d2e22] p-3 text-brass transition hover:border-brass/60 hover:bg-[#132e24]"
         >
-          <Plus size={28} strokeWidth={2.5} />
-          <span className="text-sm font-black uppercase tracking-wider">Add stack</span>
+          <Plus size={24} strokeWidth={2.5} />
+          <span className="text-xs font-black uppercase tracking-wider">Add stack</span>
           <span className="text-[10px] font-semibold text-linen/55">4 empty slots</span>
         </button>
         {waitingGroups.length === 0 && (
-          <div className="xl:col-span-2 2xl:col-span-3 rounded-2xl border border-dashed border-ivory/20 py-8 text-center">
+          <div className="col-span-full rounded-xl border border-dashed border-[#1e4f3a] bg-[#0d2e22] py-8 text-center">
             <p className="text-sm font-semibold text-ivory/60">No stacks yet</p>
-            <p className="mt-1 text-xs text-ivory/40">Use Add stack on the right to create a deck, then fill slots with +.</p>
+            <p className="mt-1 text-xs text-ivory/40">Tap Add stack to create a deck, then fill slots with +.</p>
           </div>
         )}
       </div>

@@ -38,7 +38,6 @@ export type Player = {
   rating: number;
   tags: string[];
   checkedIn: boolean;
-  parked?: boolean;
   totalGamesPlayed: number;
   totalDaysPlayed: number;
   lastPlayedDate?: string;

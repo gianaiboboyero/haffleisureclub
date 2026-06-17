@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.vercel
+.vercel.previous-account
+.env
+.env.*
+*.md
+!docs/COOLIFY_HETZNER_SETUP.md
+.agents
+head_main.tsx
+diff.txt
+lost_code.txt
+scripts/generate_system_overview_pdf.py
+apps/api

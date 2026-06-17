@@ -1,0 +1,5 @@
+# Replace API_DOMAIN in deploy/env.production.example before first deploy.
+{$API_DOMAIN} {
+	encode gzip
+	reverse_proxy app:3000
+}

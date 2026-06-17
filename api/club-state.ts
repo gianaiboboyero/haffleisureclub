@@ -5,7 +5,6 @@ import { requireUser } from "./_auth.js";
 
 type ClubSettings = {
   stackOrder?: string[];
-  parkedPlayerIds?: string[];
   adminCheckedInIds?: string[];
   tvBroadcast?: unknown;
   courts?: unknown[];
@@ -156,8 +155,8 @@ const filterAuthorizedCheckIns = (
   return checkedInIds.filter((id) => onCourt.has(id));
 };
 
-const normalizeStack = (value: unknown, checkedInIds: string[], parkedIds: string[] = []) => {
-  const eligible = new Set(checkedInIds.filter((id) => !parkedIds.includes(id)));
+const normalizeStack = (value: unknown, checkedInIds: string[]) => {
+  const eligible = new Set(checkedInIds);
   const seen = new Set<string>();
   return stringArray(value).map((id) => {
     if (id === "vacant" || id === "reserved") return id;
@@ -189,7 +188,11 @@ const tvBroadcastFrom = (value: unknown) => {
 async function findSession(sessionId?: string) {
   if (sessionId) {
     const session = await prisma.session.findUnique({ where: { id: sessionId } });
-    if (session) return session;
+    // Only use the exact match if it is still the active session; otherwise fall
+    // through to the most-recently-updated active session.  This prevents stale
+    // session IDs cached in a TV device's localStorage from silently returning
+    // yesterday's state instead of today's.
+    if (session?.status === "Active") return session;
   }
   return prisma.session.findFirst({
     where: { status: "Active" },
@@ -208,6 +211,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === "GET") {
     const settings = (session?.settings ?? {}) as ClubSettings;
+    const sinceRaw = String(req.query.since ?? "").trim();
+    if (sinceRaw && session?.updatedAt) {
+      const serverIso = session.updatedAt.toISOString();
+      const sinceMs = Date.parse(sinceRaw);
+      const serverMs = session.updatedAt.getTime();
+      if (sinceRaw === serverIso || (!Number.isNaN(sinceMs) && sinceMs === serverMs)) {
+        return res.status(200).json({
+          unchanged: true,
+          sessionId: session.id,
+          updatedAt: serverIso,
+          tvBroadcast: tvBroadcastFrom(settings.tvBroadcast)
+        });
+      }
+    }
     const adminCheckedInIds = stringArray(settings.adminCheckedInIds);
     const rawCheckedIn = session?.checkedInPlayerIds ?? [];
     const checkedInPlayerIds = filterAuthorizedCheckIns(
@@ -215,15 +232,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       adminCheckedInIds,
       settings.matches
     );
-    const parkedPlayerIds = stringArray(settings.parkedPlayerIds).filter((id) =>
-      checkedInPlayerIds.includes(id)
-    );
     return res.status(200).json({
       sessionId: session?.id ?? (requestedSessionId || "default-active-session"),
       checkedInPlayerIds,
       adminCheckedInIds,
-      parkedPlayerIds,
-      stackOrder: normalizeStack(settings.stackOrder, checkedInPlayerIds, parkedPlayerIds),
+      stackOrder: normalizeStack(settings.stackOrder, checkedInPlayerIds),
       courts: Array.isArray(settings.courts) ? settings.courts : [],
       matches: Array.isArray(settings.matches) ? settings.matches : [],
       reservations: reservationsFrom(settings.reservations),
@@ -241,7 +254,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const incomingCheckedIn = stringArray(req.body?.checkedInPlayerIds);
-  const incomingParked = stringArray(req.body?.parkedPlayerIds);
   const incomingAdminCheckedIn = stringArray(req.body?.adminCheckedInIds);
   const incomingStack = stringArray(req.body?.stackOrder);
 
@@ -282,7 +294,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const currentSettings = (session.settings ?? {}) as ClubSettings;
   let checkedInPlayerIds = session.checkedInPlayerIds;
   let adminCheckedInIds = stringArray(currentSettings.adminCheckedInIds);
-  let parkedPlayerIds = stringArray(currentSettings.parkedPlayerIds);
   let stackOrder = stringArray(currentSettings.stackOrder);
   let courts = Array.isArray(currentSettings.courts) ? currentSettings.courts : [];
   let matches = Array.isArray(currentSettings.matches) ? currentSettings.matches : [];
@@ -297,8 +308,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     adminCheckedInIds = incomingAdminCheckedIn.length > 0
       ? incomingAdminCheckedIn.filter((id) => incomingCheckedIn.includes(id))
       : incomingCheckedIn;
-    parkedPlayerIds = incomingParked.filter((id) => incomingCheckedIn.includes(id));
-    stackOrder = normalizeStack(incomingStack, checkedInPlayerIds, parkedPlayerIds);
+    stackOrder = normalizeStack(incomingStack, checkedInPlayerIds);
     courts = Array.isArray(req.body?.courts) ? req.body.courts : courts;
     matches = Array.isArray(req.body?.matches) ? req.body.matches : matches;
     if (Array.isArray(req.body?.reservations)) {
@@ -320,32 +330,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } else if (actor.playerId) {
     const playerId = actor.playerId;
     const wantsCheckedIn = incomingCheckedIn.includes(playerId);
-    const wantsParked = incomingParked.includes(playerId);
     const wasCheckedIn = checkedInPlayerIds.includes(playerId);
-    const wasParked = parkedPlayerIds.includes(playerId);
-    const adminCleared = adminCheckedInIds.includes(playerId);
 
     if (wantsCheckedIn && !wasCheckedIn) {
       // Players cannot self check-in; only admin can add them.
     } else if (!wantsCheckedIn && wasCheckedIn) {
       checkedInPlayerIds = checkedInPlayerIds.filter((id) => id !== playerId);
       adminCheckedInIds = adminCheckedInIds.filter((id) => id !== playerId);
-      parkedPlayerIds = parkedPlayerIds.filter((id) => id !== playerId);
       stackOrder = stackOrder.filter((id) => id !== playerId);
-      stackOrder = normalizeStack(stackOrder, checkedInPlayerIds, parkedPlayerIds);
-    } else if (wasCheckedIn && adminCleared) {
-      parkedPlayerIds = wantsParked
-        ? Array.from(new Set([...parkedPlayerIds.filter((id) => id !== playerId), playerId]))
-        : parkedPlayerIds.filter((id) => id !== playerId);
-      if (wantsParked !== wasParked) {
-        stackOrder = stackOrder.filter((id) => id !== playerId);
-        if (!wantsParked) {
-          const vacantIndex = stackOrder.indexOf("vacant");
-          if (vacantIndex >= 0) stackOrder[vacantIndex] = playerId;
-          else stackOrder.push(playerId);
-        }
-      }
-      stackOrder = normalizeStack(stackOrder, checkedInPlayerIds, parkedPlayerIds);
+      stackOrder = normalizeStack(stackOrder, checkedInPlayerIds);
     }
     const ownProfile = playerProfilesFrom(req.body?.playerProfiles).find((profile) => profile.id === actor.playerId);
     if (ownProfile) {
@@ -374,7 +367,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const settings: Prisma.InputJsonValue = {
     ...(session.settings as Record<string, unknown>),
-    parkedPlayerIds,
     adminCheckedInIds,
     stackOrder,
     courts,
@@ -395,7 +387,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     sessionId: updated.id,
     checkedInPlayerIds,
     adminCheckedInIds,
-    parkedPlayerIds,
     stackOrder,
     courts,
     matches,

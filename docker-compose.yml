@@ -1,0 +1,36 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: ${DATABASE_URL}
+      DIRECT_URL: ${DIRECT_URL:-${DATABASE_URL}}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      ABLY_API_KEY: ${ABLY_API_KEY:-}
+      FEEDBACK_HASH_SECRET: ${FEEDBACK_HASH_SECRET:-haff-cadiz}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  # Optional: self-hosted Postgres instead of Supabase/Neon.
+  # Uncomment and set DATABASE_URL=postgresql://haff:haff@postgres:5432/haff
+  # postgres:
+  #   image: postgres:16-alpine
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: haff
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+  #     POSTGRES_DB: haff
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+
+# volumes:
+#   postgres_data:

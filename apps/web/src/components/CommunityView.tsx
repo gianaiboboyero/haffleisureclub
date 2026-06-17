@@ -4,6 +4,9 @@ import { ArrowLeft, CalendarDays, Copy, Download, Eye, EyeOff, LogIn, LogOut, Me
 import { AiLoader } from "./ui/ai-loader";
 import { ReactionTray } from "./ui/ReactionTray";
 import { subscribeToChannel } from "../lib/realtime";
+import { apiJson } from "../lib/api";
+
+const api = (url: string, options?: RequestInit): Promise<any> => apiJson(url, options);
 
 export type CommunityMember = {
   id: string;
@@ -26,20 +29,6 @@ type Message = {
   author: { id: string; displayName: string; avatarUrl?: string | null; role: string };
   replyTo?: { id: string; body: string; displayName: string };
   reactions: Array<{ emoji: string; count: number; userIds: string[] }>;
-};
-
-const api = async (url: string, options?: RequestInit) => {
-  const response = await fetch(url, {
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...(options?.headers ?? {}) },
-    ...options
-  });
-  const text = await response.text();
-  const data = text && response.headers.get("content-type")?.includes("application/json")
-    ? JSON.parse(text)
-    : {};
-  if (!response.ok) throw new Error(data.error ?? "Unable to reach the HAFF community server. Please verify your connection or contact the desk coordinator.");
-  return data;
 };
 
 export function CommunityView({

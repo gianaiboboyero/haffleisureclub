@@ -19,5 +19,5 @@
     "jsx": "react-jsx",
     "baseUrl": "."
   },
-  "include": ["apps/web/src", "apps/api/src", "prisma"]
+  "include": ["apps/web/src", "apps/api/src", "api", "server", "prisma"]
 }

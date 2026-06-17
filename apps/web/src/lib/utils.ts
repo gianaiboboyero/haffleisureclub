@@ -19,10 +19,13 @@ export function todayKey() {
 }
 
 export function getActiveCourtMatch(court: Court, matches: Match[]): Match | undefined {
-  return (
-    matches.find((match) => match.id === court.currentMatchId && match.status === "InProgress") ??
-    matches.find((match) => match.courtId === court.id && match.status === "InProgress")
-  );
+  if (court.currentMatchId) {
+    return matches.find((match) => match.id === court.currentMatchId && match.status === "InProgress");
+  }
+  if (court.status === "InUse") {
+    return matches.find((match) => match.courtId === court.id && match.status === "InProgress");
+  }
+  return undefined;
 }
 
 const MATCH_STATUS_RANK: Record<MatchStatus, number> = {
@@ -51,7 +54,17 @@ function pickPreferredMatch(local: Match, remote: Match): Match {
 /** Prefer newer local finishes over stale shared InProgress rows during refresh. */
 export function mergeSharedMatches(local: Match[], remote: Match[]): Match[] {
   const merged = new Map<string, Match>();
-  for (const match of remote) merged.set(match.id, match);
+  const localCompletedCourtIds = new Set(
+    local.filter(m => m.status === "Completed" && m.courtId).map(m => m.courtId)
+  );
+  
+  for (const match of remote) {
+    if (match.status === "InProgress" && match.courtId && localCompletedCourtIds.has(match.courtId)) {
+      continue;
+    }
+    merged.set(match.id, match);
+  }
+  
   for (const match of local) {
     const existing = merged.get(match.id);
     merged.set(match.id, existing ? pickPreferredMatch(match, existing) : match);
@@ -92,12 +105,11 @@ export function resolvePlayerById(id: string, players: Player[]): Player {
   if (found) return found;
   return {
     id,
-    displayName: "Player",
+    displayName: "Queued",
     skillLevel: "Beginner",
     rating: 2,
     tags: [],
     checkedIn: true,
-    parked: false,
     totalGamesPlayed: 0,
     totalDaysPlayed: 0
   };
@@ -113,7 +125,7 @@ export function getPlayerStatusNote(player: Pick<Player, "statusNote" | "preferr
 
 export function getPlayerDisplayLabel(player: Pick<Player, "displayName" | "isVacant">): string {
   if (player.isVacant) return "—";
-  return player.displayName?.trim() || "Player";
+  return player.displayName?.trim() || "Queued";
 }
 
 export function createTvVacantSlot(id: string): Player {
@@ -124,7 +136,6 @@ export function createTvVacantSlot(id: string): Player {
     rating: 0,
     tags: [],
     checkedIn: false,
-    parked: false,
     totalGamesPlayed: 0,
     totalDaysPlayed: 0,
     isVacant: true
@@ -167,7 +178,7 @@ export function getTvStackGroups(
       return createTvVacantSlot(`vacant-tv-${index}`);
     }
     const player = playersById.get(id) ?? resolvePlayerById(id, players);
-    if (!player.checkedIn || player.parked || player.isActive === false) {
+    if (!player.checkedIn || player.isActive === false) {
       return createTvVacantSlot(`vacant-tv-${index}`);
     }
     return player;
@@ -185,6 +196,16 @@ export function getTvStackGroups(
 }
 
 export const getStackDisplayGroups = getTvStackGroups;
+
+/** Stack queue label: index 0 → "Stack Next", then "Stack 1", "Stack 2", … */
+export function getStackLabel(groupIndex: number): string {
+  return groupIndex === 0 ? "Stack Next" : `Stack ${groupIndex}`;
+}
+
+export function stackGroupKey(stackOrder: string[], groupIndex: number): string {
+  const slots = stackOrder.slice(groupIndex * 4, groupIndex * 4 + 4);
+  return `stack-${groupIndex}-${slots.join("|") || "empty"}`;
+}
 
 /** Keep stack slot structure; preserve vacant placeholders like server normalizeStack. */
 export function splitStackGroups(stackOrder: string[]): string[][] {
@@ -219,7 +240,6 @@ export function reconcileStackOrder(
       .filter(
         (player) =>
           player.checkedIn &&
-          !player.parked &&
           player.isActive !== false &&
           !activeIds.has(player.id) &&
           !reservedIds.has(player.id)
@@ -303,7 +323,6 @@ export function stripUnauthorizedCheckIns(players: Player[], matches: Match[]): 
     return {
       ...player,
       checkedIn: false,
-      parked: false,
       tags: (player.tags ?? []).filter((tag) => tag !== "AdminCheckedIn")
     };
   });

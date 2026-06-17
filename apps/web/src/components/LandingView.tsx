@@ -2,6 +2,8 @@ import React from "react";
 import { motion } from "framer-motion";
 import { useClubStore } from "../store/useClubStore";
 import { sortCourts, getStackDisplayGroups } from "../lib/utils";
+import { SKIP_ADMIN_LOGIN } from "../lib/devFlags";
+import { apiJson } from "../lib/api";
 import { 
   Users, 
   Tv, 
@@ -64,7 +66,7 @@ const CircularBadge = ({ onClick }: { onClick: () => void }) => (
 );
 
 interface LandingViewProps {
-  setView: (view: "landing" | "admin" | "player" | "parking" | "tv" | "calendar" | "finance" | "community") => void;
+  setView: (view: "landing" | "admin" | "player" | "tv" | "calendar" | "finance" | "community") => void;
   signedIn: boolean;
 }
 
@@ -85,7 +87,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
   const [feedback, setFeedback] = React.useState({ category: "App", message: "", contact: "" });
   const [feedbackNotice, setFeedbackNotice] = React.useState("");
 
-  const isAdmin = localStorage.getItem("haff_admin_authenticated") === "true";
+  const isAdmin = SKIP_ADMIN_LOGIN || localStorage.getItem("haff_admin_authenticated") === "true";
 
   // Modal display states for Admin
   const [showAddAnnouncement, setShowAddAnnouncement] = React.useState(false);
@@ -103,8 +105,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
   const [testAuthor, setTestAuthor] = React.useState("");
 
   // Live Stats calculations
-  const checkedInCount = players.filter(p => p.checkedIn && !p.parked).length;
-  const parkedCount = players.filter(p => p.checkedIn && p.parked).length;
+  const checkedInCount = players.filter(p => p.checkedIn).length;
   const activeCourtsCount = courts.filter(c => c.status === "InUse").length;
   const totalCourtsCount = courts.length;
   
@@ -466,7 +467,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
               <div>
                 <span className="block font-display text-4xl font-extrabold text-ivory">{checkedInCount} <span className="text-sm font-sans text-ivory/50 font-normal">Active</span></span>
                 <span className="text-xs text-ivory/70 mt-1 block">
-                  {parkedCount > 0 ? `${parkedCount} players parked/stepping away` : "All checked-in ready to play"}
+                  All checked-in players are ready to play
                 </span>
               </div>
             </div>
@@ -741,16 +742,10 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
             <form className="mt-5 space-y-3" onSubmit={async (event) => {
               event.preventDefault();
               setFeedbackNotice("");
-              const response = await fetch("/api/feedback?action=submit", {
+              const data = await apiJson("/api/feedback?action=submit", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(feedback)
               });
-              const data = await response.json();
-              if (!response.ok) {
-                setFeedbackNotice(data.error ?? "Unable to send your report.");
-                return;
-              }
               setFeedback({ category: "App", message: "", contact: "" });
               setFeedbackNotice("Thank you. Your anonymous report was sent.");
             }}>
