@@ -1,4 +1,5 @@
 name: Deploy frontend to Cloudflare Pages
+# Backend: Supabase (Postgres + Edge Functions). Set vars.VITE_API_URL to your function URL.
 
 on:
   push:

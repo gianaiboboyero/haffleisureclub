@@ -379,7 +379,8 @@ type ClubState = {
   setOnline: (online: boolean) => void;
   refreshPendingSyncCount: () => Promise<void>;
   processSyncQueue: () => Promise<void>;
-  refreshSharedState: (options?: { force?: boolean; allowUnchanged?: boolean }) => Promise<void>;
+  refreshSharedState: (options?: { force?: boolean; allowUnchanged?: boolean; context?: "tv" | "default" }) => Promise<void>;
+  pingSharedState: (options?: { context?: "tv" | "default" }) => Promise<void>;
   isApplyingRemoteBroadcast: () => boolean;
   runAsRemoteBroadcast: (apply: () => void) => void;
   publishSharedState: (options?: { force?: boolean }) => Promise<void>;
@@ -755,10 +756,11 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const sinceQuery = allowUnchanged && lastKnownRemoteUpdatedAt
       ? `&since=${encodeURIComponent(lastKnownRemoteUpdatedAt)}`
       : "";
+    const viewQuery = options?.context === "tv" ? "&view=tv" : "";
     let shared: any;
     try {
       const response = await apiFetch(
-        `/api/club-state?sessionId=${encodeURIComponent(currentSessionId)}${sinceQuery}`,
+        `/api/club-state?sessionId=${encodeURIComponent(currentSessionId)}${sinceQuery}${viewQuery}`,
         { cache: "no-store" }
       );
       if (response.status === 401) {
@@ -887,6 +889,35 @@ export const useClubStore = create<ClubState>((set, get) => ({
       });
     } finally {
       applyingRemoteClubBroadcast = false;
+    }
+  },
+  pingSharedState: async (options) => {
+    if (Date.now() < suppressSharedRefreshUntil) return;
+    if (Date.now() < syncBackoffUntil) return;
+    const currentSessionId = get().currentSessionId;
+    if (!currentSessionId || !navigator.onLine) return;
+    const sinceQuery = lastKnownRemoteUpdatedAt
+      ? `&since=${encodeURIComponent(lastKnownRemoteUpdatedAt)}`
+      : "";
+    try {
+      const response = await apiFetch(
+        `/api/club-state?ping=1&sessionId=${encodeURIComponent(currentSessionId)}${sinceQuery}`,
+        { cache: "no-store" }
+      );
+      if (response.status === 401) {
+        if (get().online) set({ online: false });
+        return;
+      }
+      if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) {
+        markSyncDegraded(set);
+        return;
+      }
+      const body = await response.json();
+      markSyncHealthy(set, typeof body.updatedAt === "string" ? body.updatedAt : null);
+      if (body.unchanged === true) return;
+      await get().refreshSharedState({ force: true, context: options?.context });
+    } catch {
+      markSyncDegraded(set);
     }
   },
   isApplyingRemoteBroadcast: () => applyingRemoteClubBroadcast,

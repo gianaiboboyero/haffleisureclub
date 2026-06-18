@@ -5,16 +5,21 @@ export type RealtimeEvent = {
   entityId?: string;
   version?: number;
   eventId?: string;
+  sessionId?: string;
+  updatedAt?: string;
 };
 
-export function subscribeToChannel(
-  channelName: string,
-  onEvent: (event: RealtimeEvent) => void,
-  scope = "community"
-) {
-  const enabled = (((import.meta as any).env?.VITE_REALTIME_CHAT) ?? "false") === "true";
-  if (!enabled) return () => undefined;
+function realtimeFlag(name: "VITE_REALTIME_CHAT" | "VITE_REALTIME_CLUB", defaultValue: boolean) {
+  const value = (import.meta as any).env?.[name] as string | undefined;
+  if (value === undefined) return defaultValue;
+  return value === "true";
+}
 
+function subscribeAblyChannel(
+  channelName: string,
+  scope: string,
+  onEvent: (event: RealtimeEvent) => void
+) {
   const client = new Realtime({
     authUrl: apiUrl(`/api/realtime/token?scope=${encodeURIComponent(scope)}`),
     authMethod: "GET"
@@ -35,4 +40,25 @@ export function subscribeToChannel(
     void channel.unsubscribe(listener);
     client.close();
   };
+}
+
+export function subscribeToChannel(
+  channelName: string,
+  onEvent: (event: RealtimeEvent) => void,
+  scope = "community"
+) {
+  if (!realtimeFlag("VITE_REALTIME_CHAT", false)) return () => undefined;
+  return subscribeAblyChannel(channelName, scope, onEvent);
+}
+
+/** Push sync for live session state — avoids polling full JSON through serverless. */
+export function subscribeToClubState(
+  onSessionChanged: (event: RealtimeEvent) => void,
+  options?: { tv?: boolean }
+) {
+  if (!realtimeFlag("VITE_REALTIME_CLUB", true)) return () => undefined;
+
+  const scope = options?.tv ? "tv" : "club";
+  const channel = options?.tv ? "haff:operations:tv" : "haff:operations:club";
+  return subscribeAblyChannel(channel, scope, onSessionChanged);
 }

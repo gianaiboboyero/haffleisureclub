@@ -182,9 +182,10 @@ function ChatRoom({ member }: { member: Member }) {
   };
   React.useEffect(() => {
     void load();
+    const pollMs = (((import.meta as any).env?.VITE_REALTIME_CHAT) ?? "false") === "true" ? 60_000 : 30_000;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void load();
-    }, 10_000);
+    }, pollMs);
     return () => window.clearInterval(timer);
   }, [load]);
   React.useEffect(() => subscribeToChannel("haff:community:general", () => void load()), [load]);

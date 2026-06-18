@@ -1,3 +1,4 @@
+# Legacy: Oracle VM + local Postgres. Use Supabase instead — see docs/DEPLOY_QUICKSTART.md
 services:
   postgres:
     image: postgres:16-alpine

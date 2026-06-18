@@ -59,6 +59,7 @@ import { ProfilePhotoCropper } from "./components/ProfilePhotoCropper";
 import { readProfileImageFile } from "./lib/profilePhoto";
 import { COURT_HOURLY_FEE } from "./lib/pricing";
 import { manilaDateTimeIso, reservationDateKey } from "./lib/reservationTime";
+import { subscribeToClubState } from "./lib/realtime";
 import { useClubStore, subscribeClubStateBroadcast } from "./store/useClubStore";
 import { db } from "./lib/db";
 import { sortCourts, getPlayerAvatar, getActiveCourtMatch, getTvStackGroups, getStackDisplayGroups, getStackLabel, stackGroupKey, reconcileStackOrder, createTvVacantSlot, resolveMatchTeamPlayers, resolvePlayerById, getPlayerStatusNote, getPlayerDisplayLabel, AVATAR_PRESETS, dicebearAvatar, isUsableAvatarUrl } from "./lib/utils";
@@ -264,13 +265,18 @@ function App() {
       }
     });
 
-    const timer = window.setInterval(refreshPendingSyncCount, 30000);
+    const timer = window.setInterval(refreshPendingSyncCount, 60000);
     const sharedStateTimer = window.setInterval(() => {
       if (document.hidden) return;
       if (!socket || !socket.connected) {
-        void useClubStore.getState().refreshSharedState({ allowUnchanged: true });
+        const context = useClubStore.getState().view === "tv" ? "tv" : "default";
+        void useClubStore.getState().pingSharedState({ context });
       }
-    }, 15000);
+    }, 60000);
+
+    const unsubscribeClubRealtime = subscribeToClubState(() => {
+      void useClubStore.getState().refreshSharedState({ force: true });
+    });
 
     const applyIncomingStackOrder = (incoming: string[]) => {
       useClubStore.getState().runAsRemoteBroadcast(() => {
@@ -333,6 +339,7 @@ function App() {
         window.clearTimeout(sharedPublishTimer);
         unsubscribe();
         unsubscribeClubBroadcast();
+        unsubscribeClubRealtime();
         window.removeEventListener("storage", onStackStorage);
         socket.off("connect", onConnect);
         socket.off("disconnect", onDisconnect);
@@ -351,6 +358,7 @@ function App() {
       window.clearTimeout(sharedPublishTimer);
       unsubscribe();
       unsubscribeClubBroadcast();
+      unsubscribeClubRealtime();
       window.removeEventListener("storage", onStackStorage);
     };
   }, [refreshPendingSyncCount, setOnline, hydrate]);
@@ -4789,11 +4797,12 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
   const now = useNow();
 
   React.useEffect(() => {
-    void refreshSharedState({ force: true });
-    const timer = window.setInterval(() => {
-      void refreshSharedState({ allowUnchanged: true });
-    }, 15000);
-    return () => window.clearInterval(timer);
+    void refreshSharedState({ force: true, context: "tv" });
+    const unsubscribeTvRealtime = subscribeToClubState(
+      () => { void refreshSharedState({ force: true, context: "tv" }); },
+      { tv: true }
+    );
+    return () => unsubscribeTvRealtime();
   }, [refreshSharedState]);
 
   const matchDurationMinutes = useClubStore((state) => state.matchDurationMinutes);

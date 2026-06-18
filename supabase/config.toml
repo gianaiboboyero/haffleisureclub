@@ -1,0 +1,14 @@
+# Supabase project config
+# https://supabase.com/docs/guides/cli/config
+
+project_id = "your-project-ref"
+
+[api]
+enabled = true
+
+[db]
+port = 54322
+major_version = 15
+
+[functions.haff-api]
+verify_jwt = false

@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { prisma } from "./_prisma.js";
 import { requireUser } from "./_auth.js";
+import { publishRealtime } from "./_realtime.js";
 
 type ClubSettings = {
   stackOrder?: string[];
@@ -185,7 +187,7 @@ const tvBroadcastFrom = (value: unknown) => {
   };
 };
 
-async function findSession(sessionId?: string) {
+async function findActiveSession(sessionId?: string) {
   if (sessionId) {
     const session = await prisma.session.findUnique({ where: { id: sessionId } });
     // Only use the exact match if it is still the active session; otherwise fall
@@ -200,6 +202,38 @@ async function findSession(sessionId?: string) {
   });
 }
 
+async function findSessionMeta(sessionId?: string) {
+  if (sessionId) {
+    const session = await prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { id: true, updatedAt: true, status: true }
+    });
+    if (session?.status === "Active") return session;
+  }
+  return prisma.session.findFirst({
+    where: { status: "Active" },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true, updatedAt: true, status: true }
+  });
+}
+
+const minimalPostResponse = (sessionId: string, updatedAt: Date) => ({
+  sessionId,
+  updatedAt: updatedAt.toISOString()
+});
+
+async function notifySessionChanged(sessionId: string, updatedAt: Date) {
+  const payload = {
+    sessionId,
+    updatedAt: updatedAt.toISOString(),
+    eventId: randomUUID()
+  };
+  await Promise.all([
+    publishRealtime("haff:operations:club", "session.updated", payload),
+    publishRealtime("haff:operations:tv", "session.updated", payload)
+  ]);
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const actor = await requireUser(req, res);
   if (!actor) return;
@@ -207,7 +241,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const requestedSessionId = String(
     req.method === "GET" ? req.query.sessionId ?? "" : req.body?.sessionId ?? ""
   );
-  let session = await findSession(requestedSessionId);
+  const pingOnly = String(req.query.ping ?? "") === "1";
+  const tvView = String(req.query.view ?? "") === "tv";
+
+  if (req.method === "GET" && pingOnly) {
+    const meta = await findSessionMeta(requestedSessionId);
+    const sinceRaw = String(req.query.since ?? "").trim();
+    if (!meta) {
+      return res.status(200).json({
+        ping: true,
+        sessionId: requestedSessionId || "default-active-session",
+        updatedAt: null,
+        unchanged: false
+      });
+    }
+    const serverIso = meta.updatedAt.toISOString();
+    const sinceMs = Date.parse(sinceRaw);
+    const serverMs = meta.updatedAt.getTime();
+    const unchanged =
+      Boolean(sinceRaw)
+      && (sinceRaw === serverIso || (!Number.isNaN(sinceMs) && sinceMs === serverMs));
+    return res.status(200).json({
+      ping: true,
+      sessionId: meta.id,
+      updatedAt: serverIso,
+      unchanged
+    });
+  }
+
+  let session = await findActiveSession(requestedSessionId);
 
   if (req.method === "GET") {
     const settings = (session?.settings ?? {}) as ClubSettings;
@@ -239,10 +301,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       stackOrder: normalizeStack(settings.stackOrder, checkedInPlayerIds),
       courts: Array.isArray(settings.courts) ? settings.courts : [],
       matches: Array.isArray(settings.matches) ? settings.matches : [],
-      reservations: reservationsFrom(settings.reservations),
+      reservations: tvView ? [] : reservationsFrom(settings.reservations),
       playerProfiles: playerProfilesFrom(settings.playerProfiles),
-      playerKudos: playerKudosFrom(settings.playerKudos),
-      matchReviews: matchReviewsFrom(settings.matchReviews),
+      playerKudos: tvView ? [] : playerKudosFrom(settings.playerKudos),
+      matchReviews: tvView ? [] : matchReviewsFrom(settings.matchReviews),
       tvBroadcast: tvBroadcastFrom(settings.tvBroadcast),
       updatedAt: session?.updatedAt ?? null
     });
@@ -284,10 +346,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       where: { id: session.id },
       data: { settings: broadcastSettings }
     });
+    await notifySessionChanged(updated.id, updated.updatedAt);
     return res.status(200).json({
-      sessionId: updated.id,
-      tvBroadcast,
-      updatedAt: updated.updatedAt
+      ...minimalPostResponse(updated.id, updated.updatedAt),
+      tvBroadcast
     });
   }
 
@@ -383,18 +445,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     data: { checkedInPlayerIds, settings }
   });
 
-  return res.status(200).json({
-    sessionId: updated.id,
-    checkedInPlayerIds,
-    adminCheckedInIds,
-    stackOrder,
-    courts,
-    matches,
-    reservations,
-    playerProfiles,
-    playerKudos,
-    matchReviews,
-    tvBroadcast,
-    updatedAt: updated.updatedAt
-  });
+  await notifySessionChanged(updated.id, updated.updatedAt);
+
+  const wantsFullBody = String(req.query.full ?? req.body?.full ?? "") === "1";
+  if (wantsFullBody) {
+    return res.status(200).json({
+      sessionId: updated.id,
+      checkedInPlayerIds,
+      adminCheckedInIds,
+      stackOrder,
+      courts,
+      matches,
+      reservations,
+      playerProfiles,
+      playerKudos,
+      matchReviews,
+      tvBroadcast,
+      updatedAt: updated.updatedAt
+    });
+  }
+
+  return res.status(200).json(minimalPostResponse(updated.id, updated.updatedAt));
 }
