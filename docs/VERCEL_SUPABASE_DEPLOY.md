@@ -22,6 +22,8 @@ git push -u origin main
 
 ## 2. Vercel import
 
+> **If your old Vercel team is blocked** (“fair use limits”), create a **new Vercel account** logged in with **GitHub `gianaiboboyero`**, then import the repo fresh. Copy env vars from the old project or from Supabase.
+
 1. [vercel.com/new](https://vercel.com/new) → Import **`gianaiboboyero/haffleisureclub`**
 2. Framework: **Vite** (or use existing `vercel.json`)
 3. Build: `npm run build:web` → Output: `dist/web`
