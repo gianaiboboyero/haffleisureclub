@@ -1,5 +1,6 @@
 export const PROFILE_PHOTO_CROP_SIZE = 280;
 export const PROFILE_PHOTO_OUTPUT_SIZE = 640;
+export const PROFILE_AVATAR_OUTPUT_SIZE = 256;
 
 export type CropTransform = {
   zoom: number;
@@ -102,6 +103,71 @@ export function exportCroppedProfilePhoto(
     outputSize
   );
   return canvas.toDataURL("image/jpeg", 0.82);
+}
+
+/** Export cropped square avatar as WebP blob (optimized for Supabase Storage). */
+export function exportCroppedProfilePhotoWebP(
+  image: HTMLImageElement,
+  transform: CropTransform,
+  cropSize = PROFILE_PHOTO_CROP_SIZE,
+  outputSize = PROFILE_AVATAR_OUTPUT_SIZE
+): Promise<Blob> {
+  const scale = transform.baseScale * transform.zoom;
+  const sourceX = Math.max(0, -transform.offsetX / scale);
+  const sourceY = Math.max(0, -transform.offsetY / scale);
+  const sourceSize = cropSize / scale;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = outputSize;
+  canvas.height = outputSize;
+  const context = canvas.getContext("2d");
+  if (!context) return Promise.reject(new Error("Photo processing is unavailable."));
+
+  const maxX = Math.max(0, image.naturalWidth - sourceSize);
+  const maxY = Math.max(0, image.naturalHeight - sourceSize);
+  context.drawImage(
+    image,
+    Math.min(sourceX, maxX),
+    Math.min(sourceY, maxY),
+    Math.min(sourceSize, image.naturalWidth),
+    Math.min(sourceSize, image.naturalHeight),
+    0,
+    0,
+    outputSize,
+    outputSize
+  );
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error("Could not encode WebP image."))),
+      "image/webp",
+      0.82
+    );
+  });
+}
+
+export async function dataUrlToWebpBlob(dataUrl: string, outputSize = PROFILE_AVATAR_OUTPUT_SIZE): Promise<Blob> {
+  const image = await loadProfileImage(dataUrl);
+  const crop = Math.min(image.naturalWidth, image.naturalHeight);
+  const sx = (image.naturalWidth - crop) / 2;
+  const sy = (image.naturalHeight - crop) / 2;
+  const canvas = document.createElement("canvas");
+  canvas.width = outputSize;
+  canvas.height = outputSize;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Photo processing is unavailable.");
+  ctx.drawImage(image, sx, sy, crop, crop, 0, 0, outputSize, outputSize);
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error("Could not encode WebP image."))),
+      "image/webp",
+      0.82
+    );
+  });
+}
+
+export function isInlineAvatarData(value?: string | null) {
+  return Boolean(value?.startsWith("data:image"));
 }
 
 /** Center-crop fallback when no interactive crop is used. */

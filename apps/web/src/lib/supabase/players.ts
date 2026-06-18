@@ -7,6 +7,7 @@ export type CompactPlayerRow = {
   skillLevel: string;
   rating: number;
   avatarUrl: string | null;
+  statusNote: string | null;
   phone: string | null;
   tags: string[];
   status: string;
@@ -18,7 +19,7 @@ export type CompactPlayerRow = {
 };
 
 const COMPACT_SELECT =
-  "id, displayName, fullName, skillLevel, rating, avatarUrl, phone, tags, status, totalGamesPlayed, totalDaysPlayed, lastPlayedDate, version, updatedAt";
+  "id, displayName, fullName, skillLevel, rating, avatarUrl, statusNote, phone, tags, status, totalGamesPlayed, totalDaysPlayed, lastPlayedDate, version, updatedAt";
 
 export async function fetchPlayersCompact(): Promise<CompactPlayerRow[]> {
   const supabase = getSupabase();

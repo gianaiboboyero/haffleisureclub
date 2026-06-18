@@ -56,10 +56,12 @@ import { Button, Card, Badge } from "./components/ui";
 import { Chip } from "./components/ui/heroui-chip";
 import { AiLoader } from "./components/ui/ai-loader";
 import { ProfilePhotoCropper } from "./components/ProfilePhotoCropper";
-import { readProfileImageFile } from "./lib/profilePhoto";
+import { readProfileImageFile, isInlineAvatarData } from "./lib/profilePhoto";
+import { useSupabaseData } from "./lib/dataSource";
+import { uploadPlayerAvatar } from "./lib/supabase/storage";
 import { COURT_HOURLY_FEE } from "./lib/pricing";
 import { manilaDateTimeIso, reservationDateKey } from "./lib/reservationTime";
-import { subscribeToClubState } from "./lib/realtime";
+import { subscribeToClubState, subscribeSupabasePlayers } from "./lib/realtime";
 import {
   clubPollIntervalMs,
   PUBLISH_DEBOUNCE_MS,
@@ -302,6 +304,12 @@ function App() {
       scheduleRealtimeRefresh();
     });
 
+    const unsubscribePlayerRoster = useSupabaseData()
+      ? subscribeSupabasePlayers(() => {
+          void useClubStore.getState().hydrate();
+        })
+      : () => undefined;
+
     const applyIncomingStackOrder = (incoming: string[]) => {
       useClubStore.getState().runAsRemoteBroadcast(() => {
         const state = useClubStore.getState();
@@ -365,6 +373,7 @@ function App() {
         unsubscribe();
         unsubscribeClubBroadcast();
         unsubscribeClubRealtime();
+        unsubscribePlayerRoster();
         window.removeEventListener("storage", onStackStorage);
         socket.off("connect", onConnect);
         socket.off("disconnect", onDisconnect);
@@ -385,6 +394,7 @@ function App() {
       unsubscribe();
       unsubscribeClubBroadcast();
       unsubscribeClubRealtime();
+      unsubscribePlayerRoster();
       window.removeEventListener("storage", onStackStorage);
     };
   }, [refreshPendingSyncCount, setOnline, hydrate]);
@@ -2118,11 +2128,28 @@ function PlayersCrudTab() {
     <>
     {photoCropSource && (
       <ProfilePhotoCropper
+        webpOutput={useSupabaseData()}
         imageSrc={photoCropSource}
         onCancel={() => setPhotoCropSource(null)}
         onComplete={(dataUrl) => {
           setAvatarUrl(dataUrl);
           setPhotoCropSource(null);
+        }}
+        onCompleteBlob={async (blob) => {
+          if (!useSupabaseData() || !editingPlayer) {
+            setFormError("Save the player first, then upload a photo.");
+            setPhotoCropSource(null);
+            return;
+          }
+          try {
+            const { avatarUrl: uploaded } = await uploadPlayerAvatar(editingPlayer.id, blob);
+            setAvatarUrl(uploaded);
+            setFormError("");
+          } catch (error) {
+            setFormError(error instanceof Error ? error.message : "Photo upload failed.");
+          } finally {
+            setPhotoCropSource(null);
+          }
         }}
       />
     )}
@@ -3730,11 +3757,21 @@ function PlayerView() {
 
   const handleSaveProfile = async () => {
     if (!player) return;
+    let avatarUrl = editAvatarUrl.trim() || undefined;
+    if (useSupabaseData() && isInlineAvatarData(avatarUrl)) {
+      try {
+        const uploaded = await uploadPlayerAvatar(player.id, avatarUrl!);
+        avatarUrl = uploaded.avatarUrl;
+      } catch (error) {
+        setProfilePhotoError(error instanceof Error ? error.message : "Photo upload failed.");
+        return;
+      }
+    }
     const updated = {
       ...player,
       displayName: editDisplayName.trim() || player.displayName,
       skillLevel: editSkillLevel as typeof player.skillLevel,
-      avatarUrl: editAvatarUrl.trim() || undefined,
+      avatarUrl,
       statusNote: editStatusNote.trim() || undefined,
     };
     await updatePlayer(updated);
@@ -3834,11 +3871,24 @@ function PlayerView() {
     >
       {photoCropSource && (
         <ProfilePhotoCropper
+          webpOutput={useSupabaseData()}
           imageSrc={photoCropSource}
           onCancel={() => setPhotoCropSource(null)}
           onComplete={(dataUrl) => {
             setEditAvatarUrl(dataUrl);
             setPhotoCropSource(null);
+          }}
+          onCompleteBlob={async (blob) => {
+            if (!player) return;
+            setProfilePhotoError("");
+            try {
+              const { avatarUrl: uploaded } = await uploadPlayerAvatar(player.id, blob);
+              setEditAvatarUrl(uploaded);
+            } catch (error) {
+              setProfilePhotoError(error instanceof Error ? error.message : "Photo upload failed.");
+            } finally {
+              setPhotoCropSource(null);
+            }
           }}
         />
       )}

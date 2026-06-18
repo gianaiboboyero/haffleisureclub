@@ -135,7 +135,7 @@ export function buildSharedPayload(
     settings: unknown;
     updatedAt: string | Date | null;
   },
-  options?: { since?: string; lightView?: boolean }
+  options?: { since?: string; lightView?: boolean; omitProfiles?: boolean; omitReservations?: boolean }
 ): SharedClubStatePayload | { unchanged: true; sessionId: string; updatedAt: string; tvBroadcast: unknown } {
   const settings = (session.settings ?? {}) as ClubSettings;
   const updatedAt =
@@ -162,6 +162,8 @@ export function buildSharedPayload(
   const allProfiles = playerProfilesFrom(settings.playerProfiles);
   const slimProfiles = trimProfiles(allProfiles, checkedInPlayerIds, stackOrder, matches);
   const lightView = options?.lightView ?? false;
+  const omitProfiles = options?.omitProfiles ?? false;
+  const omitReservations = options?.omitReservations ?? lightView;
 
   return {
     sessionId: session.id,
@@ -170,8 +172,8 @@ export function buildSharedPayload(
     stackOrder,
     courts: Array.isArray(settings.courts) ? settings.courts : [],
     matches,
-    reservations: lightView ? [] : Array.isArray(settings.reservations) ? settings.reservations : [],
-    playerProfiles: slimProfiles,
+    reservations: omitReservations ? [] : Array.isArray(settings.reservations) ? settings.reservations : [],
+    playerProfiles: omitProfiles ? [] : slimProfiles,
     playerKudos: lightView ? [] : Array.isArray(settings.playerKudos) ? settings.playerKudos : [],
     matchReviews: lightView ? [] : Array.isArray(settings.matchReviews) ? settings.matchReviews : [],
     tvBroadcast: settings.tvBroadcast ?? null,

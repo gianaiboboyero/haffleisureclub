@@ -63,6 +63,8 @@ model Player {
   skillLevel           String
   rating               Float         @default(2)
   avatarUrl            String?
+  avatarVersion        Int           @default(1)
+  statusNote           String?
   phone                String?
   email                String?
   tags                 String[]      @default([])

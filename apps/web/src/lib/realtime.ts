@@ -4,8 +4,11 @@ import { useSupabaseData } from "./dataSource";
 import { markChatPushHealthy, markClubPushHealthy } from "./syncPolicy";
 import {
   subscribeSupabaseChat,
-  subscribeSupabaseClubState
+  subscribeSupabaseClubState,
+  subscribeSupabasePlayers
 } from "./supabase/realtime";
+
+export { subscribeSupabasePlayers };
 
 export type RealtimeEvent = {
   entityId?: string;

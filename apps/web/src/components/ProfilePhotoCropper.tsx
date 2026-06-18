@@ -1,26 +1,33 @@
 import React from "react";
 import { Crop, X, ZoomIn } from "lucide-react";
 import {
-  PROFILE_PHOTO_CROP_SIZE,
   clampCropOffset,
   exportCroppedProfilePhoto,
+  exportCroppedProfilePhotoWebP,
   getInitialCropOffset,
   getProfilePhotoBaseScale,
-  loadProfileImage
+  loadProfileImage,
+  PROFILE_AVATAR_OUTPUT_SIZE,
+  PROFILE_PHOTO_CROP_SIZE,
 } from "../lib/profilePhoto";
 
 type ProfilePhotoCropperProps = {
   imageSrc: string;
   title?: string;
+  /** When true, returns WebP blob via onCompleteBlob (for Supabase upload). */
+  webpOutput?: boolean;
   onCancel: () => void;
   onComplete: (dataUrl: string) => void;
+  onCompleteBlob?: (blob: Blob) => void;
 };
 
 export function ProfilePhotoCropper({
   imageSrc,
   title = "Crop profile photo",
+  webpOutput = false,
   onCancel,
-  onComplete
+  onComplete,
+  onCompleteBlob
 }: ProfilePhotoCropperProps) {
   const cropSize = PROFILE_PHOTO_CROP_SIZE;
   const [image, setImage] = React.useState<HTMLImageElement | null>(null);
@@ -106,13 +113,19 @@ export function ProfilePhotoCropper({
     if (!image) return;
     setIsExporting(true);
     try {
-      const dataUrl = exportCroppedProfilePhoto(image, {
+      const transform = {
         zoom,
         offsetX: offset.x,
         offsetY: offset.y,
         baseScale
-      });
-      onComplete(dataUrl);
+      };
+      if (webpOutput && onCompleteBlob) {
+        const blob = await exportCroppedProfilePhotoWebP(image, transform, cropSize, PROFILE_AVATAR_OUTPUT_SIZE);
+        onCompleteBlob(blob);
+      } else {
+        const dataUrl = exportCroppedProfilePhoto(image, transform, cropSize);
+        onComplete(dataUrl);
+      }
     } finally {
       setIsExporting(false);
     }

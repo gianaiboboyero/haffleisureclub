@@ -118,7 +118,9 @@ export async function fetchClubState(
   const lightView = options?.context === "tv" || options?.context === "player";
   return buildSharedPayload(session, {
     since: options?.since ?? undefined,
-    lightView
+    lightView,
+    omitProfiles: true,
+    omitReservations: true
   });
 }
 
@@ -136,7 +138,8 @@ export type PublishClubStateInput = {
 };
 
 export async function publishClubState(
-  input: PublishClubStateInput
+  input: PublishClubStateInput,
+  options?: { slim?: boolean }
 ): Promise<{ sessionId: string; updatedAt: string } | null> {
   const supabase = getSupabase();
   if (!supabase) return null;
@@ -161,18 +164,21 @@ export async function publishClubState(
   }
 
   const currentSettings = (session.settings ?? {}) as ClubSettings;
+  const { playerProfiles: _legacyProfiles, reservations: _legacyReservations, ...restSettings } = currentSettings;
   const settings: ClubSettings = {
-    ...currentSettings,
+    ...restSettings,
     adminCheckedInIds: input.adminCheckedInIds,
     stackOrder: input.stackOrder,
     courts: input.courts,
     matches: input.matches,
-    reservations: input.reservations,
-    playerProfiles: input.playerProfiles,
     playerKudos: input.playerKudos,
     matchReviews: input.matchReviews,
     tvBroadcast: currentSettings.tvBroadcast
   };
+  if (!options?.slim) {
+    settings.reservations = input.reservations;
+    settings.playerProfiles = input.playerProfiles;
+  }
 
   const { data, error } = await supabase
     .from("Session")

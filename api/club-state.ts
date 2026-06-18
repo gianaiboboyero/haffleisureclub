@@ -333,7 +333,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       courts: Array.isArray(settings.courts) ? settings.courts : [],
       matches,
       reservations: lightView ? [] : reservationsFrom(settings.reservations),
-      playerProfiles: slimProfiles,
+      playerProfiles: [],
       playerKudos: lightView ? [] : playerKudosFrom(settings.playerKudos),
       matchReviews: lightView ? [] : matchReviewsFrom(settings.matchReviews),
       tvBroadcast: tvBroadcastFrom(settings.tvBroadcast),
@@ -458,14 +458,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
+  const {
+    playerProfiles: _legacyProfiles,
+    reservations: _legacyReservations,
+    ...restSettings
+  } = currentSettings as Record<string, unknown>;
+
   const settings: Prisma.InputJsonValue = {
-    ...(session.settings as Record<string, unknown>),
+    ...restSettings,
     adminCheckedInIds,
     stackOrder,
     courts,
     matches,
-    reservations,
-    playerProfiles,
     playerKudos,
     matchReviews,
     tvBroadcast

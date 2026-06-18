@@ -54,3 +54,7 @@ export function subscribeSupabaseChat(onMessage: (event: RealtimeEvent) => void)
 export function subscribeSupabasePlayers(onPlayerChanged: (event: RealtimeEvent) => void): Unsubscribe {
   return subscribeTable("Player", onPlayerChanged, () => undefined);
 }
+
+export function subscribeSupabaseReservations(onChange: (event: RealtimeEvent) => void): Unsubscribe {
+  return subscribeTable("CourtReservation", onChange, () => undefined);
+}

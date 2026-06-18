@@ -23,6 +23,8 @@ import {
 } from "../lib/supabase/clubState";
 import { fetchCourts as fetchSupabaseCourts, seedCourtsIfEmpty } from "../lib/supabase/courts";
 import { fetchPlayersCompact } from "../lib/supabase/players";
+import { updatePlayerOnSupabase, fetchMissingPlayers } from "../lib/supabase/playerUpdate";
+import { fetchReservationsRange } from "../lib/supabase/reservations";
 
 let suppressSharedPublishUntil = 0;
 let suppressSharedRefreshUntil = 0;
@@ -203,7 +205,7 @@ function mapServerPlayerToClient(server: Record<string, unknown>, local?: Player
       typeof server.avatarUrl === "string" && server.avatarUrl.length > 0
         ? server.avatarUrl
         : local?.avatarUrl,
-    statusNote: local?.statusNote,
+    statusNote: typeof server.statusNote === "string" ? server.statusNote : local?.statusNote,
     version: typeof server.version === "number" ? server.version : local?.version
   };
 }
@@ -352,6 +354,41 @@ function mergeSharedPlayerRoster(
   return Array.from(byId.values());
 }
 
+async function resolvePlayersFromSession(
+  players: Player[],
+  profiles: PlayerProfileSnapshot[],
+  checkedInIds: Set<string>,
+  stackedIds: Set<string>,
+  matches: Match[]
+): Promise<Player[]> {
+  const useProfiles = !useSupabaseData() && profiles.length > 0;
+  let merged = mergeSharedPlayerRoster(
+    players,
+    useProfiles ? profiles : [],
+    checkedInIds,
+    stackedIds,
+    matches
+  );
+  if (!useSupabaseData()) return merged;
+
+  const unresolved = merged.filter((player) => player.displayName === "Queued").map((player) => player.id);
+  if (unresolved.length === 0) return merged;
+
+  const fetched = await fetchMissingPlayers(unresolved);
+  if (fetched.length === 0) return merged;
+
+  const byId = new Map(merged.map((player) => [player.id, player]));
+  for (const player of fetched) {
+    const existing = byId.get(player.id);
+    byId.set(player.id, {
+      ...player,
+      checkedIn: existing?.checkedIn ?? checkedInIds.has(player.id),
+      statusNote: existing?.statusNote ?? player.statusNote
+    });
+  }
+  return Array.from(byId.values());
+}
+
 type ViewMode = "landing" | "admin" | "player" | "tv" | "calendar" | "finance" | "community";
 
 type ClubState = {
@@ -396,6 +433,7 @@ type ClubState = {
   publishSharedState: (options?: { force?: boolean }) => Promise<void>;
   broadcastTvAnnouncement: (broadcast: Omit<TvBroadcast, "id" | "createdAt">) => Promise<void>;
   applyBroadcastPlayerProfiles: (profiles: PlayerProfileSnapshot[]) => void;
+  loadReservationsRange: (from: Date, to: Date) => Promise<void>;
 
   // Reservation Actions
   addReservation: (reservation: Omit<Reservation, "id">) => Promise<void>;
@@ -420,7 +458,7 @@ type ClubState = {
   removeStackAtIndex: (groupIndex: number) => Promise<void>;
   setStackSlotKind: (slotIndex: number, kind: "vacant" | "reserved") => Promise<void>;
   addPlayer: (player: Omit<Player, "id" | "totalGamesPlayed" | "totalDaysPlayed">) => Promise<void>;
-  updatePlayer: (player: Player) => Promise<void>;
+  updatePlayer: (player: Player, options?: { avatarBlob?: Blob }) => Promise<void>;
   deletePlayer: (playerId: string) => Promise<void>;
 
   // Court Actions
@@ -859,7 +897,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const stackedPlayerIds = new Set<string>(
       incomingStack.filter((id: string) => id !== "vacant").map(String)
     );
-    let players = mergeSharedPlayerRoster(
+    let players = await resolvePlayersFromSession(
       get().players,
       Array.isArray(shared.playerProfiles) ? shared.playerProfiles : [],
       checkedInIds,
@@ -882,7 +920,9 @@ export const useClubStore = create<ClubState>((set, get) => ({
     players = stripUnauthorizedCheckIns(players, matches);
     const courts = reconcileCourtsWithMatches(rawCourts, matches);
     const stackOrder = reconcileStackOrder(incomingStack, players, matches, courts);
-    const remoteReservations = Array.isArray(shared.reservations) ? (shared.reservations as Reservation[]) : [];
+    const remoteReservations = useSupabaseData()
+      ? []
+      : Array.isArray(shared.reservations) ? (shared.reservations as Reservation[]) : [];
     const reservations = remoteReservations.length > 0
       ? mergeReservations(get().reservations, remoteReservations)
       : get().reservations;
@@ -1002,7 +1042,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     }
   },
   applyBroadcastPlayerProfiles: (profiles) => {
-    if (!profiles.length) return;
+    if (useSupabaseData() || !profiles.length) return;
     applyingRemoteClubBroadcast = true;
     const state = get();
     const checkedInIds = new Set(state.players.filter((player) => player.checkedIn).map((player) => player.id));
@@ -1029,15 +1069,17 @@ export const useClubStore = create<ClubState>((set, get) => ({
 
     const state = get();
     const profileIds = playerIdsNeedingProfileSync(state.players, state.stackOrder, state.matches, state.courts);
-    const syncedProfiles = state.players
-      .filter((player) => profileIds.has(player.id))
-      .map((player) => ({
-        id: player.id,
-        displayName: player.displayName,
-        avatarUrl: player.avatarUrl ?? null,
-        skillLevel: player.skillLevel,
-        statusNote: player.statusNote ?? null
-      }));
+    const syncedProfiles = useSupabaseData()
+      ? []
+      : state.players
+          .filter((player) => profileIds.has(player.id))
+          .map((player) => ({
+            id: player.id,
+            displayName: player.displayName,
+            avatarUrl: player.avatarUrl ?? null,
+            skillLevel: player.skillLevel,
+            statusNote: player.statusNote ?? null
+          }));
     try {
       if (useSupabaseData()) {
         const body = await publishClubState({
@@ -1049,11 +1091,11 @@ export const useClubStore = create<ClubState>((set, get) => ({
           stackOrder: state.stackOrder,
           courts: state.courts,
           matches: state.matches,
-          reservations: state.reservations,
-          playerProfiles: syncedProfiles,
+          reservations: [],
+          playerProfiles: [],
           playerKudos: state.playerKudos,
           matchReviews: state.matchReviews
-        });
+        }, { slim: true });
         if (body) markSyncHealthy(set, body.updatedAt);
       } else {
       const response = await apiFetch("/api/club-state", {
@@ -1083,7 +1125,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
         type: "state-published",
         at: Date.now(),
         stackOrder: state.stackOrder,
-        playerProfiles: syncedProfiles
+        playerProfiles: useSupabaseData() ? [] : syncedProfiles
       });
       // Again, only extend — never shrink an existing longer suppress window.
       if (suppressSharedRefreshUntil < Date.now() + 4000) suppressSharedRefreshUntil = Date.now() + 4000;
@@ -1477,14 +1519,22 @@ export const useClubStore = create<ClubState>((set, get) => ({
     pushToast(set, "Player added", `${newPlayer.displayName} has been added.`, "system");
     await get().publishSharedState({ force: true });
   },
-  updatePlayer: async (player) => {
-    await db.players.put(player);
-    await queue("UPDATE_PLAYER", "Player", player.id, player);
-    const players = get().players.map((p) => p.id === player.id ? player : p);
+  updatePlayer: async (player, options) => {
+    let next = player;
+    if (useSupabaseData()) {
+      next = await updatePlayerOnSupabase(player, options);
+    }
+    await db.players.put(next);
+    if (!useSupabaseData()) {
+      await queue("UPDATE_PLAYER", "Player", next.id, next);
+    }
+    const players = get().players.map((p) => p.id === next.id ? next : p);
     const stackOrder = reconcileStackOrder(get().stackOrder, players, get().matches, get().courts);
     localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     set({ players, stackOrder });
-    await get().publishSharedState();
+    if (!useSupabaseData()) {
+      await get().publishSharedState();
+    }
   },
   deletePlayer: async (playerId) => {
     const player = get().players.find((p) => p.id === playerId);
@@ -2432,6 +2482,19 @@ export const useClubStore = create<ClubState>((set, get) => ({
       reservations: state.reservations.map(r => r.id === id ? updated : r)
     }));
     playSound("complete");
+  },
+  loadReservationsRange: async (from, to) => {
+    if (!useSupabaseData()) return;
+    const fetched = await fetchReservationsRange(from, to);
+    const fromMs = from.getTime();
+    const toMs = to.getTime();
+    const outside = get().reservations.filter((reservation) => {
+      const start = new Date(reservation.startTime).getTime();
+      return start < fromMs || start >= toMs;
+    });
+    const reservations = mergeReservations(outside, fetched);
+    await db.reservations.bulkPut(reservations);
+    set({ reservations });
   },
   addTransaction: async (txData) => {
     const id = generateId();

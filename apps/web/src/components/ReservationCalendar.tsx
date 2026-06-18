@@ -23,6 +23,8 @@ type Member = { id: string; role: "ADMIN" | "MEMBER"; playerId?: string; display
 
 import { getCourtSetting } from "../lib/courtSettings";
 import { apiFetch } from "../lib/api";
+import { useSupabaseData } from "../lib/dataSource";
+import { subscribeSupabaseReservations } from "../lib/supabase/realtime";
 import { COURT_HOURLY_FEE, estimateCourtFee, formatPeso } from "../lib/pricing";
 import {
   MANILA_TZ,
@@ -553,6 +555,7 @@ export function ReservationCalendar() {
     reservations,
     addReservation,
     cancelReservation,
+    loadReservationsRange,
   } = useClubStore();
   const [member, setMember] = React.useState<Member>(null);
   const [weekStart, setWeekStart] = React.useState(() => startOfWeek(new Date()));
@@ -578,6 +581,20 @@ export function ReservationCalendar() {
   React.useEffect(() => {
     if (!days.some((d) => dateKey(d) === dateKey(selectedDay))) setSelectedDay(days[0]);
   }, [days, selectedDay]);
+
+  React.useEffect(() => {
+    if (!useSupabaseData()) return;
+    const rangeEnd = addDays(weekStart, 7);
+    void loadReservationsRange(weekStart, rangeEnd);
+  }, [weekStart, loadReservationsRange]);
+
+  React.useEffect(() => {
+    if (!useSupabaseData()) return;
+    const rangeEnd = addDays(weekStart, 7);
+    return subscribeSupabaseReservations(() => {
+      void loadReservationsRange(weekStart, rangeEnd);
+    });
+  }, [weekStart, loadReservationsRange]);
 
   const weekReservations: CalReservation[] = reservations
     .filter((r) => !["Cancelled", "NoShow", "Rejected"].includes(r.status))
