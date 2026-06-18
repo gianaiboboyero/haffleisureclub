@@ -13,6 +13,7 @@ import {
 } from "../lib/playerKudos";
 import type { Court, Match, Player, Toast, Session, Reservation, Transaction, Testimonial, Achievement, Announcement, TvBroadcast } from "../lib/types";
 import { apiFetch, apiJson } from "../lib/api";
+import { markRosterSynced, rosterSyncFresh } from "../lib/syncPolicy";
 
 let suppressSharedPublishUntil = 0;
 let suppressSharedRefreshUntil = 0;
@@ -379,8 +380,8 @@ type ClubState = {
   setOnline: (online: boolean) => void;
   refreshPendingSyncCount: () => Promise<void>;
   processSyncQueue: () => Promise<void>;
-  refreshSharedState: (options?: { force?: boolean; allowUnchanged?: boolean; context?: "tv" | "default" }) => Promise<void>;
-  pingSharedState: (options?: { context?: "tv" | "default" }) => Promise<void>;
+  refreshSharedState: (options?: { force?: boolean; allowUnchanged?: boolean; context?: "tv" | "player" | "default" }) => Promise<void>;
+  pingSharedState: (options?: { context?: "tv" | "player" | "default" }) => Promise<void>;
   isApplyingRemoteBroadcast: () => boolean;
   runAsRemoteBroadcast: (apply: () => void) => void;
   publishSharedState: (options?: { force?: boolean }) => Promise<void>;
@@ -697,7 +698,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
         db.transactions.bulkPut(transactions),
       ]);
 
-      if (online && pendingSyncCount === 0) {
+      if (online && pendingSyncCount === 0 && !rosterSyncFresh()) {
         try {
           const [resPlayers, resCourts] = await Promise.all([
             apiFetch("/api/players"),
@@ -723,6 +724,9 @@ export const useClubStore = create<ClubState>((set, get) => ({
                 await db.courts.bulkPut(mergedCourts);
               })());
             }
+          }
+          if (resPlayers.ok || resCourts.ok) {
+            markRosterSynced();
           }
           if (updates.length > 0) {
             await Promise.all(updates);
@@ -756,7 +760,12 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const sinceQuery = allowUnchanged && lastKnownRemoteUpdatedAt
       ? `&since=${encodeURIComponent(lastKnownRemoteUpdatedAt)}`
       : "";
-    const viewQuery = options?.context === "tv" ? "&view=tv" : "";
+    const viewQuery =
+      options?.context === "tv"
+        ? "&view=tv"
+        : options?.context === "player"
+          ? "&view=player"
+          : "";
     let shared: any;
     try {
       const response = await apiFetch(

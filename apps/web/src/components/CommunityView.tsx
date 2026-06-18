@@ -4,6 +4,7 @@ import { ArrowLeft, CalendarDays, Copy, Download, Eye, EyeOff, LogIn, LogOut, Me
 import { AiLoader } from "./ui/ai-loader";
 import { ReactionTray } from "./ui/ReactionTray";
 import { subscribeToChannel } from "../lib/realtime";
+import { COMMUNITY_POLL_MS, shouldPollCommunity } from "../lib/syncPolicy";
 import { apiJson } from "../lib/api";
 
 const api = (url: string, options?: RequestInit): Promise<any> => apiJson(url, options);
@@ -170,10 +171,18 @@ function ChatRoom({ member }: { member: Member }) {
   const [activeTray, setActiveTray] = React.useState<{ message: Message; anchor: HTMLElement } | null>(null);
   const holdRef = React.useRef<{ timer: number; x: number; y: number } | null>(null);
   const scrollerRef = React.useRef<HTMLDivElement>(null);
-  const load = React.useCallback(() => api("/api/community?action=messages&limit=30").then((data) => {
+  const lastMessageAtRef = React.useRef<string | null>(null);
+  const load = React.useCallback(async () => {
+    const sinceQuery = lastMessageAtRef.current
+      ? `&since=${encodeURIComponent(lastMessageAtRef.current)}`
+      : "";
+    const data = await api(`/api/community?action=messages&limit=30${sinceQuery}`);
+    if (data.unchanged === true) return;
     setMessages(data.messages);
     setNextCursor(data.nextCursor);
-  }), []);
+    const latest = data.messages?.at(-1)?.createdAt;
+    if (typeof latest === "string") lastMessageAtRef.current = latest;
+  }, []);
   const loadOlder = async () => {
     if (!nextCursor) return;
     const data = await api(`/api/community?action=messages&limit=30&before=${encodeURIComponent(nextCursor)}`);
@@ -182,10 +191,10 @@ function ChatRoom({ member }: { member: Member }) {
   };
   React.useEffect(() => {
     void load();
-    const pollMs = (((import.meta as any).env?.VITE_REALTIME_CHAT) ?? "false") === "true" ? 60_000 : 30_000;
+    if (!shouldPollCommunity()) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void load();
-    }, pollMs);
+    }, COMMUNITY_POLL_MS);
     return () => window.clearInterval(timer);
   }, [load]);
   React.useEffect(() => subscribeToChannel("haff:community:general", () => void load()), [load]);

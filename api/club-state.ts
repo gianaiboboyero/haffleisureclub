@@ -144,6 +144,29 @@ const activeMatchPlayerIds = (matches: unknown) => {
   return ids;
 };
 
+const profileIdsForSession = (
+  checkedInPlayerIds: string[],
+  stackOrder: unknown,
+  matches: unknown
+) => {
+  const ids = new Set(checkedInPlayerIds);
+  for (const id of stringArray(stackOrder)) {
+    if (id !== "vacant" && id !== "reserved") ids.add(id);
+  }
+  for (const id of activeMatchPlayerIds(matches)) ids.add(id);
+  return ids;
+};
+
+const trimProfiles = (
+  profiles: ReturnType<typeof playerProfilesFrom>,
+  checkedInPlayerIds: string[],
+  stackOrder: unknown,
+  matches: unknown
+) => {
+  const needed = profileIdsForSession(checkedInPlayerIds, stackOrder, matches);
+  return profiles.filter((profile) => needed.has(profile.id));
+};
+
 const filterAuthorizedCheckIns = (
   checkedInIds: string[],
   adminCheckedInIds: string[],
@@ -243,8 +266,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   );
   const pingOnly = String(req.query.ping ?? "") === "1";
   const tvView = String(req.query.view ?? "") === "tv";
+  const playerView = String(req.query.view ?? "") === "player";
 
   if (req.method === "GET" && pingOnly) {
+    res.setHeader("Cache-Control", "private, no-store, max-age=0");
     const meta = await findSessionMeta(requestedSessionId);
     const sinceRaw = String(req.query.since ?? "").trim();
     if (!meta) {
@@ -272,6 +297,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let session = await findActiveSession(requestedSessionId);
 
   if (req.method === "GET") {
+    res.setHeader("Cache-Control", "private, no-store, max-age=0");
     const settings = (session?.settings ?? {}) as ClubSettings;
     const sinceRaw = String(req.query.since ?? "").trim();
     if (sinceRaw && session?.updatedAt) {
@@ -294,17 +320,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       adminCheckedInIds,
       settings.matches
     );
+    const stackOrder = normalizeStack(settings.stackOrder, checkedInPlayerIds);
+    const matches = Array.isArray(settings.matches) ? settings.matches : [];
+    const allProfiles = playerProfilesFrom(settings.playerProfiles);
+    const slimProfiles = trimProfiles(allProfiles, checkedInPlayerIds, stackOrder, matches);
+    const lightView = tvView || playerView;
     return res.status(200).json({
       sessionId: session?.id ?? (requestedSessionId || "default-active-session"),
       checkedInPlayerIds,
       adminCheckedInIds,
-      stackOrder: normalizeStack(settings.stackOrder, checkedInPlayerIds),
+      stackOrder,
       courts: Array.isArray(settings.courts) ? settings.courts : [],
-      matches: Array.isArray(settings.matches) ? settings.matches : [],
-      reservations: tvView ? [] : reservationsFrom(settings.reservations),
-      playerProfiles: playerProfilesFrom(settings.playerProfiles),
-      playerKudos: tvView ? [] : playerKudosFrom(settings.playerKudos),
-      matchReviews: tvView ? [] : matchReviewsFrom(settings.matchReviews),
+      matches,
+      reservations: lightView ? [] : reservationsFrom(settings.reservations),
+      playerProfiles: slimProfiles,
+      playerKudos: lightView ? [] : playerKudosFrom(settings.playerKudos),
+      matchReviews: lightView ? [] : matchReviewsFrom(settings.matchReviews),
       tvBroadcast: tvBroadcastFrom(settings.tvBroadcast),
       updatedAt: session?.updatedAt ?? null
     });

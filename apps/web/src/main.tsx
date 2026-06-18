@@ -60,6 +60,11 @@ import { readProfileImageFile } from "./lib/profilePhoto";
 import { COURT_HOURLY_FEE } from "./lib/pricing";
 import { manilaDateTimeIso, reservationDateKey } from "./lib/reservationTime";
 import { subscribeToClubState } from "./lib/realtime";
+import {
+  clubPollIntervalMs,
+  PUBLISH_DEBOUNCE_MS,
+  REALTIME_REFRESH_DEBOUNCE_MS
+} from "./lib/syncPolicy";
 import { useClubStore, subscribeClubStateBroadcast } from "./store/useClubStore";
 import { db } from "./lib/db";
 import { sortCourts, getPlayerAvatar, getActiveCourtMatch, getTvStackGroups, getStackDisplayGroups, getStackLabel, stackGroupKey, reconcileStackOrder, createTvVacantSlot, resolveMatchTeamPlayers, resolvePlayerById, getPlayerStatusNote, getPlayerDisplayLabel, AVATAR_PRESETS, dicebearAvatar, isUsableAvatarUrl } from "./lib/utils";
@@ -261,21 +266,40 @@ function App() {
           void state.publishSharedState().then(() => {
             if (socket?.connected) socket.emit("state_changed");
           });
-        }, 250);
+        }, PUBLISH_DEBOUNCE_MS);
       }
     });
 
-    const timer = window.setInterval(refreshPendingSyncCount, 60000);
-    const sharedStateTimer = window.setInterval(() => {
-      if (document.hidden) return;
-      if (!socket || !socket.connected) {
-        const context = useClubStore.getState().view === "tv" ? "tv" : "default";
-        void useClubStore.getState().pingSharedState({ context });
-      }
-    }, 60000);
+    const timer = window.setInterval(refreshPendingSyncCount, 120000);
+
+    let pollTimer: number | undefined;
+    const scheduleClubPoll = () => {
+      const view = useClubStore.getState().view;
+      const delayMs = clubPollIntervalMs(view);
+      pollTimer = window.setTimeout(() => {
+        if (!document.hidden && (!socket || !socket.connected)) {
+          const context =
+            view === "tv" ? "tv" : view === "player" ? "player" : "default";
+          void useClubStore.getState().pingSharedState({ context });
+        }
+        scheduleClubPoll();
+      }, delayMs);
+    };
+    scheduleClubPoll();
+
+    let realtimeRefreshTimer: number | undefined;
+    const scheduleRealtimeRefresh = () => {
+      window.clearTimeout(realtimeRefreshTimer);
+      realtimeRefreshTimer = window.setTimeout(() => {
+        const view = useClubStore.getState().view;
+        const context =
+          view === "tv" ? "tv" : view === "player" ? "player" : "default";
+        void useClubStore.getState().refreshSharedState({ force: true, context });
+      }, REALTIME_REFRESH_DEBOUNCE_MS);
+    };
 
     const unsubscribeClubRealtime = subscribeToClubState(() => {
-      void useClubStore.getState().refreshSharedState({ force: true });
+      scheduleRealtimeRefresh();
     });
 
     const applyIncomingStackOrder = (incoming: string[]) => {
@@ -335,7 +359,8 @@ function App() {
         window.removeEventListener("popstate", syncRoute);
         window.removeEventListener("hashchange", syncRoute);
         window.clearInterval(timer);
-        window.clearInterval(sharedStateTimer);
+        if (pollTimer !== undefined) window.clearTimeout(pollTimer);
+        if (realtimeRefreshTimer !== undefined) window.clearTimeout(realtimeRefreshTimer);
         window.clearTimeout(sharedPublishTimer);
         unsubscribe();
         unsubscribeClubBroadcast();
@@ -354,7 +379,8 @@ function App() {
       window.removeEventListener("popstate", syncRoute);
       window.removeEventListener("hashchange", syncRoute);
       window.clearInterval(timer);
-      window.clearInterval(sharedStateTimer);
+      if (pollTimer !== undefined) window.clearTimeout(pollTimer);
+      if (realtimeRefreshTimer !== undefined) window.clearTimeout(realtimeRefreshTimer);
       window.clearTimeout(sharedPublishTimer);
       unsubscribe();
       unsubscribeClubBroadcast();
@@ -4799,7 +4825,9 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
   React.useEffect(() => {
     void refreshSharedState({ force: true, context: "tv" });
     const unsubscribeTvRealtime = subscribeToClubState(
-      () => { void refreshSharedState({ force: true, context: "tv" }); },
+      () => {
+        void refreshSharedState({ allowUnchanged: true, context: "tv" });
+      },
       { tv: true }
     );
     return () => unsubscribeTvRealtime();

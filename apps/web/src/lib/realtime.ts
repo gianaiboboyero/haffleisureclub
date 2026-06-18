@@ -1,5 +1,6 @@
 import { Realtime } from "ably";
 import { apiUrl } from "./api";
+import { markChatPushHealthy, markClubPushHealthy } from "./syncPolicy";
 
 export type RealtimeEvent = {
   entityId?: string;
@@ -18,12 +19,21 @@ function realtimeFlag(name: "VITE_REALTIME_CHAT" | "VITE_REALTIME_CLUB", default
 function subscribeAblyChannel(
   channelName: string,
   scope: string,
-  onEvent: (event: RealtimeEvent) => void
+  onEvent: (event: RealtimeEvent) => void,
+  onHealthChange: (healthy: boolean) => void
 ) {
   const client = new Realtime({
     authUrl: apiUrl(`/api/realtime/token?scope=${encodeURIComponent(scope)}`),
     authMethod: "GET"
   });
+
+  const setHealthy = (healthy: boolean) => onHealthChange(healthy);
+
+  client.connection.on("connected", () => setHealthy(true));
+  client.connection.on("disconnected", () => setHealthy(false));
+  client.connection.on("failed", () => setHealthy(false));
+  client.connection.on("suspended", () => setHealthy(false));
+
   const channel = client.channels.get(channelName);
   const seen = new Set<string>();
   const listener = (message: { id?: string; data?: RealtimeEvent }) => {
@@ -36,7 +46,9 @@ function subscribeAblyChannel(
     onEvent(message.data ?? {});
   };
   void channel.subscribe(listener);
+
   return () => {
+    setHealthy(false);
     void channel.unsubscribe(listener);
     client.close();
   };
@@ -48,7 +60,7 @@ export function subscribeToChannel(
   scope = "community"
 ) {
   if (!realtimeFlag("VITE_REALTIME_CHAT", false)) return () => undefined;
-  return subscribeAblyChannel(channelName, scope, onEvent);
+  return subscribeAblyChannel(channelName, scope, onEvent, markChatPushHealthy);
 }
 
 /** Push sync for live session state — avoids polling full JSON through serverless. */
@@ -60,5 +72,5 @@ export function subscribeToClubState(
 
   const scope = options?.tv ? "tv" : "club";
   const channel = options?.tv ? "haff:operations:tv" : "haff:operations:club";
-  return subscribeAblyChannel(channel, scope, onSessionChanged);
+  return subscribeAblyChannel(channel, scope, onSessionChanged, markClubPushHealthy);
 }

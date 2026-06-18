@@ -47,6 +47,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === "GET" && action === "messages") {
     res.setHeader("Cache-Control", "private, no-store");
+    const sinceRaw = typeof req.query.since === "string" ? req.query.since.trim() : "";
+    if (sinceRaw && !req.query.before) {
+      const latest = await prisma.chatMessage.findFirst({
+        orderBy: { createdAt: "desc" },
+        select: { id: true, createdAt: true }
+      });
+      if (latest) {
+        const serverIso = latest.createdAt.toISOString();
+        const sinceMs = Date.parse(sinceRaw);
+        const serverMs = latest.createdAt.getTime();
+        if (sinceRaw === serverIso || (!Number.isNaN(sinceMs) && sinceMs === serverMs)) {
+          return res.status(200).json({
+            unchanged: true,
+            latestAt: serverIso,
+            messages: [],
+            nextCursor: null
+          });
+        }
+      }
+    }
     const before = typeof req.query.before === "string" ? req.query.before : undefined;
     const limit = Math.min(50, Math.max(10, Number(req.query.limit ?? 30) || 30));
     const messages = await prisma.chatMessage.findMany({

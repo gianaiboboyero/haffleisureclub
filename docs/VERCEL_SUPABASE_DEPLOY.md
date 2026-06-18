@@ -56,16 +56,19 @@ Push to `main` or click **Deploy** in Vercel dashboard.
 
 ---
 
-## 3. Egress protections (already in code)
+## 3. Egress protections (built into the app)
 
 | Mechanism | Saves |
 |-----------|--------|
-| `GET /api/club-state?ping=1` | ~80 bytes vs 50–200 KB when idle |
-| Ably `session.updated` push | Full fetch only on change |
+| `GET /api/club-state?ping=1` | ~80 bytes idle check; DB reads `updatedAt` only |
+| Ably push + **5 min** heartbeat when connected | Full fetch only on real changes |
+| **90s** ping without Ably; **3 min** on landing/calendar | Fewer invocations when idle |
+| `view=tv` / `view=player` trimmed GET | No kudos/reviews/reservations on TV/player |
+| Slim `playerProfiles` (checked-in + stack + on-court only) | Smaller JSON blobs |
 | POST returns `{ sessionId, updatedAt }` only | Half write egress |
-| `view=tv` trimmed GET | Smaller TV payloads |
-| 60s ping fallback + hidden-tab skip | Fewer invocations |
-| No duplicate TV poll timer | One poll path |
+| Community `?since=` + no poll when Ably chat connected | Tiny chat polls |
+| Roster `/api/players` cached **1 hour** per browser | Fewer cold-start fetches |
+| Admin publish debounce **500ms** | Fewer POSTs during rapid edits |
 
 **Without `ABLY_API_KEY`:** still safe-ish with ping-only, but enable Ably for game nights.
 
