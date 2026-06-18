@@ -4,6 +4,8 @@ import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
   root: "apps/web",
+  envDir: "../../",
+  envPrefix: ["VITE_", "NEXT_PUBLIC_"],
   plugins: [
     react(),
     VitePWA({
@@ -62,7 +64,8 @@ export default defineConfig({
           react: ["react", "react-dom"],
           motion: ["framer-motion"],
           storage: ["dexie", "zustand"],
-          icons: ["lucide-react"]
+          icons: ["lucide-react"],
+          supabase: ["@supabase/supabase-js"]
         }
       }
     }

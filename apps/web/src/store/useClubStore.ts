@@ -14,6 +14,15 @@ import {
 import type { Court, Match, Player, Toast, Session, Reservation, Transaction, Testimonial, Achievement, Announcement, TvBroadcast } from "../lib/types";
 import { apiFetch, apiJson } from "../lib/api";
 import { markRosterSynced, rosterSyncFresh } from "../lib/syncPolicy";
+import { useSupabaseData } from "../lib/dataSource";
+import {
+  broadcastTvState,
+  fetchClubState,
+  pingClubState,
+  publishClubState
+} from "../lib/supabase/clubState";
+import { fetchCourts as fetchSupabaseCourts, seedCourtsIfEmpty } from "../lib/supabase/courts";
+import { fetchPlayersCompact } from "../lib/supabase/players";
 
 let suppressSharedPublishUntil = 0;
 let suppressSharedRefreshUntil = 0;
@@ -700,6 +709,37 @@ export const useClubStore = create<ClubState>((set, get) => ({
 
       if (online && pendingSyncCount === 0 && !rosterSyncFresh()) {
         try {
+          if (useSupabaseData()) {
+            await seedCourtsIfEmpty();
+            const [serverPlayers, serverCourts] = await Promise.all([
+              fetchPlayersCompact(),
+              fetchSupabaseCourts()
+            ]);
+            const updates: Promise<unknown>[] = [];
+            if (serverPlayers.length > 0) {
+              updates.push((async () => {
+                const mergedPlayers = mergePlayersFromServer(players, serverPlayers as Record<string, unknown>[]);
+                await db.players.bulkPut(mergedPlayers);
+              })());
+            }
+            if (serverCourts.length > 0) {
+              updates.push((async () => {
+                const mergedCourts = mergeCourtsFromServer(courts, serverCourts as Record<string, unknown>[]);
+                await db.courts.bulkPut(mergedCourts);
+              })());
+            }
+            if (serverPlayers.length > 0 || serverCourts.length > 0) {
+              markRosterSynced();
+            }
+            if (updates.length > 0) {
+              await Promise.all(updates);
+              const [freshPlayers, freshCourts] = await Promise.all([db.players.toArray(), db.courts.toArray()]);
+              set({
+                players: freshPlayers.map((p) => ({ ...p, skillLevel: normalizeSkillLevel(p.skillLevel) })),
+                courts: freshCourts.map((c) => c.status === "InUse" && !c.currentMatchId ? { ...c, status: "Available" as const } : c),
+              });
+            }
+          } else {
           const [resPlayers, resCourts] = await Promise.all([
             apiFetch("/api/players"),
             apiFetch("/api/courts")
@@ -737,6 +777,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
               courts: freshCourts.map((c) => c.status === "InUse" && !c.currentMatchId ? { ...c, status: "Available" as const } : c),
             });
           }
+          }
         } catch {
           // Silently ignore — we already have local data
         }
@@ -768,6 +809,16 @@ export const useClubStore = create<ClubState>((set, get) => ({
           : "";
     let shared: any;
     try {
+      if (useSupabaseData()) {
+        shared = await fetchClubState(currentSessionId, {
+          since: allowUnchanged ? lastKnownRemoteUpdatedAt ?? undefined : undefined,
+          context: options?.context
+        });
+        if (!shared) {
+          markSyncDegraded(set);
+          return;
+        }
+      } else {
       const response = await apiFetch(
         `/api/club-state?sessionId=${encodeURIComponent(currentSessionId)}${sinceQuery}${viewQuery}`,
         { cache: "no-store" }
@@ -781,6 +832,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
         return;
       }
       shared = await response.json();
+      }
       markSyncHealthy(set, typeof shared.updatedAt === "string" ? shared.updatedAt : null);
 
       if (shared.unchanged === true) {
@@ -909,6 +961,17 @@ export const useClubStore = create<ClubState>((set, get) => ({
       ? `&since=${encodeURIComponent(lastKnownRemoteUpdatedAt)}`
       : "";
     try {
+      if (useSupabaseData()) {
+        const body = await pingClubState(currentSessionId, lastKnownRemoteUpdatedAt);
+        if (!body) {
+          markSyncDegraded(set);
+          return;
+        }
+        markSyncHealthy(set, typeof body.updatedAt === "string" ? body.updatedAt : null);
+        if (body.unchanged === true) return;
+        await get().refreshSharedState({ force: true, context: options?.context });
+        return;
+      }
       const response = await apiFetch(
         `/api/club-state?ping=1&sessionId=${encodeURIComponent(currentSessionId)}${sinceQuery}`,
         { cache: "no-store" }
@@ -976,6 +1039,23 @@ export const useClubStore = create<ClubState>((set, get) => ({
         statusNote: player.statusNote ?? null
       }));
     try {
+      if (useSupabaseData()) {
+        const body = await publishClubState({
+          sessionId: state.currentSessionId ?? "default-active-session",
+          checkedInPlayerIds: state.players.filter((player) => player.checkedIn).map((player) => player.id),
+          adminCheckedInIds: state.players
+            .filter((player) => player.checkedIn && player.tags?.includes("AdminCheckedIn"))
+            .map((player) => player.id),
+          stackOrder: state.stackOrder,
+          courts: state.courts,
+          matches: state.matches,
+          reservations: state.reservations,
+          playerProfiles: syncedProfiles,
+          playerKudos: state.playerKudos,
+          matchReviews: state.matchReviews
+        });
+        if (body) markSyncHealthy(set, body.updatedAt);
+      } else {
       const response = await apiFetch("/api/club-state", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -997,6 +1077,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       if (response.ok && response.headers.get("content-type")?.includes("application/json")) {
         const body = await response.json();
         markSyncHealthy(set, typeof body.updatedAt === "string" ? body.updatedAt : null);
+      }
       }
       clubStateBroadcast?.postMessage({
         type: "state-published",
@@ -1022,6 +1103,11 @@ export const useClubStore = create<ClubState>((set, get) => ({
       return;
     }
     try {
+      if (useSupabaseData()) {
+        const body = await broadcastTvState(sessionId, payload);
+        if (!body) throw new Error("broadcast failed");
+        markSyncHealthy(set, body.updatedAt);
+      } else {
       const response = await apiFetch("/api/club-state", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1035,6 +1121,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       if (response.headers.get("content-type")?.includes("application/json")) {
         const body = await response.json();
         markSyncHealthy(set, typeof body.updatedAt === "string" ? body.updatedAt : null);
+      }
       }
     } catch {
       pushToast(set, "Broadcast failed", "Could not reach the TV display sync server.", "system");

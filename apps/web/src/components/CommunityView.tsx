@@ -6,6 +6,8 @@ import { ReactionTray } from "./ui/ReactionTray";
 import { subscribeToChannel } from "../lib/realtime";
 import { COMMUNITY_POLL_MS, shouldPollCommunity } from "../lib/syncPolicy";
 import { apiJson } from "../lib/api";
+import { useSupabaseData } from "../lib/dataSource";
+import { fetchCommunityMessages } from "../lib/supabase/community";
 
 const api = (url: string, options?: RequestInit): Promise<any> => apiJson(url, options);
 
@@ -173,6 +175,18 @@ function ChatRoom({ member }: { member: Member }) {
   const scrollerRef = React.useRef<HTMLDivElement>(null);
   const lastMessageAtRef = React.useRef<string | null>(null);
   const load = React.useCallback(async () => {
+    if (useSupabaseData()) {
+      const data = await fetchCommunityMessages({
+        limit: 30,
+        since: lastMessageAtRef.current ?? undefined
+      });
+      if (data.unchanged === true) return;
+      setMessages(data.messages as Message[]);
+      setNextCursor(data.nextCursor);
+      const latest = data.messages?.at(-1)?.createdAt;
+      if (typeof latest === "string") lastMessageAtRef.current = latest;
+      return;
+    }
     const sinceQuery = lastMessageAtRef.current
       ? `&since=${encodeURIComponent(lastMessageAtRef.current)}`
       : "";
@@ -185,6 +199,12 @@ function ChatRoom({ member }: { member: Member }) {
   }, []);
   const loadOlder = async () => {
     if (!nextCursor) return;
+    if (useSupabaseData()) {
+      const data = await fetchCommunityMessages({ limit: 30, before: nextCursor });
+      setMessages((current) => [...data.messages as Message[], ...current.filter((message) => !data.messages.some((older) => older.id === message.id))]);
+      setNextCursor(data.nextCursor);
+      return;
+    }
     const data = await api(`/api/community?action=messages&limit=30&before=${encodeURIComponent(nextCursor)}`);
     setMessages((current) => [...data.messages, ...current.filter((message) => !data.messages.some((older: Message) => older.id === message.id))]);
     setNextCursor(data.nextCursor);

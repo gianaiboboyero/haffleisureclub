@@ -1,6 +1,11 @@
 import { Realtime } from "ably";
 import { apiUrl } from "./api";
+import { useSupabaseData } from "./dataSource";
 import { markChatPushHealthy, markClubPushHealthy } from "./syncPolicy";
+import {
+  subscribeSupabaseChat,
+  subscribeSupabaseClubState
+} from "./supabase/realtime";
 
 export type RealtimeEvent = {
   entityId?: string;
@@ -59,15 +64,23 @@ export function subscribeToChannel(
   onEvent: (event: RealtimeEvent) => void,
   scope = "community"
 ) {
+  if (useSupabaseData()) {
+    if (!realtimeFlag("VITE_REALTIME_CHAT", false)) return () => undefined;
+    return subscribeSupabaseChat(onEvent);
+  }
   if (!realtimeFlag("VITE_REALTIME_CHAT", false)) return () => undefined;
   return subscribeAblyChannel(channelName, scope, onEvent, markChatPushHealthy);
 }
 
-/** Push sync for live session state — avoids polling full JSON through serverless. */
+/** Push sync for live session state — Supabase Realtime or Ably fallback. */
 export function subscribeToClubState(
   onSessionChanged: (event: RealtimeEvent) => void,
   options?: { tv?: boolean }
 ) {
+  if (useSupabaseData()) {
+    if (!realtimeFlag("VITE_REALTIME_CLUB", true)) return () => undefined;
+    return subscribeSupabaseClubState(onSessionChanged);
+  }
   if (!realtimeFlag("VITE_REALTIME_CLUB", true)) return () => undefined;
 
   const scope = options?.tv ? "tv" : "club";
