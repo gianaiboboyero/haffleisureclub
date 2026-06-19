@@ -93,7 +93,7 @@ export const StoryStatsCard = React.forwardRef<HTMLDivElement, StoryCardProps>(
                   border: "3px solid #f0f0f0",
                 }}
               >
-                <img src={avatarUrl} alt={playerName} style={{ width: "100%", height: "100%", objectFit: "cover" }} crossOrigin="anonymous" />
+                <img src={avatarUrl} alt={playerName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
               </div>
             )}
           </div>
