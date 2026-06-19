@@ -144,13 +144,17 @@ async function applyEvent(
   if (event.actionType === "FINISH_MATCH" && current.status === "Completed") {
     return { conflict: false, canonical: current };
   }
+  if (event.actionType === "FINISH_COURT" && current.status === "Completed") {
+    return { conflict: false, canonical: current };
+  }
   const serverStartedAt = event.actionType === "START_MATCH" ? new Date() : current.startedAt;
+  const finishAction = event.actionType === "FINISH_MATCH" || event.actionType === "FINISH_COURT";
   const updated = await db.match.update({
     where: { id: event.entityId },
     data: {
       status: typeof event.payload.status === "string" ? event.payload.status : current.status,
       startedAt: serverStartedAt,
-      endedAt: event.actionType === "FINISH_MATCH" ? new Date() : optionalDate(event.payload.endedAt) ?? current.endedAt,
+      endedAt: finishAction ? new Date() : optionalDate(event.payload.endedAt) ?? current.endedAt,
       scoreA: typeof event.payload.scoreA === "number" ? event.payload.scoreA : current.scoreA,
       scoreB: typeof event.payload.scoreB === "number" ? event.payload.scoreB : current.scoreB,
       version: { increment: 1 }

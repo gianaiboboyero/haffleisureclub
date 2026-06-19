@@ -94,6 +94,7 @@ import { getMatchOpponentIds } from "./lib/playerKudos";
 import { computePlayerStats, formatMinutesPlayed } from "./lib/playerStats";
 import { StoryShareModal } from "./components/StoryShareModal";
 import { TvPickleballCourt } from "./components/TvPickleballCourt";
+import { TvStackQueue, PlayerStackPreview } from "./components/TvStackQueue";
 import { CheckedInStack } from "./components/CheckedInStack";
 import { getVoiceStyle, isSoundEnabled, playSound, setSoundEnabled, setVoiceStyle, speakAnnouncement, unlockAudio } from "./lib/sound";
 import type { VoiceStyle } from "./lib/sound";
@@ -3928,8 +3929,8 @@ function PlayerView() {
 
   // Must be called unconditionally before any early returns (Rules of Hooks).
   const playerLiveStats = React.useMemo(
-    () => player ? computePlayerStats(player.id, matches, courts, matchDurationMinutes) : null,
-    [player?.id, matches, courts, matchDurationMinutes]
+    () => player ? computePlayerStats(player.id, matches, courts, matchDurationMinutes, now) : null,
+    [player?.id, matches, courts, matchDurationMinutes, nowMinute]
   );
 
   if (checkingSession || !hydrated || !rosterSynced) return <LoadingScreen />;
@@ -4671,6 +4672,7 @@ function PlayerView() {
           skillLevel={player.skillLevel}
           avatarUrl={getPlayerAvatar(player)}
           totalDaysPlayed={player.totalDaysPlayed}
+          totalGamesPlayed={player.totalGamesPlayed}
           lastPlayedDate={player.lastPlayedDate}
           stats={playerLiveStats}
           onClose={() => setShowStoryModal(false)}
@@ -4691,7 +4693,6 @@ function MiniStat({ label, value }: { label: string; value: number }) {
 
 function PlayerTvPreview() {
   const { courts, matches, players, stackOrder } = useClubStore();
-  const queueGroups = getStackDisplayGroups(stackOrder, players, matches, courts, 2);
   const visibleCourts = sortCourts(courts);
 
   return (
@@ -4760,27 +4761,12 @@ function PlayerTvPreview() {
             })}
           </div>
 
-          <div className="mt-3 rounded-xl bg-ivory p-3 text-forest">
-            <div className="flex items-center gap-2 text-clay">
-              <ListChecks size={14} />
-              <span className="text-[9px] font-black uppercase tracking-normal">Next Up</span>
-            </div>
-            <div className="mt-2 grid gap-1.5">
-              {queueGroups.length ? queueGroups.slice(0, 2).map((group, index) => (
-                <div key={group.map((item) => item.id).join("-")} className="rounded-lg bg-white/70 px-2.5 py-2">
-                  <p className="text-[9px] font-black uppercase tracking-normal text-forest">Stack {index + 1}</p>
-                  <p className="mt-1 truncate text-xs font-black text-forest">
-                    {group
-                      .filter((item) => !item.isVacant)
-                      .map((item) => (item?.displayName || "Player").split(" ")[0])
-                      .join(" / ") || "Waiting for players"}
-                  </p>
-                </div>
-              )) : (
-                <p className="py-2 text-center text-xs font-bold text-forest/60">No waiting stack yet</p>
-              )}
-            </div>
-          </div>
+          <PlayerStackPreview
+            stackOrder={stackOrder}
+            players={players}
+            matches={matches}
+            courts={courts}
+          />
         </div>
       </div>
     </div>
@@ -5099,7 +5085,6 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
     });
   }, [courts, matches, players, triggerCourtAnnouncement]);
 
-  const queueGroups = getTvStackGroups(stackOrder, players, matches, courts, 4);
   const overtimeCourts = courts
     .map((court) => {
       const match = matches.find((item) => item.id === court.currentMatchId && item.status === "InProgress" && item.startedAt);
@@ -5153,15 +5138,6 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
       }
     });
   }, [reservationAnnouncementKey, courts, players]);
-  const displayQueueGroups = queueGroups.length > 0
-    ? queueGroups
-    : Array.from({ length: 4 }, (_, index) => [
-    createTvVacantSlot(`vacant-tv-empty-${index}-1`),
-    createTvVacantSlot(`vacant-tv-empty-${index}-2`),
-    createTvVacantSlot(`vacant-tv-empty-${index}-3`),
-    createTvVacantSlot(`vacant-tv-empty-${index}-4`)
-  ]);
-
   const sortedCourts = sortCourts(courts);
 
   const playerNote = (p: (typeof players)[number] | undefined) => (p ? getPlayerStatusNote(p) : "");
@@ -5179,7 +5155,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
   };
 
   return (
-    <section className="relative flex h-[100dvh] w-screen flex-col overflow-hidden bg-[#0b2e22] text-ivory select-none" style={{ fontFamily: "'Inter', 'Helvetica Neue', sans-serif" }}>
+    <section className="tv-display relative flex h-[100dvh] max-h-[100dvh] w-screen max-w-[100vw] flex-col overflow-hidden bg-[#0b2e22] text-ivory select-none" style={{ fontFamily: "'Inter', 'Helvetica Neue', sans-serif" }}>
       <style dangerouslySetInnerHTML={{ __html: `
         @keyframes gradientShift {
           0% { background-position: 0% 50%; }
@@ -5344,16 +5320,16 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
           </div>
         )}
 
-      {/* ── Main layout ── */}
-      <div className="mx-auto flex min-h-0 w-full max-w-[1920px] flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden px-3 pb-2 pt-9 sm:px-4 md:gap-3 md:overflow-hidden md:px-6 md:pb-3 md:pt-4">
+      {/* ── Main layout — grid on TV so courts fill remaining 1080p height ── */}
+      <div className="tv-display-shell mx-auto flex min-h-0 w-full max-w-[1920px] flex-1 flex-col overflow-hidden px-[clamp(0.75rem,1.5vw,1.75rem)] pb-[clamp(0.35rem,0.8vh,0.65rem)] pt-[clamp(2.25rem,3.5vh,2.75rem)]">
 
         {/* ── Header ── */}
-        <header className="order-1 shrink-0 flex flex-col items-center gap-1 text-center md:order-none md:gap-2 md:flex-row md:items-end md:justify-between md:text-left">
-          <div>
-            <p className="text-[9px] sm:text-[10px] md:text-[11px] font-black uppercase tracking-[0.22em] text-ivory/60 leading-none">HAFF LEISURE CLUB</p>
-            <h1 className="font-display text-xl sm:text-2xl md:text-[clamp(1.75rem,4vw,3.5rem)] font-black leading-none tracking-tighter uppercase text-ivory mt-0.5 md:mt-1">NOW PLAYING</h1>
+        <header className="tv-display-header order-1 shrink-0 flex flex-col items-center gap-0.5 text-center md:flex-row md:items-end md:justify-between md:gap-2 md:text-left">
+          <div className="min-w-0">
+            <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.22em] text-ivory/60 leading-none">HAFF LEISURE CLUB</p>
+            <h1 className="tv-display-title font-display font-black leading-none tracking-tighter uppercase text-ivory mt-0.5">NOW PLAYING</h1>
           </div>
-          <div className="flex items-center justify-center gap-2 md:gap-3 flex-wrap">
+          <div className="tv-display-header-meta flex items-center justify-center gap-1.5 md:gap-2 flex-wrap">
             {clubStatus && (
               <span className="flex items-center gap-1.5 rounded-full bg-brass/15 border border-brass/30 px-3 md:px-4 py-1 md:py-1.5 text-[10px] md:text-sm font-black text-brass uppercase tracking-wider">
                 <span className="h-1.5 w-1.5 rounded-full bg-brass animate-pulse" />
@@ -5366,91 +5342,36 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
                 <span className="sm:hidden">OT</span>
               </span>
             )}
-            <p className="text-[10px] md:text-[clamp(1rem,1.6vw,1.5rem)] font-black tracking-[0.12em] uppercase text-brass">
+            <p className="tv-display-open-play text-[10px] font-black tracking-[0.12em] uppercase text-brass">
               {courts.some(c => c.status === "Reserved") ? "🔒 RESERVED" : "OPEN PLAY"}
             </p>
           </div>
         </header>
 
-        {/* ── Stack Queue — Mobile (below courts) ── */}
-        <div className="order-3 md:hidden shrink-0 rounded-xl border border-[#1e4f3a] bg-[#0d2e22] px-2.5 py-2">
-          <p className="text-center text-[9px] font-black uppercase tracking-[0.2em] text-ivory/40 mb-1.5">Stack queue</p>
-          <div className="flex gap-2 overflow-x-auto pb-0.5 snap-x snap-mandatory [-webkit-overflow-scrolling:touch]">
-            {displayQueueGroups.slice(0, 4).map((group, index) => {
-              const realCount = group.filter((p) => !p.isVacant).length;
-              const isStackNext = index === 0;
-              return (
-                <div key={index} className="min-w-[72%] shrink-0 snap-start rounded-lg overflow-hidden border border-[#1e4f3a]">
-                  <div className={`flex items-center justify-between px-2 py-1.5 ${isStackNext ? "bg-brass" : "bg-[#173d2c]"}`}>
-                    <span className={`truncate text-[10px] font-black uppercase tracking-wide ${isStackNext ? "text-forest" : "text-ivory/70"}`}>
-                      {getStackLabel(index)}
-                    </span>
-                    <span className={`ml-1 shrink-0 text-[10px] font-black tabular-nums ${isStackNext ? "text-forest" : "text-ivory/50"}`}>{realCount}/4</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-px bg-[#1a3f2e]">
-                    {group.map((player) => (
-                      <div key={player.id} className="flex items-center gap-1.5 bg-[#0d2e22] px-2 py-1.5 min-h-[36px]">
-                        <img
-                          src={getPlayerAvatar(player)}
-                          alt=""
-                          className={`h-6 w-6 shrink-0 rounded-full object-cover border ${player.isVacant ? "border-white/10 opacity-20" : "border-brass/30"} bg-[#173d2c]`}
-                        />
-                        <p className={`min-w-0 break-words text-[10px] font-bold leading-tight line-clamp-2 ${player.isVacant ? "text-ivory/25 italic" : "text-ivory"}`}>
-                          {getPlayerDisplayLabel(player)}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        {/* ── Stack Queue — Mobile (vertical, max 4 visible, animates when more) ── */}
+        <TvStackQueue
+          className="order-3 md:hidden"
+          variant="mobile"
+          stackOrder={stackOrder}
+          players={players}
+          matches={matches}
+          courts={courts}
+          getPlayerAvatar={getPlayerAvatar}
+        />
 
-        {/* ── Stack Queue — Desktop ── */}
-        <div className="order-2 hidden md:block shrink-0 rounded-2xl border border-[#1e4f3a] bg-[#0d2e22] px-4 py-2.5">
-          <p className="text-center text-[11px] font-black uppercase tracking-[0.22em] text-ivory/40 mb-2">Stack queue</p>
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4 lg:gap-3">
-            {displayQueueGroups.slice(0, 4).map((group, index) => {
-              const realCount = group.filter((p) => !p.isVacant).length;
-              const isStackNext = index === 0;
-              return (
-                <div key={index} className="rounded-xl overflow-hidden border border-[#1e4f3a]">
-                  <div className={`flex items-center justify-between px-3 py-2 ${isStackNext ? "bg-brass" : "bg-[#173d2c]"}`}>
-                    <span className={`text-xs font-black uppercase tracking-wider ${isStackNext ? "text-forest" : "text-ivory/70"}`}>
-                      {getStackLabel(index)}
-                    </span>
-                    <span className={`text-xs font-black tabular-nums ${isStackNext ? "text-forest" : "text-ivory/50"}`}>{realCount}/4</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-px bg-[#1a3f2e]">
-                    {group.map((player) => (
-                      <div key={player.id} className="flex items-center gap-2 bg-[#0d2e22] px-2.5 py-2.5">
-                        <img
-                          src={getPlayerAvatar(player)}
-                          alt=""
-                          className={`h-8 w-8 shrink-0 rounded-full object-cover border ${player.isVacant ? "border-white/10 opacity-20" : "border-brass/30"} bg-[#173d2c]`}
-                        />
-                        <div className="min-w-0 flex-1 text-center sm:text-left">
-                          <p className={`break-words text-xs font-black leading-tight ${player.isVacant ? "text-ivory/25 italic" : "text-ivory"}`}>
-                            {getPlayerDisplayLabel(player)}
-                          </p>
-                          {!player.isVacant && (
-                            <span className="mt-1 inline-block truncate rounded bg-white/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-ivory/55 max-w-full">
-                              {player.skillLevel}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        {/* ── Stack Queue — Desktop / TV ── */}
+        <TvStackQueue
+          className="order-2 hidden md:block"
+          variant="tv"
+          stackOrder={stackOrder}
+          players={players}
+          matches={matches}
+          courts={courts}
+          getPlayerAvatar={getPlayerAvatar}
+        />
 
         {/* ── Courts — pickleball court diagram scoreboards ── */}
-        <div className={`order-2 md:order-3 mx-auto grid w-full min-w-0 shrink-0 gap-2 md:min-h-0 md:flex-1 md:overflow-hidden md:gap-2 ${
+        <div className={`tv-display-courts order-2 md:order-3 mx-auto grid w-full min-h-0 min-w-0 flex-1 gap-[clamp(0.35rem,0.6vw,0.65rem)] overflow-hidden ${
           sortedCourts.length <= 1
             ? "grid-cols-1 max-w-3xl"
             : sortedCourts.length === 2
@@ -5493,7 +5414,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
         </div>
 
         {/* ── Footer note ── */}
-        <p className="order-4 shrink-0 text-center text-[10px] font-bold text-ivory/25 tracking-wide pb-2 md:order-none">
+        <p className="tv-display-footer order-4 shrink-0 text-center text-[9px] font-bold text-ivory/25 tracking-wide md:order-none">
           ⓘ Open Play is self-officiated. Please rotate in and out of play. Have fun and be respectful!
         </p>
       </div>

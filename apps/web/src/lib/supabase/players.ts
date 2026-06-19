@@ -21,6 +21,22 @@ export type CompactPlayerRow = {
 const COMPACT_SELECT =
   "id, displayName, fullName, skillLevel, rating, avatarUrl, statusNote, phone, tags, status, totalGamesPlayed, totalDaysPlayed, lastPlayedDate, version, updatedAt";
 
+const STATS_SELECT = "id, totalGamesPlayed, totalDaysPlayed, lastPlayedDate";
+
+export type PlayerStatsRow = Pick<
+  CompactPlayerRow,
+  "id" | "totalGamesPlayed" | "totalDaysPlayed" | "lastPlayedDate"
+>;
+
+export async function fetchPlayerStatsByIds(ids: string[]): Promise<PlayerStatsRow[]> {
+  const supabase = getSupabase();
+  if (!supabase || ids.length === 0) return [];
+
+  const { data, error } = await supabase.from("Player").select(STATS_SELECT).in("id", ids);
+  if (error || !data) return [];
+  return data as PlayerStatsRow[];
+}
+
 export async function fetchPlayersCompact(): Promise<CompactPlayerRow[]> {
   const supabase = getSupabase();
   if (!supabase) return [];

@@ -20,7 +20,13 @@ import {
 } from "../lib/supabase/clubState";
 import { fetchCourts as fetchSupabaseCourts, seedCourtsIfEmpty } from "../lib/supabase/courts";
 import { fetchPlayersCompact } from "../lib/supabase/players";
-import { updatePlayerOnSupabase, fetchMissingPlayers } from "../lib/supabase/playerUpdate";
+import { updatePlayerOnSupabase, updatePlayerStatsOnSupabase, fetchMissingPlayers } from "../lib/supabase/playerUpdate";
+import { fetchPlayerStatsByIds } from "../lib/supabase/players";
+import {
+  applyMatchCompletionToPlayers,
+  isRealPlayerId,
+  mergePlayerLifetimeStats,
+} from "../lib/playerStats";
 import { fetchReservationsRange } from "../lib/supabase/reservations";
 import {
   liveDb,
@@ -1123,6 +1129,22 @@ export const useClubStore = create<ClubState>((set, get) => ({
           : get().matches
         : mergeSharedMatches(get().matches, shared.matches as Match[])
       : get().matches;
+    const statsTargetIds = [
+      ...checkedInIds,
+      ...stackedPlayerIds,
+      ...matches.flatMap((match) =>
+        [...match.teamAPlayerIds, ...match.teamBPlayerIds].filter(isRealPlayerId)
+      ),
+    ];
+    if (options?.context === "player") {
+      try {
+        const storedPlayerId = localStorage.getItem("haff-player-account-id");
+        if (storedPlayerId) statsTargetIds.push(storedPlayerId);
+      } catch {
+        // ignore storage errors
+      }
+    }
+    players = await mergeServerPlayerStats(players, get().players, statsTargetIds);
     // Do NOT call stripUnauthorizedCheckIns here: resolvePlayersFromSession
     // already honoured adminCheckedInIds (via resolveAuthorizedCheckInIds) and
     // stripUnauthorizedCheckIns would wipe everyone who lacks the AdminCheckedIn
@@ -1535,7 +1557,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
 
     if (checkedInPlayers.length === 0 && !hasActiveMatches) return;
 
-    const players = state.players.map(player =>
+    let players = state.players.map(player =>
       player.checkedIn
         ? {
             ...player,
@@ -1556,6 +1578,17 @@ export const useClubStore = create<ClubState>((set, get) => ({
         : match
     );
 
+    const finishedFromCheckout = matches.filter(
+      (match, index) => match.status === "Completed" && state.matches[index]?.status === "InProgress"
+    );
+    if (finishedFromCheckout.length > 0) {
+      const participantIds = finishedFromCheckout.flatMap((match) => [
+        ...match.teamAPlayerIds,
+        ...match.teamBPlayerIds,
+      ]);
+      players = applyMatchCompletionToPlayers(players, participantIds);
+    }
+
     const courts = state.courts.map((court) => ({
       ...court,
       status: "Available" as const,
@@ -1570,17 +1603,27 @@ export const useClubStore = create<ClubState>((set, get) => ({
       autoAppendMissing: false
     });
 
-    const updatedPlayers = players.filter(p => checkedInPlayers.some(cip => cip.id === p.id));
+    const updatedPlayers = players.filter((p) => checkedInPlayers.some((cip) => cip.id === p.id));
+    const statsParticipants = players.filter((player) =>
+      finishedFromCheckout.some((match) =>
+        [...match.teamAPlayerIds, ...match.teamBPlayerIds].includes(player.id)
+      )
+    );
     if (updatedPlayers.length > 0) {
       await liveDb.playersBulkPut(updatedPlayers);
       for (const player of updatedPlayers) {
         await queue("CHECK_OUT_PLAYER", "Player", player.id, player);
       }
     }
+    if (statsParticipants.length > 0) {
+      try {
+        await syncParticipantStats(statsParticipants);
+      } catch (err) {
+        console.error("Failed to sync player stats after checkout:", err);
+      }
+    }
 
-    const finishedMatches = matches.filter(
-      (match, index) => match.status === "Completed" && state.matches[index]?.status === "InProgress"
-    );
+    const finishedMatches = finishedFromCheckout;
     for (const match of finishedMatches) {
       await liveDb.matchesPut(match);
       await queue("FINISH_COURT", "Match", match.id, match);
@@ -1881,7 +1924,11 @@ export const useClubStore = create<ClubState>((set, get) => ({
       (m) => m.courtId === courtId && m.status === "InProgress"
     );
     if (activeMatch) {
-      const completedMatch = { ...activeMatch, status: "Completed" as const, endTime: new Date().toISOString() };
+      const completedMatch = {
+        ...activeMatch,
+        status: "Completed" as const,
+        endedAt: new Date().toISOString(),
+      };
       await liveDb.matchesPut(completedMatch);
       await queue("UPDATE_MATCH", "Match", activeMatch.id, completedMatch);
       set({ matches: get().matches.map((m) => m.id === activeMatch.id ? completedMatch : m) });
@@ -2320,18 +2367,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const court = state.courts.find((item) => item.id === courtId);
     const match = state.matches.find((item) => item.id === court?.currentMatchId);
     if (!court || !match) return;
-    const playedToday = todayKey();
     const participantIds = [...match.teamAPlayerIds, ...match.teamBPlayerIds];
-    const players = state.players.map((player) => {
-      if (!participantIds.includes(player.id)) return player;
-      const firstGameToday = player.lastPlayedDate !== playedToday;
-      return {
-        ...player,
-        totalGamesPlayed: player.totalGamesPlayed + 1,
-        totalDaysPlayed: player.totalDaysPlayed + (firstGameToday ? 1 : 0),
-        lastPlayedDate: playedToday
-      };
-    });
+    const players = applyMatchCompletionToPlayers(state.players, participantIds);
     const completed = {
       ...match,
       status: "Completed" as const,
@@ -2351,8 +2388,9 @@ export const useClubStore = create<ClubState>((set, get) => ({
         : item
     );
     const finishedPlayerIds = new Set(
-      participantIds.filter((id) => id !== "vacant" && !id.startsWith("vacant"))
+      participantIds.filter(isRealPlayerId)
     );
+    const statsParticipants = players.filter((player) => finishedPlayerIds.has(player.id));
     const baseOrder = state.stackOrder.filter(
       (id) => id === "vacant" || !finishedPlayerIds.has(id)
     );
@@ -2364,6 +2402,9 @@ export const useClubStore = create<ClubState>((set, get) => ({
       await queue("FINISH_COURT", "Match", completed.id, completed);
       if (updatedCourt) {
         await queue("UPDATE_COURT", "Court", updatedCourt.id, updatedCourt);
+      }
+      if (statsParticipants.length > 0) {
+        await syncParticipantStats(statsParticipants);
       }
     } catch (err) {
       console.error("Failed to write finished court to DB, falling back to local memory:", err);
@@ -2911,6 +2952,57 @@ function balanceTeams(players: Player[]) {
   });
 
   return { a, b };
+}
+
+async function syncParticipantStats(participants: Player[]) {
+  if (participants.length === 0) return;
+  if (useSupabaseData()) {
+    await Promise.all(participants.map((player) => updatePlayerStatsOnSupabase(player)));
+    return;
+  }
+  for (const player of participants) {
+    await queue("UPDATE_PLAYER", "Player", player.id, player);
+  }
+}
+
+async function mergeServerPlayerStats(
+  players: Player[],
+  localPlayers: Player[],
+  targetIds?: string[]
+): Promise<Player[]> {
+  if (!useSupabaseData() || players.length === 0) return players;
+
+  const ids = [...new Set((targetIds?.length ? targetIds : players.map((player) => player.id)).filter(Boolean))];
+  if (ids.length === 0) return players;
+
+  const rows = await fetchPlayerStatsByIds(ids);
+  if (rows.length === 0) return players;
+
+  const localById = new Map(localPlayers.map((player) => [player.id, player]));
+  const serverById = new Map(rows.map((row) => [row.id, row]));
+  const mergeIds = new Set(ids);
+
+  return players.map((player) => {
+    if (!mergeIds.has(player.id)) return player;
+    const row = serverById.get(player.id);
+    const local = localById.get(player.id);
+    let merged = player;
+    if (row) {
+      merged = mergePlayerLifetimeStats(merged, {
+        totalGamesPlayed: row.totalGamesPlayed,
+        totalDaysPlayed: row.totalDaysPlayed,
+        lastPlayedDate: row.lastPlayedDate,
+      });
+    }
+    if (local) {
+      merged = mergePlayerLifetimeStats(merged, {
+        totalGamesPlayed: local.totalGamesPlayed,
+        totalDaysPlayed: local.totalDaysPlayed,
+        lastPlayedDate: local.lastPlayedDate,
+      });
+    }
+    return merged;
+  });
 }
 
 function normalizeSkillLevel(skillLevel: string): Player["skillLevel"] {

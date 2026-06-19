@@ -5,6 +5,23 @@ import { getSupabase } from "./client";
 import { fetchPlayersCompact } from "./players";
 import { uploadPlayerAvatar } from "./storage";
 
+/** Persist lifetime stat counters after a court finishes (Supabase mode). */
+export async function updatePlayerStatsOnSupabase(player: Player): Promise<void> {
+  const supabase = getSupabase();
+  if (!supabase) return;
+
+  const { error } = await supabase
+    .from("Player")
+    .update({
+      totalGamesPlayed: player.totalGamesPlayed,
+      totalDaysPlayed: player.totalDaysPlayed,
+      lastPlayedDate: player.lastPlayedDate ? new Date(player.lastPlayedDate).toISOString() : null,
+    })
+    .eq("id", player.id);
+
+  if (error) throw new Error(error.message);
+}
+
 export async function updatePlayerOnSupabase(
   player: Player,
   options?: { avatarBlob?: Blob }
