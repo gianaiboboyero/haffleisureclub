@@ -1,4 +1,4 @@
-/** API base URL for split deploy (Cloudflare Pages frontend + remote API). Empty = same origin. */
+/** API base URL for split deploy (static frontend + remote API). Empty = same origin on Vercel. */
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 
 export function apiUrl(path: string): string {

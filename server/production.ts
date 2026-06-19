@@ -108,6 +108,6 @@ if (!API_ONLY) {
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
     `HAFF PicklePulse listening on http://0.0.0.0:${PORT}` +
-      (API_ONLY ? " (API only — frontend on Cloudflare Pages)" : "")
+      (API_ONLY ? " (API only — frontend on Vercel)" : "")
   );
 });

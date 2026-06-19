@@ -1,0 +1,2758 @@
+diff --git a/apps/web/src/main.tsx b/apps/web/src/main.tsx
+index b66025f..fe9d56c 100644
+--- a/apps/web/src/main.tsx
++++ b/apps/web/src/main.tsx
+@@ -51,13 +51,16 @@ import {
+   Bell,
+   Zap,
+   BarChart2,
+-  ArrowLeft
++  ArrowLeft,
++  RotateCw,
++  Timer
+ } from "lucide-react";
+ import { Button, Card, Badge } from "./components/ui";
+ import { Chip } from "./components/ui/heroui-chip";
+ import { AiLoader } from "./components/ui/ai-loader";
+ import { useClubStore } from "./store/useClubStore";
+ import { db } from "./lib/db";
++import { generateId } from "./lib/utils";
+ import { getVoiceStyle, isSoundEnabled, playSound, setSoundEnabled, setVoiceStyle, speakAnnouncement, unlockAudio } from "./lib/sound";
+ import type { VoiceStyle } from "./lib/sound";
+ import "./styles/globals.css";
+@@ -572,28 +575,70 @@ function FloatingDock({ view, setView }: { view: string; setView: (view: ViewMod
+   ];
+   const navItems = isAdmin ? adminItems : publicItems;
+ 
++  const navRef = React.useRef<HTMLDivElement>(null);
++  const [pillStyle, setPillStyle] = React.useState({ left: 0, width: 0 });
++
++  React.useEffect(() => {
++    if (!navRef.current) return;
++    const activeBtn = navRef.current.querySelector<HTMLButtonElement>('[data-active="true"]');
++    if (!activeBtn) {
++      setPillStyle({ left: 0, width: 0 });
++      return;
++    }
++    setPillStyle({ left: activeBtn.offsetLeft, width: activeBtn.offsetWidth });
++  }, [view, navItems]);
++
+   return (
+-    <nav className="fixed bottom-6 left-1/2 z-50 flex max-w-[calc(100vw-1rem)] -translate-x-1/2 items-center gap-1.5 overflow-x-auto rounded-full border border-white/10 bg-[#0B251C]/90 p-2 shadow-[0_24px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+-      {navItems.map((item) => {
+-        const Icon = item.icon;
+-        const isActive = view === item.key;
+-        return (
+-          <button
+-            key={item.key}
+-            onClick={() => setView(item.key as ViewMode)}
+-            className={`relative flex h-11 items-center gap-2 rounded-full px-4 text-xs font-extrabold uppercase tracking-wider transition-all duration-300 ${
+-              isActive
+-                ? "bg-brass text-forest shadow-[0_4px_20px_rgba(203,239,67,0.25)] font-black"
+-                : "text-ivory/70 hover:bg-white/5 hover:text-ivory"
++    <>
++      <style dangerouslySetInnerHTML={{ __html: `
++        .no-scrollbar::-webkit-scrollbar {
++          display: none !important;
++        }
++        .no-scrollbar {
++          -ms-overflow-style: none !important;
++          scrollbar-width: none !important;
++        }
++      `}} />
++      <nav ref={navRef} className="fixed bottom-6 left-1/2 z-50 flex max-w-[calc(100vw-1rem)] -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/10 bg-[#0B251C]/90 shadow-[0_24px_60px_rgba(0,0,0,0.65),0_0_40px_rgba(0,0,0,0.4)] backdrop-blur-xl p-1.5 h-14 overflow-x-auto no-scrollbar">
++        <div className="relative flex items-center gap-1.5 h-full w-full justify-center">
++          {/* Animated sliding background pill */}
++          <span
++            aria-hidden="true"
++            className={`pointer-events-none absolute top-1/2 -translate-y-1/2 h-11 rounded-full bg-brass shadow-[0_4px_20px_rgba(203,239,67,0.3)] transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] z-0 ${
++              pillStyle.width === 0 ? "opacity-0 scale-95" : "opacity-100 scale-100"
+             }`}
+-            title={item.label}
++            style={{ left: pillStyle.left, width: pillStyle.width }}
++          />
++          {navItems.map((item) => {
++            const Icon = item.icon;
++            const isActive = view === item.key;
++            return (
++              <button
++                key={item.key}
++                data-active={isActive}
++                onClick={() => setView(item.key as ViewMode)}
++                className={`relative z-10 flex h-11 shrink-0 items-center gap-2 rounded-full px-4 text-xs font-extrabold uppercase tracking-wider transition-colors duration-200 ${
++                  isActive
++                    ? "text-forest font-black"
++                    : "text-ivory/70 hover:text-ivory"
++                }`}
++                title={item.label}
++              >
++                <Icon size={16} className="shrink-0 text-current" />
++                <span className="whitespace-nowrap hidden sm:inline">{item.label}</span>
++              </button>
++            );
++          })}
++          <button
++            onClick={() => window.location.reload()}
++            className="group shrink-0 relative z-10 flex h-11 items-center gap-2 rounded-full px-4 text-xs font-extrabold uppercase tracking-wider text-ivory/70 hover:text-ivory sm:hidden"
++            title="Refresh Page"
+           >
+-            <Icon size={16} className="shrink-0" />
+-            <span className="hidden md:inline">{item.label}</span>
++            <RotateCw size={16} className="shrink-0 transition-transform duration-500 group-hover:rotate-180 text-current" />
+           </button>
+-        );
+-      })}
+-    </nav>
++        </div>
++      </nav>
++    </>
+   );
+ }
+ 
+@@ -660,91 +705,97 @@ function ParkingView() {
+   const getCourt = (matchId: string) => courts.find(c => c.currentMatchId === matchId);
+ 
+   return (
+-    <motion.section
+-      initial={{ opacity: 0, y: 14 }}
+-      animate={{ opacity: 1, y: 0 }}
+-      className="mx-auto max-w-6xl px-4 py-5 pb-32 text-ivory"
+-    >
+-      <div className="relative overflow-hidden rounded-3xl bg-[#173f32] p-6 shadow-[0_18px_46px_rgba(0,0,0,0.22)] sm:p-8">
+-        <Coffee className="absolute -right-5 -top-7 h-40 w-40 text-brass opacity-[0.07]" />
+-        <p className="text-xs font-black uppercase tracking-[0.22em] text-brass">Paid and checked in</p>
+-        <h1 className="mt-2 font-display text-4xl font-black sm:text-5xl">Parking Area</h1>
+-        <p className="mt-2 max-w-2xl text-sm leading-6 text-linen/75">
+-          Players here are cleared by the desk but are not included in the active stack. Resume when ready; park again whenever you need a break.
+-        </p>
+-        <div className="mt-5 flex flex-wrap gap-2">
+-          <Badge>{parkedPlayers.length} parked</Badge>
+-          <Badge>{readyPlayers.length} in rotation</Badge>
++    <div className="absolute inset-0 min-h-[100dvh] w-full overflow-y-auto bg-[#fdfbf7] text-forest font-sans selection:bg-brass/30">
++      <motion.section
++        initial={{ opacity: 0, y: 14 }}
++        animate={{ opacity: 1, y: 0 }}
++        className="mx-auto max-w-6xl px-4 py-8 pb-32"
++      >
++        <div className="relative overflow-hidden rounded-3xl bg-white border border-forest/10 p-6 shadow-[0_18px_46px_rgba(19,36,29,0.06)] sm:p-8">
++          <Coffee className="absolute -right-5 -top-7 h-40 w-40 text-brass opacity-10" />
++          <p className="text-xs font-black uppercase tracking-[0.22em] text-brass">Paid and checked in</p>
++          <h1 className="mt-2 font-display text-4xl font-black text-forest sm:text-5xl">Parking Area</h1>
++          <p className="mt-2 max-w-2xl text-sm leading-6 text-forest/70">
++            Players here are cleared by the desk but are not included in the active stack. Resume when ready; park again whenever you need a break.
++          </p>
++          <div className="mt-5 flex flex-wrap gap-2">
++            <span className="bg-forest/5 border border-forest/10 text-forest px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider">{parkedPlayers.length} parked</span>
++            <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider">{readyPlayers.length} in rotation</span>
++          </div>
+         </div>
+-      </div>
+ 
+-      <div className="mt-5 grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
+-        <Card className="bg-ivory text-forest">
+-          <div className="flex items-center justify-between gap-3">
+-            <div>
+-              <p className="text-xs font-black uppercase tracking-[0.18em] text-clay">Cleared lounge</p>
+-              <h2 className="font-display text-3xl font-black">Parked Players</h2>
+-            </div>
+-            <Coffee className="text-brass" size={26} />
+-          </div>
+-          <div className="mt-5 space-y-3">
+-            {parkedPlayers.map((player) => (
+-              <div className="flex items-center gap-3 rounded-2xl bg-forest/[0.06] p-3" key={player.id}>
+-                <img className="h-11 w-11 rounded-full bg-white object-cover" src={getPlayerAvatar(player)} alt="" />
+-                <div className="min-w-0 flex-1">
+-                  <p className="truncate font-black">{player.displayName}</p>
+-                  <p className="text-xs text-forest/55">Paid · checked in · outside rotation</p>
+-                </div>
+-                {canManage(player.id) && (
+-                  <button className="min-h-10 rounded-full bg-forest px-4 text-xs font-black text-ivory" onClick={() => void setPlayerParked(player.id, false)}>
+-                    Join rotation
+-                  </button>
+-                )}
++        <div className="mt-5 grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
++          <Card className="bg-white border border-forest/10 text-forest shadow-[0_12px_40px_rgba(19,36,29,0.08)]">
++            <div className="flex items-center justify-between gap-3">
++              <div>
++                <p className="text-xs font-black uppercase tracking-[0.18em] text-brass">Cleared lounge</p>
++                <h2 className="font-display text-3xl font-black">Parked Players</h2>
+               </div>
+-            ))}
+-            {parkedPlayers.length === 0 && <p className="rounded-2xl bg-forest/[0.04] p-6 text-center text-sm text-forest/55">No players are parked right now.</p>}
+-          </div>
+-        </Card>
+-
+-        <Card className="bg-[#0b3a2c] text-ivory">
+-          <p className="text-xs font-black uppercase tracking-[0.18em] text-brass">Active queue</p>
+-          <h2 className="font-display text-3xl font-black">In Rotation</h2>
+-          <div className="mt-5 space-y-3">
+-            {readyPlayers.map((player) => {
+-              const match = getPlayingMatch(player.id);
+-              const court = match ? getCourt(match.id) : null;
+-              
+-              return (
+-                <div className="flex items-center gap-3 rounded-2xl bg-ivory/[0.08] p-3" key={player.id}>
+-                  {match ? (
+-                    <span className="h-2.5 w-2.5 rounded-full bg-amber-400 animate-pulse" title="Playing" />
+-                  ) : (
+-                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" title="Waiting" />
+-                  )}
++              <Coffee className="text-brass/60" size={26} />
++            </div>
++            <div className="mt-5 space-y-3">
++              {parkedPlayers.map((player) => (
++                <div className="flex items-center gap-3 rounded-2xl bg-[#fdfbf7] p-3 border border-forest/10" key={player.id}>
++                  <img className="h-11 w-11 rounded-full bg-white object-cover shadow-sm border border-forest/5" src={getPlayerAvatar(player)} alt="" />
+                   <div className="min-w-0 flex-1">
+-                    <p className="truncate text-sm font-bold">{player.displayName}</p>
+-                    {court && <p className="text-xs text-amber-200 mt-0.5">Playing on {court.name}</p>}
++                    <p className="truncate font-black">{player.displayName}</p>
++                    <p className="text-xs text-forest/60">Paid · checked in · outside rotation</p>
+                   </div>
+-                  {canManage(player.id) && !match && (
+-                    <button className="min-h-9 rounded-full bg-brass px-3 text-xs font-black text-forest" onClick={() => void setPlayerParked(player.id, true)}>
+-                      Park
++                  {canManage(player.id) && (
++                    <button className="min-h-10 rounded-full bg-brass hover:bg-brass/80 px-4 text-xs font-black text-forest transition-all" onClick={() => void setPlayerParked(player.id, false)}>
++                      Join rotation
+                     </button>
+                   )}
+                 </div>
+-              );
+-            })}
+-            {readyPlayers.length === 0 && <p className="text-sm text-ivory/50">Nobody is in the rotation yet.</p>}
+-          </div>
+-        </Card>
+-      </div>
+-    </motion.section>
++              ))}
++              {parkedPlayers.length === 0 && (
++                <div className="py-8 text-center text-sm italic text-forest/50">
++                  No players are parked right now.
++                </div>
++              )}
++            </div>
++          </Card>
++
++          <Card className="bg-white border border-forest/10 text-forest shadow-[0_12px_40px_rgba(19,36,29,0.08)]">
++            <p className="text-xs font-black uppercase tracking-[0.18em] text-brass">Active queue</p>
++            <h2 className="font-display text-3xl font-black">In Rotation</h2>
++            <div className="mt-5 space-y-3">
++              {readyPlayers.map((player) => {
++                const match = getPlayingMatch(player.id);
++                const court = match ? getCourt(match.id) : null;
++                
++                return (
++                  <div className="flex items-center gap-3 rounded-2xl bg-[#fdfbf7] p-3 border border-forest/10" key={player.id}>
++                    {match ? (
++                      <span className="h-2.5 w-2.5 rounded-full bg-amber-400 animate-pulse shadow-[0_0_8px_rgba(251,191,36,0.6)]" title="Playing" />
++                    ) : (
++                      <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" title="Waiting" />
++                    )}
++                    <div className="min-w-0 flex-1">
++                      <p className="truncate text-sm font-bold">{player.displayName}</p>
++                      {court && <p className="text-xs text-amber-700 mt-0.5">Playing on {court.name}</p>}
++                    </div>
++                    {canManage(player.id) && !match && (
++                      <button className="min-h-9 rounded-full bg-forest/5 hover:bg-forest/10 px-3 text-xs font-black text-forest border border-forest/10 transition-all" onClick={() => void setPlayerParked(player.id, true)}>
++                        Park
++                      </button>
++                    )}
++                  </div>
++                );
++              })}
++              {readyPlayers.length === 0 && <p className="text-sm text-forest/50 py-4">Nobody is in the rotation yet.</p>}
++            </div>
++          </Card>
++        </div>
++      </motion.section>
++    </div>
+   );
+ }
+ 
+ type AdminTab = "control" | "players" | "courts" | "history" | "settings";
+ 
+ function AdminView() {
+-  const { players, courts, matches, sessions, currentSessionId, clubStatus } = useClubStore();
++  const { players, courts, matches, sessions, currentSessionId, clubStatus, checkIn, updatePlayer } = useClubStore();
+   const [activeTab, setActiveTab] = React.useState<AdminTab>("control");
+   const [isQrOpen, setIsQrOpen] = React.useState(false);
+ 
+@@ -763,7 +814,7 @@ function AdminView() {
+   // Admin Portal Authentication
+   const [isAuthenticated, setIsAuthenticated] = React.useState(false);
+   const [checkingAuth, setCheckingAuth] = React.useState(true);
+-  const [email, setEmail] = React.useState("gianaibo.dev@gmail.com");
++  const [email, setEmail] = React.useState("");
+   const [password, setPassword] = React.useState("");
+   const [authError, setAuthError] = React.useState("");
+ 
+@@ -865,74 +916,99 @@ function AdminView() {
+   }
+ 
+   return (
+-    <section className="mx-auto max-w-7xl px-4 py-4">
+-      {/* Header Panel */}
+-      <section className="relative overflow-hidden rounded-2xl bg-[#173f32] p-5 text-ivory shadow-[0_18px_46px_rgba(0,0,0,0.2)] sm:p-6">
+-        <div className="absolute -right-8 -top-12 opacity-[0.06]"><LogoMark size="large" /></div>
+-        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-linen/80">
+-          {activeSession ? `${activeSession.name} (${activeSession.location || "HAFF Leisure Club"})` : "No active session"}
+-        </p>
+-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-1">
+-          <h1 className="font-display text-4xl font-semibold leading-tight tracking-normal sm:text-5xl">
+-            Open Play Control
+-          </h1>
+-          <div className="flex gap-2">
+-            <Button
+-              onClick={() => setIsQrOpen(true)}
+-              className="bg-ivory/15 text-ivory hover:bg-ivory/25 font-bold px-5 py-3 rounded-full flex items-center gap-2"
+-            >
+-              <QrCode size={16} /> Player QR
+-            </Button>
+-            <Button
+-              onClick={() => {
+-                localStorage.removeItem("haff_admin_authenticated");
+-                setIsAuthenticated(false);
+-                playSound("complete");
+-              }}
+-              className="bg-ivory/15 text-ivory hover:bg-ivory/25 font-bold px-5 py-3 rounded-full flex items-center gap-2"
+-            >
+-              Sign Out
+-            </Button>
+-            {activeSession && (
++    <div className="absolute inset-0 min-h-[100dvh] w-full overflow-y-auto bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-gray-900 via-[#030712] to-black text-white">
++      <section className="mx-auto max-w-full px-4 xl:px-8 py-6 space-y-6 pb-36">
++        {/* Header Panel */}
++        <section className="relative overflow-hidden rounded-[2.5rem] bg-white/[0.03] backdrop-blur-3xl border border-white/10 p-6 text-ivory shadow-[0_24px_60px_rgba(0,0,0,0.5)] sm:p-8">
++          <div className="absolute -right-8 -top-12 opacity-[0.04] pointer-events-none"><LogoMark size="large" /></div>
++          <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(203,239,67,0.05),transparent_70%)] pointer-events-none" />
++          
++          <div className="relative z-10">
++          <p className="text-xs font-black uppercase tracking-[0.24em] text-brass">
++            {activeSession ? `${activeSession.name} (${activeSession.location || "HAFF Leisure Club"})` : "No active session"}
++          </p>
++          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mt-2">
++            <div>
++              <h1 className="font-display text-4xl font-black leading-none tracking-tight sm:text-5xl">
++                Open Play Control
++              </h1>
++              <p className="mt-2.5 max-w-2xl text-xs sm:text-sm leading-relaxed text-linen/70">
++                Check players in, park players who are taking a break, drag names into stacks, then assign the next stack to an available court.
++              </p>
++            </div>
++            <div className="flex flex-wrap gap-2.5 shrink-0 items-center">
+               <Button
+-                onClick={async () => {
+-                  const res = await useClubStore.getState().endSession();
+-                  if (res?.hasActiveCourts) {
+-                    if (confirm("There are still active/reserved courts in progress. Force ending the session will finish all matches and clear the courts. Proceed?")) {
+-                      await useClubStore.getState().endSession(true);
+-                    }
+-                  }
++                onClick={() => setIsQrOpen(true)}
++                className="bg-white/10 hover:bg-white/15 text-ivory border border-white/10 font-black px-5 py-2.5 rounded-full backdrop-blur-md shadow-md transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] flex items-center gap-2"
++              >
++                <QrCode size={15} /> Player QR
++              </Button>
++              <Button
++                onClick={() => {
++                  localStorage.removeItem("haff_admin_authenticated");
++                  setIsAuthenticated(false);
++                  playSound("complete");
+                 }}
+-                className="bg-clay text-ivory hover:bg-clay/90 font-bold px-5 py-3 rounded-full shadow-md"
++                className="bg-white/10 hover:bg-white/15 text-ivory border border-white/10 font-black px-5 py-2.5 rounded-full backdrop-blur-md shadow-md transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] flex items-center gap-2"
+               >
+-                End Session
++                Sign Out
+               </Button>
+-            )}
++              {activeSession && (
++                <Button
++                  onClick={async () => {
++                    const res = await useClubStore.getState().endSession();
++                    if (res?.hasActiveCourts) {
++                      if (confirm("There are still active/reserved courts in progress. Force ending the session will finish all matches and clear the courts. Proceed?")) {
++                        await useClubStore.getState().endSession(true);
++                      }
++                    }
++                  }}
++                  className="bg-gradient-to-r from-clay to-[#a45339] text-ivory hover:from-clay/90 hover:to-[#a45339]/90 border border-clay/35 font-black px-5 py-2.5 rounded-full shadow-[0_4px_20px_rgba(185,101,75,0.2)] transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
++                >
++                  End Session
++                </Button>
++              )}
++            </div>
+           </div>
+-        </div>
+-        <p className="mt-2 max-w-2xl text-sm leading-6 text-linen/85">
+-          Check players in, park players who are taking a break, drag names into stacks, then assign the next stack to an available court.
+-        </p>
+-        {clubStatus && (
+-          <div className="mt-4 flex items-start gap-3 rounded-xl bg-brass px-4 py-3 text-forest">
+-            <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-clay" />
+-            <div>
+-              <p className="text-[10px] font-black uppercase tracking-[0.16em]">Live club status</p>
+-              <p className="mt-0.5 font-bold leading-snug">{clubStatus}</p>
++          
++          {clubStatus && (
++            <div className="mt-6 flex items-center gap-3 rounded-2xl bg-brass/10 border border-brass/25 px-4 py-3 text-brass">
++              <span className="h-2 w-2 shrink-0 rounded-full bg-brass animate-pulse" />
++              <div>
++                <p className="text-[9px] font-black uppercase tracking-[0.16em] opacity-80">Live club status</p>
++                <p className="mt-0.5 text-xs font-bold leading-none">{clubStatus}</p>
++              </div>
++            </div>
++          )}
++
++          <div className="mt-6 grid grid-cols-2 gap-3.5 sm:grid-cols-4">
++            <div className="flex flex-col items-start rounded-2xl border border-emerald-500/10 bg-emerald-500/[0.04] px-5 py-4 shadow-inner relative overflow-hidden group hover:border-emerald-500/20 transition-all duration-300">
++              <div className="absolute inset-0 bg-gradient-to-b from-transparent to-emerald-500/[0.02] pointer-events-none" />
++              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-emerald-400">Checked In</span>
++              <span className="mt-1 font-display text-4xl font-black tabular-nums text-emerald-300">{checkedIn.length}</span>
++            </div>
++            <div className="flex flex-col items-start rounded-2xl border border-amber-500/10 bg-amber-500/[0.04] px-5 py-4 shadow-inner relative overflow-hidden group hover:border-amber-500/20 transition-all duration-300">
++              <div className="absolute inset-0 bg-gradient-to-b from-transparent to-amber-500/[0.02] pointer-events-none" />
++              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-amber-400">Courts Active</span>
++              <span className="mt-1 font-display text-4xl font-black tabular-nums text-amber-300">{courts.filter(c => c.status === 'InUse' || c.status === 'Reserved').length}/{courts.length}</span>
++            </div>
++            <div className="flex flex-col items-start rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4 shadow-inner relative overflow-hidden group hover:border-white/15 transition-all duration-300">
++              <div className="absolute inset-0 bg-gradient-to-b from-transparent to-white/[0.01] pointer-events-none" />
++              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-linen/60">Waiting</span>
++              <span className="mt-1 font-display text-4xl font-black tabular-nums text-ivory">{Math.max(0, waiting)}</span>
++            </div>
++            <div className="flex flex-col items-start rounded-2xl border border-brass/10 bg-brass/[0.03] px-5 py-4 shadow-inner relative overflow-hidden group hover:border-brass/25 transition-all duration-300">
++              <div className="absolute inset-0 bg-gradient-to-b from-transparent to-brass/[0.02] pointer-events-none" />
++              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-brass/80">Games Done</span>
++              <span className="mt-1 font-display text-4xl font-black tabular-nums text-brass">{matches.filter((match) => match.status === "Completed").length}</span>
+             </div>
+           </div>
+-        )}
+-        <div className="mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-ivory/12 sm:grid-cols-4">
+-          <Metric label="Checked in" value={checkedIn.length} />
+-          <Metric label="Courts" value={courts.length} />
+-          <Metric label="Completed" value={matches.filter((match) => match.status === "Completed").length} />
+-          <Metric label="Waiting" value={Math.max(0, waiting)} />
+         </div>
+       </section>
+ 
+       {/* Tab Navigation */}
+-      <div className="my-4">
+-        <div className="flex gap-1 overflow-x-auto rounded-xl bg-black/10 p-1 scrollbar-none">
++      <div className="my-6">
++        <div className="flex gap-1 overflow-x-auto rounded-[1.2rem] bg-black/20 border border-white/5 p-1 no-scrollbar shadow-inner">
+           {[
+             { id: "control", label: "Play Rotation" },
+             { id: "players", label: "Manage Players" },
+@@ -943,10 +1019,10 @@ function AdminView() {
+             <button
+               key={tab.id}
+               onClick={() => setActiveTab(tab.id as AdminTab)}
+-              className={`min-h-11 whitespace-nowrap rounded-lg px-4 py-2 text-sm font-bold transition-colors ${
++              className={`min-h-11 whitespace-nowrap rounded-[0.8rem] px-5 py-2.5 text-xs font-black uppercase tracking-wider transition-all duration-300 ${
+                 activeTab === tab.id 
+-                  ? "bg-ivory text-forest shadow-sm"
+-                  : "text-ivory/75 hover:bg-ivory/10 hover:text-ivory"
++                  ? "bg-brass text-forest shadow-[0_4px_18px_rgba(203,239,67,0.3)] scale-[1.02]"
++                  : "text-ivory/60 hover:text-ivory hover:bg-white/5"
+               }`}
+             >
+               {tab.label}
+@@ -993,14 +1069,68 @@ function AdminView() {
+           </div>
+         </div>
+       )}
++
++      {/* Floating Check-in Requests Popup (lower-right) */}
++      {(() => {
++        const checkInRequests = players.filter(p => !p.checkedIn && (p.tags?.includes("CheckInRequested") || p.tags?.includes("CheckInRequestedPaid")));
++        if (checkInRequests.length === 0) return null;
++        return (
++          <div className="fixed bottom-24 right-6 z-[100] max-w-sm w-[calc(100vw-3rem)] bg-[#07241c] border border-brass/30 p-4 rounded-3xl shadow-[0_24px_60px_rgba(0,0,0,0.7)] backdrop-blur-xl">
++            <div className="flex items-center justify-between border-b border-white/10 pb-2.5 mb-3">
++              <h3 className="font-display text-xs font-black text-brass uppercase tracking-wider flex items-center gap-1.5">
++                <span className="h-2 w-2 rounded-full bg-brass animate-ping" />
++                Check-in Requests ({checkInRequests.length})
++              </h3>
++              <span className="text-[9px] font-bold text-ivory/50">Admin Action Required</span>
++            </div>
++            <div className="space-y-2 max-h-60 overflow-y-auto pr-1 no-scrollbar">
++              {checkInRequests.map(req => {
++                const wantsPayment = req.tags?.includes("CheckInRequestedPaid");
++                return (
++                  <div key={req.id} className="flex items-center justify-between bg-white/[0.04] border border-white/5 p-2.5 rounded-2xl gap-3">
++                    <div className="min-w-0 flex-1">
++                      <p className="text-xs font-black text-ivory truncate">{req.displayName}</p>
++                      <p className="text-[9px] text-ivory/50">
++                        {req.skillLevel} · {wantsPayment ? "PHP 150 (Unpaid)" : "No Fee Logged"}
++                      </p>
++                    </div>
++                    <div className="flex gap-1 shrink-0">
++                      <button
++                        onClick={async () => {
++                          await checkIn(req.id, wantsPayment, true);
++                          playSound("checkin");
++                        }}
++                        className="bg-brass hover:bg-brass/90 text-[#05241c] text-[9px] font-black uppercase tracking-wider px-2.5 py-1.5 rounded-lg transition"
++                      >
++                        Approve
++                      </button>
++                      <button
++                        onClick={async () => {
++                          const newTags = (req.tags ?? []).filter(t => t !== "CheckInRequested" && t !== "CheckInRequestedPaid");
++                          await updatePlayer({ ...req, tags: newTags });
++                          playSound("complete");
++                        }}
++                        className="bg-clay/20 hover:bg-clay/35 text-clay text-[9px] font-black uppercase tracking-wider px-2.5 py-1.5 rounded-lg transition"
++                      >
++                        Deny
++                      </button>
++                    </div>
++                  </div>
++                );
++              })}
++            </div>
++          </div>
++        );
++      })()}
+     </section>
++    </div>
+   );
+ }
+ 
+ // Court elapsed-time timer badge (live)
+ function CourtElapsedTimer({ startedAt, matchDurationMinutes }: { startedAt: string; matchDurationMinutes: number }) {
+   const now = useNow();
+-  const elapsedSeconds = Math.floor((now.getTime() - new Date(startedAt).getTime()) / 1000);
++  const elapsedSeconds = Math.floor((now - new Date(startedAt).getTime()) / 1000);
+   const elapsedMin = Math.floor(elapsedSeconds / 60);
+   const elapsedSec = elapsedSeconds % 60;
+   const isOver = elapsedMin >= matchDurationMinutes;
+@@ -1020,6 +1150,247 @@ function CourtElapsedTimer({ startedAt, matchDurationMinutes }: { startedAt: str
+ // ----------------------------------------------------
+ // PLAY ROTATION TAB
+ // ----------------------------------------------------
++function AdminCourtCard({
++  court,
++  match,
++  matches,
++  players,
++  matchDurationMinutes,
++  assignPlayerToCourt,
++  startReservedCourt,
++  returnReservedToQueue,
++  clearCourt,
++  reserveCourt
++}: {
++  court: Court;
++  match: Match | undefined;
++  matches: Match[];
++  players: Player[];
++  matchDurationMinutes: number;
++  assignPlayerToCourt: (playerId: string, courtId: string) => Promise<void>;
++  startReservedCourt: (courtId: string) => Promise<void>;
++  returnReservedToQueue: (courtId: string) => Promise<void>;
++  clearCourt: (courtId: string) => Promise<void>;
++  reserveCourt: (courtId: string) => Promise<void>;
++}) {
++  const now = useNow();
++  
++  // Calculate overtime status live
++  const startedTime = match?.startedAt ? new Date(match.startedAt).getTime() : 0;
++  const elapsedSeconds = startedTime ? Math.floor((now - startedTime) / 1000) : 0;
++  const isOvertime = court.status === "InUse" && elapsedSeconds >= matchDurationMinutes * 60;
++
++  const toggleReservedStatus = async () => {
++    const nextStatus = court.status === "Reserved" ? "Available" : "Reserved";
++    const updatedCourt = { 
++      ...court, 
++      status: nextStatus, 
++      reservedPlayerIds: nextStatus === "Reserved" ? [] : court.reservedPlayerIds 
++    };
++    await useClubStore.getState().updateCourt(updatedCourt);
++  };
++
++  const adjustCourtTime = async (seconds: number) => {
++    if (!match || !match.startedAt) return;
++    const currentStart = new Date(match.startedAt).getTime();
++    const newStart = new Date(currentStart - seconds * 1000).toISOString();
++    
++    // We update match scores to trigger state write, then update DB and State
++    await useClubStore.getState().updateMatchScores(match.id, match.scoreA, match.scoreB);
++    const updatedMatch = { ...match, startedAt: newStart };
++    await db.matches.put(updatedMatch);
++    useClubStore.setState({
++      matches: useClubStore.getState().matches.map(m => m.id === match.id ? updatedMatch : m)
++    });
++    await useClubStore.getState().publishSharedState();
++  };
++
++  const resetWarmUp = async () => {
++    if (!match) return;
++    const updatedMatch = { ...match, startedAt: new Date().toISOString() };
++    await db.matches.put(updatedMatch);
++    useClubStore.setState({
++      matches: useClubStore.getState().matches.map(m => m.id === match.id ? updatedMatch : m)
++    });
++    await useClubStore.getState().publishSharedState();
++  };
++
++  return (
++    <Card 
++      key={court.id} 
++      className={`admin-court min-h-48 transition-all duration-300 relative overflow-hidden p-4 border flex flex-col justify-between border-l-[4px] ${
++        court.status === "InUse"
++          ? "bg-white/[0.04] backdrop-blur-xl text-ivory border-l-amber-400"
++          : court.status === "Reserved" 
++          ? "bg-purple-900/20 backdrop-blur-xl text-ivory border-l-purple-500 shadow-[0_4px_30px_rgba(168,85,247,0.15)] border-white/5"
++          : court.status === "Maintenance"
++          ? "bg-red-900/20 backdrop-blur-xl text-ivory border-l-red-500 border-white/5"
++          : court.status === "Paused"
++          ? "bg-amber-900/20 backdrop-blur-xl text-ivory border-l-amber-600 border-white/5"
++          : "bg-white/[0.02] backdrop-blur-xl text-ivory border-l-emerald-600 hover:border-l-emerald-400 border-white/5"
++      } ${isOvertime ? "animate-overtime" : ""}`}
++      onDragOver={(event) => {
++        const match = matches.find((m) => m.id === court.currentMatchId && m.status === "InProgress");
++        const hasVacant = match && [...match.teamAPlayerIds, ...match.teamBPlayerIds].some(id => id.startsWith("vacant"));
++        if (court.status !== "Maintenance" && court.status !== "Paused" && (court.status !== "InUse" || hasVacant)) {
++          event.preventDefault();
++        }
++      }}
++      onDrop={async (event) => {
++        event.preventDefault();
++        const playerId = event.dataTransfer.getData("text/plain") || event.dataTransfer.getData("text/player-id");
++        if (!playerId) return;
++
++        if (court.status === "InUse") {
++          await useClubStore.getState().joinActiveMatch(playerId, court.id);
++        } else if (court.status !== "Maintenance" && court.status !== "Paused") {
++          await assignPlayerToCourt(playerId, court.id);
++        }
++      }}
++    >
++      <div>
++        <div className="flex items-center justify-between border-b border-white/5 pb-2 mb-3">
++          <div className="flex items-center gap-2">
++            <h2 className="font-display text-xl text-brass font-black uppercase tracking-wide">{court.name}</h2>
++            {/* Manual Reserve Toggle Button */}
++            {(court.status === "Available" || court.status === "Reserved") && (
++              <button
++                onClick={toggleReservedStatus}
++                className={`h-5 min-h-0 px-2 text-[8px] font-black uppercase tracking-wider rounded transition border ${
++                  court.status === "Reserved"
++                    ? "bg-purple-500/20 border-purple-500/40 text-purple-200"
++                    : "bg-white/5 border-white/10 text-ivory/60 hover:bg-white/10"
++                }`}
++                title="Toggle court reservation status"
++              >
++                {court.status === "Reserved" ? "★ Reserved" : "☆ Reserve"}
++              </button>
++            )}
++          </div>
++          
++          <Chip
++            color={
++              court.status === "InUse" ? "warning" :
++              court.status === "Reserved" ? "accent" :
++              court.status === "Maintenance" ? "danger" : "success"
++            }
++            variant="soft"
++            className="font-black text-[11px] px-3 py-1.5 uppercase tracking-wider rounded-lg"
++          >
++            {court.status === "InUse" ? "IN USE" : court.status}
++          </Chip>
++        </div>
++        
++        <div className="min-h-12">
++          {court.status === "InUse" && match?.startedAt && (
++            <div className="flex items-center justify-between gap-2 bg-[#051812]/50 rounded-xl p-2 border border-white/5 mb-3">
++              <span className="text-xs text-linen/75">Match Progress:</span>
++              <CourtElapsedTimer startedAt={match.startedAt} matchDurationMinutes={matchDurationMinutes} />
++            </div>
++          )}
++          
++          {match ? (
++            <MatchLine matchId={match.id} />
++          ) : court.status === "Reserved" ? (
++            <ReservedStack courtId={court.id} />
++          ) : court.status === "Maintenance" ? (
++            <p className="mt-2 text-[10px] text-red-400 font-bold uppercase tracking-wider">Under Maintenance.</p>
++          ) : court.status === "Paused" ? (
++            <p className="mt-2 text-[10px] text-amber-400 font-bold uppercase tracking-wider">Temporarily paused.</p>
++          ) : (
++            <p className="mt-2 rounded-lg bg-forest/20 border border-forest/10 px-3 py-1.5 text-[10px] font-semibold text-ivory/80">
++              Available for play rotation.
++            </p>
++          )}
++        </div>
++      </div>
++      
++      {/* Action Buttons & Timers Adjustment controls */}
++      <div className="mt-4 pt-3 border-t border-white/5 space-y-3">
++        {/* Custom time adjustments row for InUse courts */}
++        {court.status === "InUse" && match?.startedAt && (
++          <div className="flex items-center justify-between gap-1.5 bg-black/20 p-1.5 rounded-xl border border-white/5">
++            <span className="text-[9px] font-black uppercase text-linen/60 ml-1">Adjust:</span>
++            <div className="flex items-center gap-1">
++              <button 
++                onClick={() => adjustCourtTime(-60)} 
++                className="h-6 px-1.5 rounded bg-white/5 hover:bg-white/10 text-[9px] font-bold text-ivory transition"
++                title="Subtract 1 minute"
++              >
++                -1m
++              </button>
++              <button 
++                onClick={() => adjustCourtTime(-10)} 
++                className="h-6 px-1.5 rounded bg-white/5 hover:bg-white/10 text-[9px] font-bold text-ivory transition"
++                title="Subtract 10 seconds"
++              >
++                -10s
++              </button>
++              <button 
++                onClick={() => adjustCourtTime(10)} 
++                className="h-6 px-1.5 rounded bg-white/5 hover:bg-white/10 text-[9px] font-bold text-ivory transition"
++                title="Add 10 seconds"
++              >
++                +10s
++              </button>
++              <button 
++                onClick={() => adjustCourtTime(60)} 
++                className="h-6 px-1.5 rounded bg-white/5 hover:bg-white/10 text-[9px] font-bold text-ivory transition"
++                title="Add 1 minute"
++              >
++                +1m
++              </button>
++              <button 
++                onClick={resetWarmUp} 
++                className="h-6 px-2 rounded bg-brass text-forest hover:bg-linen text-[9px] font-black uppercase transition flex items-center gap-0.5 ml-1"
++                title="Reset Warm Up timer to 0"
++              >
++                🔥 Reset
++              </button>
++            </div>
++          </div>
++        )}
++
++        <div className="flex flex-wrap gap-1.5">
++          {match ? (
++            <Button onClick={() => { playSound("complete"); finishCourt(court.id); }} className="h-8 min-h-0 bg-brass hover:bg-brass/90 px-3 text-[10px] text-forest font-black uppercase tracking-wider rounded-lg flex items-center gap-1 shadow-sm">
++              <CheckCircle2 size={12} /> Finish
++            </Button>
++          ) : court.status === "Reserved" ? (
++            <>
++              <Button 
++                onClick={() => {
++                  const count = court.reservedPlayerIds?.length ?? 0;
++                  if (count < 4) {
++                    if (confirm(`This stack has only ${count} players. Start anyway?`)) {
++                      startReservedCourt(court.id);
++                    }
++                  } else {
++                    startReservedCourt(court.id);
++                  }
++                }} 
++                className="h-8 min-h-0 bg-brass hover:bg-brass/90 px-3 text-[10px] text-forest font-black uppercase tracking-wider rounded-lg shadow-sm"
++              >
++                Start Match
++              </Button>
++              <Button onClick={() => returnReservedToQueue(court.id)} className="h-8 min-h-0 bg-white/10 hover:bg-white/20 px-2.5 text-[10px] text-white rounded-lg">
++                Return
++              </Button>
++              <Button onClick={() => clearCourt(court.id)} className="h-8 min-h-0 bg-white/5 hover:bg-white/10 px-2.5 text-[10px] text-white/70 rounded-lg">
++                Clear
++              </Button>
++            </>
++          ) : court.status === "Available" ? (
++            <Button onClick={() => reserveCourt(court.id)} className="h-8 min-h-0 bg-brass hover:bg-brass/90 px-3 text-[10px] font-black text-forest uppercase tracking-wider rounded-lg flex items-center gap-1 shadow-sm">
++              <Lock size={11} /> Hold court
++            </Button>
++          ) : null}
++        </div>
++      </div>
++    </Card>
++  );
++}
++
+ function PlayRotationTab() {
+   const { 
+     players, 
+@@ -1050,9 +1421,6 @@ function PlayRotationTab() {
+   const setClubStatus = useClubStore((state) => state.setClubStatus);
+   const [clubStatusDraft, setClubStatusDraft] = React.useState(clubStatus);
+   const [selectedVoiceStyle, setSelectedVoiceStyle] = React.useState<VoiceStyle>(getVoiceStyle);
+-  const [testAnnouncement, setTestAnnouncement] = React.useState(
+-    "Court 1 overtime. Court 1 players: Juan, Maria, Alex, and Kim. Please finish your game."
+-  );
+ 
+   const activePlayers = players.filter((p) => p.isActive !== false);
+   const loungePlayers = activePlayers.filter((player) => {
+@@ -1074,226 +1442,90 @@ function PlayRotationTab() {
+   };
+ 
+   return (
+-    <div className="space-y-4">
+-      {/* Quick-action sticky bar */}
+-      <div className="sticky top-16 z-30 -mx-1 rounded-2xl border border-white/10 bg-[#0a1f18]/95 px-4 py-3 backdrop-blur-xl shadow-[0_8px_32px_rgba(0,0,0,0.3)]">
+-        <div className="flex flex-wrap items-center gap-2">
+-          <span className="mr-2 text-[10px] font-black uppercase tracking-[0.2em] text-brass">Quick Actions</span>
+-          <Button
+-            onClick={() => generateMatches()}
+-            className="min-h-10 gap-2 bg-brass px-4 text-xs font-black text-forest hover:bg-linen"
+-          >
+-            <Zap size={14} /> Assign Courts
+-          </Button>
+-          <Button
+-            onClick={() => {
+-              const name = window.prompt("Check in player by name (partial match):");
+-              if (!name) return;
+-              const match = players.find(p =>
+-                p.isActive !== false && !p.checkedIn &&
+-                p.displayName.toLowerCase().includes(name.toLowerCase())
+-              );
+-              if (match) {
+-                checkIn(match.id, autoLogPayment, true);
+-              } else {
+-                alert(`No unchecked player found matching "${name}". Try a different name.`);
+-              }
+-            }}
+-            className="min-h-10 gap-2 bg-ivory/15 px-4 text-xs font-bold text-ivory hover:bg-ivory/25"
+-          >
+-            <Plus size={14} /> Quick Check-In
+-          </Button>
+-          <Button
+-            onClick={() => {
+-              const msg = window.prompt("Broadcast a live club status message:", clubStatusDraft || "");
+-              if (msg !== null) {
+-                setClubStatusDraft(msg);
+-                setClubStatus(msg);
+-              }
+-            }}
+-            className="min-h-10 gap-2 bg-ivory/15 px-4 text-xs font-bold text-ivory hover:bg-ivory/25"
+-          >
+-            <Bell size={14} /> Broadcast
+-          </Button>
+-        </div>
+-      </div>
++    <div className="mx-auto w-full max-w-[1900px] space-y-5 px-2 sm:px-0">
++      <style dangerouslySetInnerHTML={{ __html: `
++        @keyframes overtimeJiggle {
++          0% { transform: translate(0, 0) scale(1); }
++          25% { transform: translate(-1.5px, 1px) rotate(-0.3deg); }
++          50% { transform: translate(1.5px, -1px) scale(1.01) rotate(0.3deg); }
++          75% { transform: translate(-1.5px, -1px) rotate(-0.3deg); }
++          100% { transform: translate(0, 0) scale(1); }
++        }
++        .animate-overtime {
++          animation: overtimeJiggle 0.8s ease-in-out infinite;
++          box-shadow: 0 0 25px rgba(239, 68, 68, 0.45) !important;
++          border: 1.5px solid rgba(239, 68, 68, 0.6) !important;
++        }
++      `}} />
+ 
+-      <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+-        <div className="space-y-4">
+-          <StackBuilder players={players} courts={courts} matches={matches} stackOrder={stackOrder} />
+-        <div className="grid gap-4 md:grid-cols-2">
+-          {courts.map((court) => {
+-            const match = matches.find((item) => item.id === court.currentMatchId);
+-            return (
+-              <Card 
+-                key={court.id} 
+-                className={`admin-court min-h-48 transition relative overflow-hidden ${
+-                  court.status === "Reserved" 
+-                    ? "bg-white/5 grayscale opacity-80 border-white/5" 
+-                    : court.status === "Maintenance" || court.status === "Paused" || court.status === "InUse" 
+-                      ? "text-ivory" 
+-                      : "text-ivory hover:border-white/30"
+-                }`}
+-                onDragOver={(event) => {
+-                  const match = matches.find((m) => m.id === court.currentMatchId && m.status === "InProgress");
+-                  const hasVacant = match && [...match.teamAPlayerIds, ...match.teamBPlayerIds].some(id => id.startsWith("vacant"));
+-                  if (court.status !== "Maintenance" && court.status !== "Paused" && (court.status !== "InUse" || hasVacant)) {
+-                    event.preventDefault();
+-                  }
+-                }}
+-                onDrop={async (event) => {
+-                  event.preventDefault();
+-                  const playerId = event.dataTransfer.getData("text/player-id");
+-                  if (!playerId) return;
+-
+-                  if (court.status === "InUse") {
+-                    await useClubStore.getState().joinActiveMatch(playerId, court.id);
+-                  } else if (court.status !== "Maintenance" && court.status !== "Paused") {
+-                    await assignPlayerToCourt(playerId, court.id);
+-                  }
+-                }}
+-              >
+-                <div className="flex items-center justify-between border-b border-white/5 pb-2">
+-                  <h2 className="font-display text-3xl text-ivory font-bold">{court.name}</h2>
+-                  <Chip
+-                    color={
+-                      court.status === "InUse" ? "warning" :
+-                      court.status === "Reserved" ? "accent" :
+-                      court.status === "Maintenance" ? "danger" : "success"
+-                    }
+-                    variant="soft"
+-                    size="sm"
+-                    className="font-bold"
+-                  >
+-                    {court.status === "InUse" ? "IN USE" : court.status}
+-                  </Chip>
+-                  {court.status === "InUse" && match?.startedAt && (
+-                    <CourtElapsedTimer startedAt={match.startedAt} matchDurationMinutes={matchDurationMinutes} />
+-                  )}
+-                </div>
+-                {match ? (
+-                  <MatchLine matchId={match.id} />
+-                ) : court.status === "Reserved" ? (
+-                  <ReservedStack courtId={court.id} />
+-                ) : court.status === "Maintenance" ? (
+-                  <p className="mt-8 text-sm text-red-400 font-semibold">Under Maintenance. Players cannot be assigned.</p>
+-                ) : court.status === "Paused" ? (
+-                  <p className="mt-8 text-sm text-amber-400 font-semibold">Temporarily paused by admin.</p>
+-                ) : (
+-                  <p className="mt-8 rounded-lg bg-forest px-3 py-2 text-sm font-semibold text-ivory">
+-                    Available for the next balanced rotation.
+-                  </p>
+-                )}
+-                <div className="mt-5 flex flex-wrap gap-2 pt-2">
+-                  {match ? (
+-                    <Button onClick={() => { playSound("complete"); finishCourt(court.id); }} className="min-h-10 bg-brass hover:bg-brass/90 px-4 text-xs text-forest font-black">
+-                      <CheckCircle2 size={14} /> Finish
+-                    </Button>
+-                  ) : court.status === "Reserved" ? (
+-                    <>
+-                      <Button 
+-                        onClick={() => {
+-                          const count = court.reservedPlayerIds?.length ?? 0;
+-                          if (count < 4) {
+-                            if (confirm(`This stack has only ${count} players. Start anyway?`)) {
+-                              startReservedCourt(court.id);
+-                            }
+-                          } else {
+-                            startReservedCourt(court.id);
+-                          }
+-                        }} 
+-                        className="min-h-10 bg-brass px-4 text-xs text-forest font-black"
+-                      >
+-                        Start Stack
+-                      </Button>
+-                      <Button onClick={() => returnReservedToQueue(court.id)} className="min-h-10 bg-white/10 hover:bg-white/20 px-4 text-xs text-white">
+-                        Return to Queue
+-                      </Button>
+-                      <Button onClick={() => clearCourt(court.id)} className="min-h-10 bg-white/5 hover:bg-white/10 px-4 text-xs text-white/80">
+-                        Clear Hold
+-                      </Button>
+-                    </>
+-                  ) : court.status === "Available" ? (
+-                    <Button onClick={() => reserveCourt(court.id)} className="min-h-10 bg-brass hover:bg-brass/90 px-4 text-xs font-black text-ink shadow-md">
+-                      <Lock size={14} /> Assign Next Stack
+-                    </Button>
+-                  ) : null}
+-                </div>
+-              </Card>
+-            );
+-          })}
+-        </div>
+-      </div>
+-      <aside className="space-y-5">
+-        <Card className="work-surface">
+-          <div className="flex items-center justify-between gap-3">
+-            <div>
+-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-clay">Quick action</p>
+-              <h2 className="font-display text-3xl text-forest">Open play rotation</h2>
+-            </div>
+-            <Button onClick={() => { playSound("complete"); generateMatches(); }} className="bg-forest text-ivory hover:bg-forest/90">Assign Courts</Button>
+-          </div>
+-        </Card>
+-        <Card className="bg-[#0b3a2c] text-ivory border border-white/10 shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem] p-5">
+-          <div className="flex flex-col gap-4">
+-            {/* Top row: Duration adjustment & Voice Toggle */}
+-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
++      {/* 1. Court Status at the very top */}
++      <div className="w-full">
++        <div className="flex flex-col justify-between rounded-[2.5rem] border border-white/10 bg-[#071f18]/95 p-5 shadow-2xl backdrop-blur-xl sm:p-6">
++          <div>
++            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/5 pb-4 mb-5">
+               <div>
+-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brass">Game Duration</p>
+-                <h3 className="text-xl font-bold tracking-tight mt-0.5">{matchDurationMinutes} Minutes</h3>
++                <h2 className="font-display text-2xl font-black text-brass uppercase tracking-wide flex items-center gap-2">
++                  <span>Courts Status Monitor</span>
++                </h2>
++                <p className="text-xs text-linen/60 mt-0.5">Real-time courts timers and queue configurations</p>
+               </div>
+-              <div className="flex items-center gap-1.5 bg-forest/50 p-1 rounded-xl border border-white/5">
+-                <Button 
+-                  onClick={() => setMatchDurationMinutes(matchDurationMinutes - 1)} 
+-                  className="h-8 w-8 bg-transparent text-ivory hover:bg-white/10 rounded-lg p-0 min-h-0 min-w-0"
+-                >
+-                  -
+-                </Button>
+-                <span className="text-xs font-mono px-1">min</span>
+-                <Button 
+-                  onClick={() => setMatchDurationMinutes(matchDurationMinutes + 1)} 
+-                  className="h-8 w-8 bg-transparent text-ivory hover:bg-white/10 rounded-lg p-0 min-h-0 min-w-0"
+-                >
+-                  +
+-                </Button>
++              <div className="flex items-center gap-3 rounded-2xl bg-white/[0.04] border border-white/10 px-4 py-2.5">
++                <span className="text-xs font-semibold text-ivory/80 uppercase tracking-wider">Session Match:</span>
++                <button
++                  onClick={() => setMatchDurationMinutes(Math.max(1, matchDurationMinutes - 1))}
++                  className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/10 text-ivory hover:bg-white/20 font-black text-sm transition"
++                >−</button>
++                <span className="text-sm font-black text-brass whitespace-nowrap tabular-nums w-16 text-center">{matchDurationMinutes} min</span>
++                <button
++                  onClick={() => setMatchDurationMinutes(matchDurationMinutes + 1)}
++                  className="flex h-7 w-7 items-center justify-center rounded-lg bg-brass text-forest hover:bg-linen font-black text-sm transition"
++                >+</button>
+               </div>
+             </div>
+-
+-            {/* Voice style toggler bar */}
+-            <div>
+-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brass mb-2">Voice Style</p>
+-              <div className="flex flex-wrap gap-1">
+-                {[
+-                  ["warm", "Warm"],
+-                  ["clear", "Clear"],
+-                  ["bright", "Bright"],
+-                  ["formal", "Formal"]
+-                ].map(([style, label]) => (
+-                  <button
+-                    key={style}
+-                    type="button"
+-                    onClick={() => changeVoiceStyle(style as VoiceStyle)}
+-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
+-                      selectedVoiceStyle === style 
+-                        ? "bg-brass text-forest shadow" 
+-                        : "bg-forest/40 text-ivory/70 hover:bg-forest/65"
+-                    }`}
+-                  >
+-                    <Volume2 size={12} /> {label}
+-                  </button>
+-                ))}
+-              </div>
++            <div className="grid min-w-0 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
++              {courts.map((court) => {
++                const match = matches.find((item) => item.id === court.currentMatchId);
++                return (
++                  <AdminCourtCard 
++                    key={court.id}
++                    court={court}
++                    match={match}
++                    matches={matches}
++                    players={players}
++                    matchDurationMinutes={matchDurationMinutes}
++                    assignPlayerToCourt={assignPlayerToCourt}
++                    startReservedCourt={startReservedCourt}
++                    returnReservedToQueue={returnReservedToQueue}
++                    clearCourt={clearCourt}
++                    reserveCourt={reserveCourt}
++                  />
++                );
++              })}
+             </div>
++          </div>
+ 
+-            {/* Single Unified Custom Announcement Bar */}
+-            <div className="space-y-2 border-t border-white/10 pt-3">
+-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brass">Club Announcement / Marshall Command</p>
+-              <div className="flex items-center gap-2 bg-[#06241b] rounded-xl p-1 border border-white/5 focus-within:ring-1 focus-within:ring-brass transition">
++          {/* Announcement and status widgets at the bottom of Courts Status Section */}
++          <div className="grid gap-4 grid-cols-1 md:grid-cols-2 mt-6 pt-5 border-t border-white/5">
++            <Card className="bg-[#051812]/50 text-ivory border border-white/5 p-4 rounded-2xl">
++              <div className="flex justify-between items-center mb-2">
++                <p className="text-[9px] font-black uppercase tracking-[0.16em] text-brass">Speak Announcement</p>
++                <select
++                  value={selectedVoiceStyle}
++                  onChange={(event) => changeVoiceStyle(event.target.value as VoiceStyle)}
++                  className="bg-[#051812] border border-white/10 text-brass text-[9px] font-black uppercase tracking-wider outline-none cursor-pointer rounded-lg px-2 py-1"
++                >
++                  <option value="warm" className="bg-[#082d23] text-ivory">Warm Voice</option>
++                  <option value="clear" className="bg-[#082d23] text-ivory">Clear Voice</option>
++                  <option value="bright" className="bg-[#082d23] text-ivory">Bright Voice</option>
++                  <option value="formal" className="bg-[#082d23] text-ivory">Formal Voice</option>
++                </select>
++              </div>
++              <div className="flex items-center gap-1.5 bg-[#051812] rounded-xl p-1.5 border border-white/5">
+                 <input
+                   id="club-announcement"
+-                  className="flex-1 bg-transparent px-3 py-2 text-xs text-ivory placeholder:text-ivory/40 outline-none border-none"
++                  className="flex-1 bg-transparent px-2.5 py-1 text-[11px] text-ivory placeholder:text-ivory/40 outline-none border-none"
+                   onChange={(event) => setAnnouncementMessage(event.target.value)}
+-                  placeholder="Type message to broadcast (e.g. Court 1 overtime...)"
++                  placeholder="Type to announce..."
+                   value={announcementMessage}
+                 />
+                 <Button
+@@ -1302,209 +1534,200 @@ function PlayRotationTab() {
+                     speakAnnouncement(announcementMessage.trim());
+                     setAnnouncementMessage("");
+                   }}
+-                  className="bg-brass hover:bg-brass/90 text-forest font-black px-4 py-2 text-xs rounded-lg min-h-0"
++                  className="bg-brass hover:bg-brass/90 text-forest font-black px-3.5 py-1.5 text-[10px] uppercase tracking-wider rounded-lg min-h-0"
+                 >
+                   Speak
+                 </Button>
+               </div>
+-              <p className="text-[9px] text-ivory/50">Broadcasting will use the selected club speaker system configuration.</p>
+-            </div>
+-          </div>
+-        </Card>
+-        <Card 
+-          className="work-surface transition"
+-          onDragOver={(event) => event.preventDefault()}
+-          onDrop={async (event) => {
+-            event.preventDefault();
+-            const playerId = event.dataTransfer.getData("text/player-id");
+-            if (playerId) {
+-              await removePlayerFromCourt(playerId);
+-            }
+-          }}
+-        >
+-          <div className="flex items-end justify-between gap-3">
+-            <div>
+-              <h2 className="font-display text-3xl text-forest">Check-in lounge</h2>
+-              <p className="mt-1 text-xs font-semibold text-forest/60">
+-                {loungePlayers.length} of {activePlayers.length} players
+-              </p>
+-            </div>
+-            {loungePlayers.some(p => p.checkedIn) && (
+-              <Button
+-                onClick={() => {
+-                  if (confirm("Are you sure you want to checkout all checked-in players? This will clear the current open play rotation.")) {
+-                    useClubStore.getState().checkOutAll();
+-                  }
+-                }}
+-                className="bg-clay text-ivory hover:bg-clay/90 min-h-10 px-4 text-xs font-bold"
+-              >
+-                Checkout All
+-              </Button>
+-            )}
+-          </div>
+-          <div className="relative mt-4">
+-            <Search aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-forest/45" size={17} />
+-            <label className="sr-only" htmlFor="lounge-search">Search check-in lounge players</label>
+-            <input
+-              id="lounge-search"
+-              className="control-field w-full rounded-xl py-3 pl-10 pr-10 text-sm text-forest placeholder:text-forest/45 focus:outline-none"
+-              onChange={(event) => setLoungeSearch(event.target.value)}
+-              placeholder="Search by player name, rank, or tag"
+-              type="search"
+-              value={loungeSearch}
+-            />
+-            {loungeSearch && (
+-              <button
+-                aria-label="Clear lounge search"
+-                className="absolute right-2 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-lg text-forest/55 hover:bg-forest/10 hover:text-forest"
+-                onClick={() => setLoungeSearch("")}
+-                type="button"
+-              >
+-                <X size={16} />
+-              </button>
+-            )}
+-          </div>
+-          <div className="flex items-center gap-2 mt-2 px-1 text-xs text-forest/75 font-semibold">
+-            <input
+-              type="checkbox"
+-              id="auto-log-payment"
+-              checked={autoLogPayment}
+-              onChange={(e) => setAutoLogPayment(e.target.checked)}
+-              className="rounded text-forest focus:ring-forest bg-white/50 border-white/10"
+-            />
+-            <label htmlFor="auto-log-payment" className="cursor-pointer select-none">
+-              Auto-log 150 PHP payment on check-in
+-            </label>
++            </Card>
++
++            <Card className="bg-[#051812]/50 text-ivory border border-white/5 p-4 rounded-2xl">
++              <div className="flex justify-between items-center mb-2">
++                <p className="text-[9px] font-black uppercase tracking-[0.16em] text-brass">Live TV Banner</p>
++                {clubStatus && <span className="h-1.5 w-1.5 rounded-full bg-brass animate-pulse" />}
++              </div>
++              <div className="flex gap-1.5">
++                <input
++                  id="club-status"
++                  className="flex-1 bg-[#051812] rounded-xl px-2.5 py-1 text-[11px] text-ivory placeholder:text-ivory/40 outline-none border border-white/5"
++                  onChange={(event) => setClubStatusDraft(event.target.value)}
++                  placeholder="Type status message..."
++                  value={clubStatusDraft}
++                />
++                <Button
++                  onClick={() => setClubStatus(clubStatusDraft)}
++                  className="bg-brass hover:bg-brass/90 text-forest font-black px-3.5 py-1.5 text-[10px] uppercase tracking-wider rounded-lg min-h-0"
++                >
++                  Set
++                </Button>
++              </div>
++            </Card>
+           </div>
+-          <div className="mt-4 space-y-3 max-h-96 overflow-y-auto pr-1">
+-            {loungePlayers.map((player) => {
+-              const activeMatchIds = new Set(
+-                matches.filter((m) => m.status === "InProgress").flatMap((m) => [...m.teamAPlayerIds, ...m.teamBPlayerIds])
+-              );
+-              const isPlaying = activeMatchIds.has(player.id);
+-              const isDraggable = player.checkedIn && !isPlaying;
++        </div>
++      </div>
+ 
+-              return (
+-                <div
+-                  key={player.id}
+-                  draggable={isDraggable}
+-                  onDragStart={(event) => {
+-                    event.dataTransfer.setData("text/player-id", player.id);
++      {/* 2. Management Columns (Lounge and Stacks) */}
++      <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-2">
++        {/* Column 1: Check-in Lounge */}
++        <div className="min-w-0 space-y-4">
++          <Card 
++            className="flex min-h-[520px] flex-col border border-white/10 bg-[#071f18]/95 backdrop-blur-xl p-5 text-ivory transition lg:min-h-[600px] rounded-[2.5rem] shadow-2xl relative overflow-hidden"
++            onDragOver={(event) => event.preventDefault()}
++            onDrop={async (event) => {
++              event.preventDefault();
++              const playerId = event.dataTransfer.getData("text/plain") || event.dataTransfer.getData("text/player-id");
++              if (playerId) {
++                await removePlayerFromCourt(playerId);
++              }
++            }}
++          >
++            <div className="flex items-end justify-between gap-3 border-b border-white/5 pb-3">
++              <div>
++                <h2 className="font-display text-2xl text-brass uppercase tracking-wide font-black">Lounge</h2>
++                <p className="mt-0.5 text-[11px] text-ivory/60">
++                  {loungePlayers.filter(p => p.checkedIn).length} / {activePlayers.length} checked in
++                </p>
++              </div>
++              {loungePlayers.some(p => p.checkedIn) && (
++                <Button
++                  onClick={() => {
++                    if (confirm("Are you sure you want to checkout all checked-in players? This will clear the current open play rotation.")) {
++                      useClubStore.getState().checkOutAll();
++                    }
+                   }}
+-                  className={`flex min-h-16 items-center justify-between gap-3 rounded-xl px-3.5 border border-forest/5 ${
+-                    !player.checkedIn ? "bg-white/30" : "bg-white/55"
+-                  } ${
+-                    isDraggable ? "cursor-grab active:cursor-grabbing hover:bg-forest/5 transition" : ""
+-                  }`}
+-                  title={isDraggable ? "Drag player into a stack or court" : !player.checkedIn ? "Check in player to assign them" : undefined}
++                  className="bg-clay text-ivory hover:bg-clay/90 min-h-8 px-2.5 text-[9px] font-black uppercase tracking-wider rounded-lg"
+                 >
+-                  <div className="flex items-center gap-2.5">
+-                    {isDraggable && <GripVertical size={16} className="text-forest/30 shrink-0" />}
+-                    <div className="relative shrink-0">
+-                      <div className="h-10 w-10 rounded-full overflow-hidden bg-forest/10 border border-forest/10">
+-                        <img 
+-                          src={getPlayerAvatar(player)} 
+-                          alt={player.displayName} 
+-                          className="h-full w-full object-cover" 
+-                        />
+-                      </div>
+-                    </div>
+-                    <div className="min-w-0 flex-1">
+-                      <p className="font-semibold text-forest">{player.displayName}</p>
+-                      <p className="text-xs text-forest/75">
+-                        {isPlaying ? "Playing" : player.parked ? "Parked" : player.skillLevel} · {player.totalGamesPlayed} games
+-                      </p>
+-                      {player.statusNote && (
+-                        <p className="mt-1 max-w-full truncate text-[10px] font-bold text-forest/70" title={player.statusNote}>
+-                          Note: {player.statusNote}
++                  Checkout All
++                </Button>
++              )}
++            </div>
++
++            {/* Search Input */}
++            <div className="relative mt-3">
++              <Search aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-ivory/45" size={14} />
++              <input
++                id="lounge-search"
++                className="w-full rounded-xl py-2 pl-9 pr-8 text-xs text-ivory bg-[#051812] border border-white/10 placeholder:text-ivory/40 focus:outline-none focus:ring-1 focus:ring-brass"
++                onChange={(event) => setLoungeSearch(event.target.value)}
++                placeholder="Search players..."
++                type="search"
++                value={loungeSearch}
++              />
++              {loungeSearch && (
++                <button
++                  aria-label="Clear lounge search"
++                  className="absolute right-2 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-lg text-ivory/40 hover:bg-white/10 hover:text-ivory"
++                  onClick={() => setLoungeSearch("")}
++                  type="button"
++                >
++                  <X size={13} />
++                </button>
++              )}
++            </div>
++
++            {/* Payment Checkbox */}
++            <div className="flex items-center gap-2 mt-3 px-1 text-[9px] text-ivory/70 font-black uppercase tracking-wider">
++              <input
++                type="checkbox"
++                id="auto-log-payment"
++                checked={autoLogPayment}
++                onChange={(e) => setAutoLogPayment(e.target.checked)}
++                className="rounded text-forest focus:ring-forest bg-white/10 border-white/10 h-3.5 w-3.5"
++              />
++              <label htmlFor="auto-log-payment" className="cursor-pointer select-none">
++                Auto-log 150 PHP payment
++              </label>
++            </div>
++
++            {/* Lounge Players List */}
++            <div className="mt-3 space-y-2 flex-1 overflow-y-auto pr-1 max-h-[500px] no-scrollbar">
++              {loungePlayers.map((player) => {
++                const activeMatchIds = new Set(
++                  matches.filter((m) => m.status === "InProgress").flatMap((m) => [...m.teamAPlayerIds, ...m.teamBPlayerIds])
++                );
++                const isPlaying = activeMatchIds.has(player.id);
++                const isDraggable = player.checkedIn && !isPlaying;
++
++                return (
++                  <div
++                    key={player.id}
++                    draggable={isDraggable}
++                    onDragStart={(event) => {
++                      event.dataTransfer.effectAllowed = "move";
++                      event.dataTransfer.setData("text/plain", player.id);
++                      event.dataTransfer.setData("text/player-id", player.id);
++                    }}
++                    className={`flex min-h-12 items-center justify-between gap-2 rounded-xl p-2.5 border transition ${
++                      !player.checkedIn 
++                        ? "bg-white/[0.03] border-white/5 text-ivory/80" 
++                        : "bg-brass/[0.06] border-brass/20 text-ivory"
++                    } ${
++                      isDraggable ? "cursor-grab active:cursor-grabbing hover:bg-white/[0.06] hover:border-brass/35" : ""
++                    }`}
++                    title={isDraggable ? "Drag player into a stack or court" : !player.checkedIn ? "Check in player to assign them" : undefined}
++                  >
++                    <div className="flex items-center gap-2 min-w-0 flex-1">
++                      {isDraggable && <GripVertical size={14} className="text-brass/45 shrink-0" />}
++                      <div className="min-w-0 flex-1">
++                        <p className={`font-bold text-xs truncate ${!player.checkedIn ? "text-ivory/70" : "text-ivory"}`}>{player.displayName}</p>
++                        <p className={`text-[9px] ${!player.checkedIn ? "text-ivory/40" : "text-ivory/55"}`}>
++                          {isPlaying ? "Playing" : player.parked ? "Parked" : player.skillLevel} · {player.totalGamesPlayed} g
+                         </p>
+-                      )}
++                        {player.statusNote && (
++                          <p className="mt-0.5 text-[8px] font-bold text-brass/75 truncate" title={player.statusNote}>
++                            {player.statusNote}
++                          </p>
++                        )}
++                      </div>
+                     </div>
+-                  </div>
+-                  <div className="flex gap-1.5">
+-                    {!player.checkedIn ? (
+-                      <Button
+-                        onClick={() => checkIn(player.id, autoLogPayment, true)}
+-                        className="min-h-10 px-4 text-xs font-black bg-brass text-forest hover:bg-brass/90 shadow-sm"
+-                      >
+-                        Check In
+-                      </Button>
+-                    ) : isPlaying ? (
+-                      <span className="inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">
+-                        Playing
+-                      </span>
+-                    ) : (
+-                      <>
+-                        <Button
+-                          onClick={() => setPlayerParked(player.id, !player.parked)}
+-                          className={`min-h-10 px-3 text-xs font-bold transition ${
+-                            player.parked
+-                              ? "bg-brass text-forest hover:bg-brass/90"
+-                              : "bg-linen text-forest hover:bg-linen/90"
+-                          }`}
+-                        >
+-                          {player.parked ? "Resume" : "Park"}
+-                        </Button>
++                    <div className="flex gap-1 shrink-0">
++                      {!player.checkedIn ? (
+                         <Button
+-                          onClick={() => checkOut(player.id)}
+-                          className="min-h-10 px-3 text-xs font-bold bg-clay text-ivory hover:bg-clay/90"
++                          onClick={() => checkIn(player.id, autoLogPayment, true)}
++                          className="h-7 min-h-0 px-2.5 text-[9px] font-black uppercase tracking-wider bg-brass text-forest hover:bg-brass/90"
+                         >
+-                          Out
++                          Check In
+                         </Button>
+-                      </>
+-                    )}
++                      ) : isPlaying ? (
++                        <span className="inline-flex items-center rounded-lg bg-amber-950/80 px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-amber-300 border border-amber-500/20">
++                          Playing
++                        </span>
++                      ) : (
++                        <>
++                          <Button
++                            onClick={() => setPlayerParked(player.id, !player.parked)}
++                            className={`h-7 min-h-0 px-2 text-[9px] font-black uppercase tracking-wider transition ${
++                              player.parked ? "bg-brass text-forest hover:bg-brass/90" : "bg-ivory/10 text-ivory hover:bg-ivory/20"
++                            }`}
++                          >
++                            {player.parked ? "Resume" : "Park"}
++                          </Button>
++                          <Button
++                            onClick={() => checkOut(player.id)}
++                            className="h-7 min-h-0 px-2 text-[9px] font-black uppercase tracking-wider bg-clay text-ivory hover:bg-clay/90"
++                          >
++                            Out
++                          </Button>
++                        </>
++                      )}
++                    </div>
+                   </div>
++                );
++              })}
++              {loungePlayers.length === 0 && (
++                <div className="rounded-xl bg-white/5 px-4 py-8 text-center text-ivory/50">
++                  <p className="font-semibold text-xs">No players found</p>
+                 </div>
+-              );
+-            })}
+-            {loungePlayers.length === 0 && (
+-              <div className="rounded-xl bg-white/35 px-4 py-8 text-center">
+-                <p className="font-semibold text-forest">No players found</p>
+-                <p className="mt-1 text-xs text-forest/60">Try another name, rank, or tag.</p>
+-              </div>
+-            )}
+-          </div>
+-        </Card>
+-        <Card className="bg-[#173f32] text-ivory">
+-          <div className="flex items-start justify-between gap-4">
+-            <div>
+-              <p className="text-xs font-black uppercase tracking-[0.16em] text-brass">Live club status</p>
+-              <h2 className="mt-1 font-display text-3xl">Publish to the venue</h2>
+-              <p className="mt-1 text-sm text-linen/75">Shown in the admin header and on the TV display until cleared.</p>
++              )}
+             </div>
+-            {clubStatus && <span className="rounded-full bg-brass px-3 py-1 text-xs font-black text-forest">LIVE</span>}
+-          </div>
+-          <label className="sr-only" htmlFor="club-status">Club status</label>
+-          <textarea
+-            id="club-status"
+-            className="mt-4 min-h-24 w-full resize-y rounded-xl bg-ivory/10 px-4 py-3 text-sm leading-6 text-ivory outline-none placeholder:text-ivory/45 focus:ring-2 focus:ring-brass"
+-            maxLength={120}
+-            onChange={(event) => setClubStatusDraft(event.target.value)}
+-            placeholder="Example: Hydration break until 7:30 PM"
+-            value={clubStatusDraft}
+-          />
+-          <div className="mt-3 flex flex-wrap gap-2">
+-            <Button
+-              disabled={!clubStatusDraft.trim()}
+-              onClick={() => setClubStatus(clubStatusDraft)}
+-              className="bg-brass text-forest hover:bg-linen"
+-            >
+-              Publish Status
+-            </Button>
+-            <Button
+-              disabled={!clubStatus}
+-              onClick={() => {
+-                setClubStatus("");
+-                setClubStatusDraft("");
+-              }}
+-              className="bg-ivory/10 text-ivory hover:bg-ivory/20"
+-            >
+-              Clear
+-            </Button>
+-          </div>
+-        </Card>
+-      </aside>
+-    </div>
++          </Card>
++        </div>
++
++        {/* Column 2: StackBuilder / Queue */}
++        <div className="min-w-0 space-y-4">
++          <StackBuilder players={players} courts={courts} matches={matches} stackOrder={stackOrder} />
++        </div>
++      </div>
+     </div>
+   );
+ }
+@@ -1568,6 +1791,11 @@ function validatePlayerRegistration(
+ 
+ function PlayersCrudTab() {
+   const { players, addPlayer, updatePlayer, deletePlayer, checkIn, checkOut } = useClubStore();
++
++  const canDeletePlayer = (playerId: string) => {
++    const p = players.find((pl) => pl.id === playerId);
++    return p ? !p.checkedIn : true;
++  };
+   const [search, setSearch] = React.useState("");
+   const [showArchived, setShowArchived] = React.useState(false);
+   const [editingPlayer, setEditingPlayer] = React.useState<any>(null);
+@@ -1714,90 +1942,126 @@ function PlayersCrudTab() {
+   return (
+     <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
+       {/* Player List */}
+-      <Card className="work-surface">
++      <Card className="bg-gradient-to-br from-[#0e3529] via-[#092d22] to-[#05241c] border border-white/10 p-6 rounded-[2.5rem] shadow-2xl text-ivory flex flex-col gap-4">
+         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+           <h2 className="font-display text-3xl">Player Roster ({filtered.length})</h2>
+           <div className="flex items-center gap-4">
+-            <label className="flex items-center gap-2 text-xs font-semibold text-forest/75 cursor-pointer">
++            <label className="flex items-center gap-2 text-xs font-semibold text-ivory/75 cursor-pointer">
+               <input 
+                 type="checkbox" 
+                 checked={showArchived} 
+                 onChange={(e) => setShowArchived(e.target.checked)} 
+-                className="rounded border-forest/20 text-forest focus:ring-forest"
++                className="rounded border-white/10 text-forest focus:ring-brass bg-white/10"
+               />
+               Show archived
+             </label>
+-            <Button onClick={() => { resetForm(); setIsAdding(true); }} className="min-h-10 bg-forest text-ivory text-xs px-4">
++            <Button onClick={() => { resetForm(); setIsAdding(true); }} className="min-h-10 bg-brass hover:bg-brass/90 text-forest text-xs px-4">
+               <Plus size={14} /> Add Player
+             </Button>
+           </div>
+         </div>
+ 
+         {/* Search */}
+-        <div className="relative mt-4 flex items-center">
+-          <Search size={16} className="absolute left-4 text-forest/40" />
++        <div className="relative flex items-center">
++          <Search size={16} className="absolute left-4 text-ivory/40" />
+           <input
+             type="text"
+             placeholder="Search players..."
+             value={search}
+             onChange={(e) => setSearch(e.target.value)}
+-            className="control-field w-full rounded-xl pl-11 pr-4 py-3 text-sm text-forest placeholder:text-forest/45 focus:outline-none"
++            className="w-full rounded-xl pl-11 pr-4 py-3 text-sm text-ivory bg-white/[0.05] border border-white/10 placeholder:text-ivory/40 focus:outline-none focus:ring-1 focus:ring-brass"
+           />
+         </div>
+ 
+         {/* Grid List */}
+-        <div className="mt-4 space-y-3 max-h-[600px] overflow-y-auto pr-1">
++        <div className="mt-2 space-y-3 max-h-[600px] overflow-y-auto pr-1 no-scrollbar">
+           {filtered.map((player) => (
+             <div 
+               key={player.id} 
+-              className={`flex items-center justify-between gap-3 rounded-xl border border-forest/5 p-3.5 transition-colors hover:bg-white/55 ${
+-                player.isActive === false ? "bg-white/20 opacity-70" : "bg-white/35"
++              className={`flex items-center justify-between gap-3 rounded-xl border p-3.5 transition-colors ${
++                player.isActive === false 
++                  ? "bg-white/[0.01] border-white/5 opacity-55 hover:bg-white/[0.03]" 
++                  : "bg-white/[0.04] border-white/10 hover:bg-white/[0.08]"
+               }`}
+             >
+               <div className="flex min-w-0 items-center gap-3">
+                 <img
+                   alt=""
+-                  className="h-11 w-11 shrink-0 rounded-full bg-forest/10 object-cover"
++                  className="h-11 w-11 shrink-0 rounded-full bg-white/10 object-cover"
+                   src={getPlayerAvatar(player)}
+                 />
+                 <div className="min-w-0">
+-                 <p className="font-semibold text-forest text-lg leading-tight flex items-center gap-2 flex-wrap">
++                 <p className="font-semibold text-ivory text-lg leading-tight flex items-center gap-2 flex-wrap">
+                    {player.displayName}
+                    {player.tags?.includes("Member") && (
+-                     <span className="text-[9px] bg-brass/25 text-[#6b5a24] border border-brass/35 px-1.5 py-0.5 rounded-full font-black uppercase tracking-wider">Member</span>
++                     <span className="text-[9px] bg-brass/20 text-brass border border-brass/30 px-1.5 py-0.5 rounded-full font-black uppercase tracking-wider">Member</span>
+                    )}
+                    {player.tags?.includes("Non-Member") && (
+-                     <span className="text-[9px] bg-forest/10 text-forest/70 border border-forest/20 px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider">Non-Member</span>
++                     <span className="text-[9px] bg-white/10 text-ivory/60 border border-white/15 px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider">Non-Member</span>
+                    )}
+                    {player.isActive === false && (
+-                     <span className="text-[10px] bg-clay/10 text-clay border border-clay/20 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Archived</span>
++                     <span className="text-[10px] bg-clay/25 text-ivory border border-clay/30 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Archived</span>
+                    )}
+                  </p>
+                 <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                   <RankBadge skillLevel={player.skillLevel} compact />
+-                  <span className="text-xs text-forest/50">· Rating: {player.rating} · {player.totalGamesPlayed} games</span>
++                  <span className="text-xs text-ivory/50">· Rating: {player.rating} · {player.totalGamesPlayed} games</span>
+                   {player.preferredPlayStyle && (
+-                    <span className="text-xs text-forest/60">· Style: {player.preferredPlayStyle}</span>
++                    <span className="text-xs text-ivory/60">· Style: {player.preferredPlayStyle}</span>
+                   )}
+                   {player.tags.filter((tag) => tag !== "Member" && tag !== "Non-Member").map((tag) => (
+-                    <span key={tag} className="text-[10px] bg-forest/5 text-forest/70 border border-forest/10 px-1.5 py-0.2 rounded font-medium">{tag}</span>
++                    <span key={tag} className="text-[10px] bg-white/5 text-ivory/70 border border-white/5 px-1.5 py-0.2 rounded font-medium">{tag}</span>
+                   ))}
+                 </div>
+                 </div>
+               </div>
+-              <div className="flex items-center gap-1.5 shrink-0">
+-                {player.isActive === false ? (
+-                  <Button 
+-                    onClick={() => updatePlayer({ ...player, isActive: true })}
+-                    className="min-h-9 px-3 text-xs bg-forest text-ivory hover:bg-forest/90"
++              <div className="flex gap-2 shrink-0">
++                <button
++                  onClick={() => {
++                    setEditingPlayer(player);
++                    setIsAdding(false);
++                    setDisplayName(player.displayName);
++                    setSkillLevel(player.skillLevel);
++                    setRating(player.rating.toString());
++                    const isMember = player.tags?.includes("Member") ?? false;
++                    setMembership(isMember ? "MEMBER" : "NON-MEMBER");
++                    const cleanTags = (player.tags ?? []).filter((t: string) => t !== "Member" && t !== "Non-Member").join(", ");
++                    setTags(cleanTags);
++                    setPhoneNumber(player.phoneNumber ?? "");
++                    setAccessCode(player.accessCode ?? "1234");
++                    setEmergencyNote(player.emergencyNote ?? "");
++                    window.scrollTo({ top: 0, behavior: "smooth" });
++                  }}
++                  className="rounded-lg p-2 text-ivory/60 hover:bg-white/5 hover:text-ivory transition"
++                  title="Edit Player Details"
++                >
++                  <Edit2 size={15} />
++                </button>
++                {canDeletePlayer(player.id) && (
++                  <button
++                    onClick={() => {
++                      if (confirm(`Are you sure you want to permanently delete player "${player.displayName}"?`)) {
++                        deletePlayer(player.id);
++                      }
++                    }}
++                    className="rounded-lg p-2 text-clay hover:bg-red-500/10 transition"
++                    title="Delete Player"
++                  >
++                    <Trash2 size={15} />
++                  </button>
++                )}
++                {!player.checkedIn ? (
++                  <Button
++                    onClick={() => checkIn(player.id, true, true)}
++                    className="h-8 min-h-0 bg-brass hover:bg-brass/90 text-forest text-xs font-black uppercase tracking-wider px-3.5 rounded-lg flex items-center gap-1 shadow-sm"
+                   >
+-                    Restore
++                    Check In
+                   </Button>
+                 ) : (
+                   <>
+                     {!player.checkedIn ? (
+                       <button
+-                        onClick={() => checkIn(player.id, autoLogPayment, true)}
++                        onClick={() => checkIn(player.id, true, true)}
+                         className="px-3 py-1.5 rounded-lg bg-brass text-forest font-black text-xs hover:bg-brass/90 transition shadow-sm mr-1"
+                         title="Check In Player"
+                       >
+@@ -1843,7 +2107,7 @@ function PlayersCrudTab() {
+       </Card>
+ 
+       {/* Editor Panel */}
+-      <Card className="bg-[#173f32] text-ivory h-fit">
++      <Card className="bg-gradient-to-br from-[#0e3529] via-[#092d22] to-[#05241c] border border-white/10 p-6 rounded-[2.5rem] shadow-2xl text-ivory h-fit flex flex-col gap-4">
+         {isAdding || editingPlayer ? (
+           <form onSubmit={isAdding ? handleAdd : handleUpdate} className="space-y-4">
+             <div className="flex items-center justify-between">
+@@ -2090,24 +2354,24 @@ function CourtsCrudTab() {
+   return (
+     <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
+       {/* Court List */}
+-      <Card className="work-surface">
++      <Card className="bg-gradient-to-br from-[#0e3529] via-[#092d22] to-[#05241c] border border-white/10 p-6 rounded-[2.5rem] shadow-2xl text-ivory flex flex-col gap-4">
+         <div className="flex items-center justify-between">
+           <h2 className="font-display text-3xl">Court Configurations ({courts.length})</h2>
+-          <Button onClick={() => { resetForm(); setIsAdding(true); }} className="min-h-10 bg-forest text-ivory text-xs px-4">
++          <Button onClick={() => { resetForm(); setIsAdding(true); }} className="min-h-10 bg-brass hover:bg-brass/90 text-forest text-xs px-4">
+             <Plus size={14} /> Add Court
+           </Button>
+         </div>
+ 
+-        <div className="mt-6 grid gap-4 md:grid-cols-2 max-h-[550px] overflow-y-auto pr-1">
++        <div className="mt-6 grid gap-4 md:grid-cols-2 max-h-[550px] overflow-y-auto pr-1 no-scrollbar">
+           {courts.map((court) => (
+             <div 
+               key={court.id}
+-              className="flex flex-col justify-between rounded-2xl bg-white/55 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] hover:bg-white/75 transition"
++              className="flex flex-col justify-between rounded-2xl bg-white/[0.04] border border-white/5 p-4 hover:bg-white/[0.08] transition text-ivory"
+             >
+               <div className="flex items-start justify-between">
+                 <div>
+-                  <h3 className="font-display text-2xl text-forest">{court.name}</h3>
+-                  <p className="text-xs text-forest/65">Court Number: {court.number}</p>
++                  <h3 className="font-display text-2xl text-ivory">{court.name}</h3>
++                  <p className="text-xs text-ivory/65">Court Number: {court.number}</p>
+                 </div>
+                 <Chip
+                   color={
+@@ -2159,7 +2423,7 @@ function CourtsCrudTab() {
+       </Card>
+ 
+       {/* Editor Panel */}
+-      <Card className="bg-[#173f32] text-ivory h-fit">
++      <Card className="bg-gradient-to-br from-[#0e3529] via-[#092d22] to-[#05241c] border border-white/10 p-6 rounded-[2.5rem] shadow-2xl text-ivory h-fit flex flex-col gap-4">
+         {isAdding || editingCourt ? (
+           <form onSubmit={isAdding ? handleAdd : handleUpdate} className="space-y-4">
+             <div className="flex items-center justify-between">
+@@ -2269,15 +2533,15 @@ function HistoryTab() {
+ 
+   return (
+     <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
+-      <Card className="work-surface">
++      <Card className="bg-gradient-to-br from-[#0e3529] via-[#092d22] to-[#05241c] border border-white/10 p-6 rounded-[2.5rem] shadow-2xl text-ivory flex flex-col gap-4">
+         <div className="flex items-center justify-between">
+           <div>
+-            <h2 className="font-display text-3xl text-forest">Play History Log</h2>
+-            <p className="text-xs text-forest/70 mt-1">Showing all completed games from active courts</p>
++            <h2 className="font-display text-3xl text-ivory">Play History Log</h2>
++            <p className="text-xs text-ivory/70 mt-1">Showing all completed games from active courts</p>
+           </div>
+           <div className="flex items-center gap-2">
+             {completedMatches.length > 0 && (
+-              <Button onClick={handleExportCSV} className="min-h-10 bg-forest hover:bg-forest/90 text-ivory text-xs px-4">
++              <Button onClick={handleExportCSV} className="min-h-10 bg-brass hover:bg-brass/90 text-forest text-xs px-4">
+                 <Download size={14} className="mr-1.5" /> Export CSV
+               </Button>
+             )}
+@@ -2312,11 +2576,11 @@ function HistoryTab() {
+             return (
+               <div 
+                 key={match.id}
+-                className="rounded-2xl p-4 bg-white/60 border border-forest/10 hover:bg-white transition flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
++                className="rounded-2xl p-4 bg-white/[0.04] border border-white/5 hover:bg-white/[0.08] transition flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-ivory"
+               >
+                 <div>
+                   <div className="flex items-center gap-2">
+-                    <span className="text-xs font-black bg-forest/15 text-forest px-2.5 py-0.5 rounded-full uppercase tracking-wider">
++                    <span className="text-xs font-black bg-brass/15 text-brass px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                       {court?.name ?? "Court"}
+                     </span>
+                     <span className="text-[10px] font-bold text-clay uppercase tracking-widest flex items-center gap-1">
+@@ -2324,16 +2588,16 @@ function HistoryTab() {
+                     </span>
+                   </div>
+                   
+-                  <div className="mt-2.5 text-base font-semibold text-ink">
+-                    <span className="text-forest font-black">{teamANames || "Vacant"}</span>
+-                    <span className="text-xs text-forest/60 mx-2 uppercase">vs</span>
+-                    <span className="text-forest font-black">{teamBNames || "Vacant"}</span>
++                  <div className="mt-2.5 text-base font-semibold text-ivory">
++                    <span className="text-brass font-black">{teamANames || "Vacant"}</span>
++                    <span className="text-xs text-ivory/40 mx-2 uppercase">vs</span>
++                    <span className="text-brass font-black">{teamBNames || "Vacant"}</span>
+                   </div>
+                 </div>
+ 
+-                <div className="text-left sm:text-right shrink-0 border-t sm:border-t-0 border-forest/5 pt-2 sm:pt-0">
+-                  <p className="text-xs font-black text-forest/55 uppercase tracking-wider">Match Logged</p>
+-                  <p className="text-sm font-bold text-ink mt-0.5">{timeStr || "Just now"}</p>
++                <div className="text-left sm:text-right shrink-0 border-t sm:border-t-0 border-white/5 pt-2 sm:pt-0">
++                  <p className="text-xs font-black text-ivory/50 uppercase tracking-wider">Match Logged</p>
++                  <p className="text-sm font-bold text-ivory mt-0.5">{timeStr || "Just now"}</p>
+                 </div>
+               </div>
+             );
+@@ -2637,7 +2901,7 @@ function CalendarTab() {
+       return;
+     }
+     const count = Math.max(1, Math.min(12, Number(repeatWeeks) || 1));
+-    const seriesId = count > 1 ? crypto.randomUUID() : undefined;
++    const seriesId = count > 1 ? generateId() : undefined;
+     const occurrences = Array.from({ length: count }, (_, index) => {
+       const occurrenceStart = new Date(start);
+       const occurrenceEnd = new Date(end);
+@@ -2820,7 +3084,7 @@ function CalendarTab() {
+ // PAYMENTS & REVENUE TAB
+ // ----------------------------------------------------
+ function PaymentsTab() {
+-  const { transactions, players, addTransaction, voidTransaction } = useClubStore();
++  const { transactions, players, addTransaction, voidTransaction, deleteTransaction } = useClubStore();
+   const [selectedPlayerId, setSelectedPlayerId] = React.useState("");
+   const [txAmount, setTxAmount] = React.useState("150");
+   const [txType, setTxType] = React.useState<"CheckInFee" | "CourtReservation">("CheckInFee");
+@@ -2920,17 +3184,30 @@ function PaymentsTab() {
+                   <div className="flex items-center gap-2">
+                     <span className={`font-mono font-bold ${t.status === "Voided" ? "text-ivory/40 line-through" : "text-emerald-400"}`}>+ PHP {t.amount}</span>
+                     {t.status === "Success" && (
+-                      <button
+-                        className="rounded-lg bg-red-500/10 px-2 py-1 font-black text-red-300 hover:bg-red-500/20"
+-                        onClick={() => {
+-                          const reason = prompt("Why is this payment being removed?");
+-                          if (!reason?.trim()) return;
+-                          void voidTransaction(t.id, reason);
+-                        }}
+-                        type="button"
+-                      >
+-                        Void
+-                      </button>
++                      <div className="flex items-center gap-1">
++                        <button
++                          className="rounded-lg bg-amber-500/10 px-2 py-1 font-black text-amber-300 hover:bg-amber-500/20"
++                          onClick={() => {
++                            const reason = prompt("Why is this payment being voided?");
++                            if (!reason?.trim()) return;
++                            void voidTransaction(t.id, reason);
++                          }}
++                          type="button"
++                        >
++                          Void
++                        </button>
++                        <button
++                          className="rounded-lg bg-red-500/10 px-2 py-1 font-black text-red-300 hover:bg-red-500/20"
++                          onClick={() => {
++                            if (confirm("Are you sure you want to permanently delete this transaction?")) {
++                              void deleteTransaction(t.id);
++                            }
++                          }}
++                          type="button"
++                        >
++                          Delete
++                        </button>
++                      </div>
+                     )}
+                   </div>
+                 </div>
+@@ -3020,22 +3297,22 @@ function SettingsTab() {
+ 
+   return (
+     <div className="grid gap-5 md:grid-cols-2">
+-      <Card className="work-surface">
++      <Card className="bg-gradient-to-br from-[#0e3529] via-[#092d22] to-[#05241c] border border-white/10 p-6 rounded-[2.5rem] shadow-2xl text-ivory flex flex-col gap-4">
+         <h2 className="font-display text-3xl">System Configurations</h2>
+-        <p className="text-sm text-forest/75 mt-1">Global timers and rotation settings for court assignments.</p>
++        <p className="text-sm text-ivory/70 mt-1">Global timers and rotation settings for court assignments.</p>
+ 
+         <div className="mt-6 space-y-4">
+           <div>
+-            <label className="text-xs font-bold uppercase tracking-wider text-clay">Default Match Duration</label>
++            <label className="text-xs font-bold uppercase tracking-wider text-brass">Default Match Duration</label>
+             <div className="mt-2 flex items-center gap-3">
+-              <Button onClick={() => setMatchDurationMinutes(matchDurationMinutes - 1)} className="bg-linen hover:bg-forest/5 text-forest min-h-10 px-4">-</Button>
++              <Button onClick={() => setMatchDurationMinutes(matchDurationMinutes - 1)} className="bg-white/10 hover:bg-white/15 text-ivory border border-white/10 min-h-10 px-4">-</Button>
+               <span className="text-xl font-bold font-display w-24 text-center">{matchDurationMinutes} mins</span>
+-              <Button onClick={() => setMatchDurationMinutes(matchDurationMinutes + 1)} className="bg-forest text-ivory min-h-10 px-4">+</Button>
++              <Button onClick={() => setMatchDurationMinutes(matchDurationMinutes + 1)} className="bg-brass text-forest hover:bg-brass/90 min-h-10 px-4">+</Button>
+             </div>
+-            <p className="text-xs text-forest/50 mt-1.5">Determines the threshold before match cards transition to overtime on the display boards.</p>
++            <p className="text-xs text-linen/55 mt-1.5">Determines the threshold before match cards transition to overtime on the display boards.</p>
+           </div>
+-          <div className="mt-6 border-t border-forest/10 pt-4">
+-            <label className="text-xs font-bold uppercase tracking-wider text-clay block mb-2">Queuing Simulation</label>
++          <div className="mt-6 border-t border-white/10 pt-4">
++            <label className="text-xs font-bold uppercase tracking-wider text-brass block mb-2">Queuing Simulation</label>
+             <Button 
+               onClick={async () => {
+                 await useClubStore.getState().seedDemoPlayers();
+@@ -3046,12 +3323,12 @@ function SettingsTab() {
+             >
+               Seed 12 Active Demo Players
+             </Button>
+-            <p className="text-[10px] text-forest/50 mt-1.5">Populates the queue stack with 12 mock players with Beginner/Intermediate/Pro skill levels to test court rotation.</p>
++            <p className="text-[10px] text-linen/55 mt-1.5">Populates the queue stack with 12 mock players with Beginner/Intermediate/Pro skill levels to test court rotation.</p>
+           </div>
+         </div>
+       </Card>
+ 
+-      <Card className="bg-[#173f32] text-ivory">
++      <Card className="bg-gradient-to-br from-[#0e3529] via-[#092d22] to-[#05241c] border border-white/10 p-6 rounded-[2.5rem] shadow-2xl text-ivory flex flex-col gap-4">
+         <h2 className="font-display text-3xl">Offline Safety & Backup</h2>
+         <p className="text-sm text-linen/75 mt-1">Export local IndexedDB content to a file, or restore from a previous backup.</p>
+ 
+@@ -3246,7 +3523,7 @@ function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void }) {
+ // PLAYER VIEW SCREEN (QR/PHONE LOGIN INCLUDED)
+ // ----------------------------------------------------
+ function PlayerView() {
+-  const { players, courts, matches, stackOrder, checkIn, setPlayerParked, movePlayerToIndex, matchDurationMinutes, currentSessionId, updatePlayer, setView } = useClubStore();
++  const { players, courts, matches, stackOrder, checkIn, setPlayerParked, movePlayerToIndex, matchDurationMinutes, currentSessionId, updatePlayer, updateMatchScores, setView } = useClubStore();
+   const [selectedPlayerId, setSelectedPlayerId] = React.useState<string | null>(() => localStorage.getItem("haff-player-account-id"));
+   const [sessionMember, setSessionMember] = React.useState<{ playerId?: string; displayName: string } | null>(null);
+   const [checkingSession, setCheckingSession] = React.useState(true);
+@@ -3442,7 +3719,7 @@ function PlayerView() {
+       exit={{ opacity: 0 }} 
+       className="mx-auto max-w-5xl px-4 py-4 pb-32"
+     >
+-      {assignedMatch && assignedMatch.id !== dismissedTurnMatchId && (
++      {assignedMatch && player?.checkedIn && !player?.parked && assignedMatch.id !== dismissedTurnMatchId && (
+         <div className="fixed inset-0 z-[120] grid place-items-center bg-[#06241b] p-5 text-center text-ivory">
+           <motion.div
+             initial={{ opacity: 0, scale: 0.9 }}
+@@ -3514,114 +3791,41 @@ function PlayerView() {
+         }} />
+       )}
+ 
+-      {/* PHONE LOGIN MODAL/PANEL */}
+-      {false && loginMethod === "phone" && (
+-        <Card className="bg-[#0b3a2c] text-ivory mt-4 max-w-md mx-auto p-5 border border-white/10 shadow-2xl animate-fade-in">
+-          <div className="mb-4 flex items-center justify-between">
+-            <h2 className="font-display text-2xl text-brass font-bold">Player Login</h2>
+-            <button onClick={() => setLoginMethod(null)} className="p-1.5 rounded-full hover:bg-white/10 text-ivory/60 transition"><X size={18} /></button>
+-          </div>
+-          <form onSubmit={handlePhoneLogin} className="space-y-4">
+-            {loginError && (
+-              <div className="rounded-2xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-xs font-semibold text-red-300">
+-                {loginError}
+-              </div>
+-            )}
+-            <input
+-              type="tel"
+-              required
+-              value={phoneNumber}
+-              onChange={(e) => setPhoneNumber(e.target.value)}
+-              placeholder="Phone number"
+-              className="w-full rounded-2xl bg-forest/50 text-white border border-white/10 px-4 py-3 placeholder:text-ivory/40 focus:outline-none focus:ring-2 focus:ring-brass shadow-inner"
+-            />
+-            <input
+-              type="password"
+-              inputMode="numeric"
+-              required
+-              value={accessCode}
+-              onChange={(e) => setAccessCode(e.target.value)}
+-              placeholder="Access code"
+-              className="w-full rounded-2xl bg-forest/50 text-white border border-white/10 px-4 py-3 placeholder:text-ivory/40 focus:outline-none focus:ring-2 focus:ring-brass shadow-inner"
+-            />
+-            <p className="text-[11px] text-ivory/50 leading-tight">Use 09170000000 and 1234 for the player account I created.</p>
+-            <Button type="submit" className="w-full bg-brass text-forest hover:bg-brass/90 font-black">
+-              Log In
+-            </Button>
+-          </form>
+-        </Card>
+-      )}
+-
+-      {/* QR CODE SCAN SIMULATION */}
+-      {false && loginMethod === "qr" && (
+-        <Card className="bg-[#0b3a2c] text-ivory mt-4 max-w-md mx-auto p-5 text-center border border-white/10 shadow-2xl">
+-          <div className="mb-4 flex items-center justify-between text-left">
+-            <h2 className="font-display text-2xl text-brass font-bold">Scan QR Member Pass</h2>
+-            <button onClick={() => setLoginMethod(null)} className="p-1.5 rounded-full hover:bg-white/10 text-ivory/60 transition"><X size={18} /></button>
+-          </div>
+-          
+-          <div className="relative mx-auto w-52 h-52 bg-black rounded-2xl overflow-hidden flex items-center justify-center text-white border-2 border-forest">
+-            {simulatingQrScan ? (
+-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
+-                <div className="w-8 h-8 border-4 border-brass border-t-transparent rounded-full animate-spin mb-2" />
+-                <span className="text-xs uppercase tracking-widest text-brass">Decoding...</span>
+-              </div>
+-            ) : (
+-              <div className="text-center p-4">
+-                <QrCode size={48} className="mx-auto text-brass mb-2" />
+-                <p className="text-[10px] text-brass/75 uppercase tracking-wider">Awaiting Camera Scan</p>
+-              </div>
+-            )}
+-            <div className="absolute left-0 right-0 top-1/2 h-0.5 bg-red-500 shadow-[0_0_8px_red] animate-bounce" />
++      {/* Empty state: authenticated but no players in system yet */}
++      {!checkingSession && sessionMember && activePlayers.length === 0 && (
++        <motion.div
++          initial={{ opacity: 0, y: 12 }}
++          animate={{ opacity: 1, y: 0 }}
++          className="mt-6 rounded-3xl border border-ivory/10 bg-[#0b3a2c] p-8 text-center shadow-2xl"
++        >
++          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-brass/15 border border-brass/25">
++            <UserRound size={28} className="text-brass" />
+           </div>
+-
+-          <div className="mt-5 space-y-2">
+-            <p className="text-xs text-ivory/60">Simulate scanning member pass for:</p>
+-            <div className="flex flex-wrap gap-2 justify-center">
+-              {activePlayers.slice(0, 4).map((p) => (
+-                <button
+-                  key={p.id}
+-                  onClick={() => handleQrLoginSimulate(p.id)}
+-                  disabled={simulatingQrScan}
+-                  className="px-3 py-1 bg-forest/50 hover:bg-forest border border-white/10 rounded-full text-xs font-semibold text-white transition"
+-                >
+-                  {p.displayName.split(" ")[0]}
+-                </button>
+-              ))}
+-            </div>
++          <h2 className="font-display text-2xl font-black text-ivory">No Players Yet</h2>
++          <p className="mt-2 text-sm leading-6 text-ivory/60">
++            The player roster is empty. An admin needs to add players from the Admin panel before you can view your status here.
++          </p>
++          <div className="mt-5 rounded-2xl border border-brass/20 bg-brass/10 px-4 py-3">
++            <p className="text-xs font-semibold text-brass">Signed in as <span className="font-black">{sessionMember.displayName}</span> · Waiting for players to be added.</p>
+           </div>
+-        </Card>
++        </motion.div>
+       )}
+ 
+-      {/* ROSTER PICKER LOGIN */}
+-      {false && loginMethod === "list" && (
+-        <Card className="bg-[#0b3a2c] text-ivory border border-white/10 shadow-2xl mt-4 max-w-xl mx-auto p-5">
+-          <div className="mb-4 flex items-center justify-between">
+-            <h2 className="font-display text-2xl font-bold text-brass">Select Your Roster Name</h2>
+-            <button onClick={() => setLoginMethod(null)} className="p-1.5 rounded-full hover:bg-white/10 text-ivory/60 transition"><X size={18} /></button>
+-          </div>
+-          <div className="grid gap-2 max-h-80 overflow-y-auto pr-1">
+-            {activePlayers.map((item) => (
+-              <button
+-                key={item.id}
+-                onClick={() => { localStorage.setItem("haff-player-account-id", item.id); setSelectedPlayerId(item.id); setLoginMethod(null); }}
+-                className={`flex min-h-14 items-center justify-between rounded-2xl px-4 text-left transition border ${selectedPlayerId === item.id ? "bg-brass text-forest border-brass font-bold" : "bg-forest/50 text-white border-white/5 hover:bg-forest"}`}
+-              >
+-                <div className="flex items-center gap-3">
+-                  <div className="h-8 w-8 rounded-full overflow-hidden bg-white/10 border border-white/10 shrink-0">
+-                    <img 
+-                      src={getPlayerAvatar(item)} 
+-                      alt={item.displayName} 
+-                      className="h-full w-full object-cover" 
+-                    />
+-                  </div>
+-                  <span className="font-semibold">{item.displayName}</span>
+-                </div>
+-                <span className="text-xs opacity-70">{item.checkedIn ? "Checked in" : "Not in"}</span>
+-              </button>
+-            ))}
++      {/* Empty state: not authenticated */}
++      {!checkingSession && !sessionMember && activePlayers.length === 0 && (
++        <motion.div
++          initial={{ opacity: 0, y: 12 }}
++          animate={{ opacity: 1, y: 0 }}
++          className="mt-6 rounded-3xl border border-ivory/10 bg-[#071f18] p-8 text-center shadow-2xl"
++        >
++          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-ivory/5 border border-ivory/10">
++            <UserRound size={28} className="text-ivory/40" />
+           </div>
+-        </Card>
++          <h2 className="font-display text-2xl font-black text-ivory">Sign in to see your status</h2>
++          <p className="mt-2 text-sm leading-6 text-ivory/50">
++            Create an account or sign in to track your queue position, check in, and manage your player profile.
++          </p>
++        </motion.div>
+       )}
+ 
+       {/* LOGGED IN PLAYER BOARD */}
+@@ -3709,33 +3913,8 @@ function PlayerView() {
+                       : "Inactive · Not in queue"}
+                   </p>
+                 </div>
+-                
+-                {/* QR Code Pass Quick Action Button */}
+-                <button
+-                  onClick={() => setShowQrPass(!showQrPass)}
+-                  className="flex flex-col items-center gap-1 p-2 bg-brass text-ink border border-brass rounded-2xl hover:bg-ivory transition"
+-                  title="Show/Hide QR Pass"
+-                >
+-                  <QrCode size={20} />
+-                  <span className="text-[9px] font-bold uppercase">QR Pass</span>
+-                </button>
+               </div>
+ 
+-              {/* Simulated QR Pass */}
+-              {showQrPass && (
+-                <motion.div 
+-                  initial={{ opacity: 0, scale: 0.95 }} 
+-                  animate={{ opacity: 1, scale: 1 }} 
+-                  className="mt-4 p-4 bg-white rounded-2xl text-center max-w-[200px] mx-auto text-forest shadow-inner"
+-                >
+-                  <div className="p-2 bg-ivory rounded-xl w-fit mx-auto border border-forest/10">
+-                    <QrCode size={120} className="text-forest mx-auto" />
+-                  </div>
+-                  <p className="font-bold text-sm mt-2 leading-tight">{player.displayName}</p>
+-                  <p className="text-[8px] text-forest/50 font-mono mt-0.5 uppercase">ID: {player.id}</p>
+-                </motion.div>
+-              )}
+-
+               {/* Queue Wait Time Box */}
+               {player.checkedIn && !player.parked && (
+                 <div className="mt-3 rounded-xl bg-[#edf2ed] p-4 text-ink shadow-[0_12px_28px_rgba(6,36,27,0.18)]">
+@@ -3765,12 +3944,41 @@ function PlayerView() {
+ 
+               {/* Status Action Button */}
+               {!player.checkedIn ? (
+-                <Button 
+-                  onClick={() => checkIn(player.id, autoLogPayment)} 
+-                  className="mt-4 w-full bg-brass text-ink hover:bg-ivory font-black py-3 rounded-2xl shadow-lg transition-transform hover:scale-[1.01] active:scale-95 border-none"
+-                >
+-                  Check In and Park
+-                </Button>
++                player.tags?.includes("CheckInRequested") || player.tags?.includes("CheckInRequestedPaid") ? (
++                  <div className="mt-4 rounded-2xl bg-white/[0.03] border border-white/10 p-4 text-center ring-1 ring-white/5">
++                    <p className="text-sm font-black text-brass uppercase tracking-wider flex items-center justify-center gap-2">
++                      <span className="h-2 w-2 rounded-full bg-brass animate-pulse" />
++                      Check-in Requested
++                    </p>
++                    <p className="text-xs text-linen/70 mt-1.5 leading-relaxed">
++                      Please wait for the administrator to approve your check-in.
++                    </p>
++                    <Button 
++                      onClick={async () => {
++                        const newTags = (player.tags ?? []).filter(t => t !== "CheckInRequested" && t !== "CheckInRequestedPaid");
++                        await updatePlayer({ ...player, tags: newTags });
++                        playSound("complete");
++                      }}
++                      className="mt-3.5 w-full bg-clay text-ivory hover:bg-[#D97757] font-black py-2.5 rounded-2xl text-xs border-none shadow-md transition"
++                    >
++                      Cancel Request
++                    </Button>
++                  </div>
++                ) : (
++                  <Button 
++                    onClick={async () => {
++                      const newTags = [
++                        ...(player.tags ?? []).filter(t => t !== "CheckInRequested" && t !== "CheckInRequestedPaid"),
++                        autoLogPayment ? "CheckInRequestedPaid" : "CheckInRequested"
++                      ];
++                      await updatePlayer({ ...player, tags: newTags });
++                      playSound("checkin");
++                    }} 
++                    className="mt-4 w-full bg-brass text-ink hover:bg-ivory font-black py-3 rounded-2xl shadow-lg transition-transform hover:scale-[1.01] active:scale-95 border-none"
++                  >
++                    Request Check-In
++                  </Button>
++                )
+               ) : (
+                 <Button 
+                   onClick={() => setPlayerParked(player.id, !player.parked)} 
+@@ -3784,59 +3992,8 @@ function PlayerView() {
+                   {player.parked ? "Join Play Rotation" : "Park Me"}
+                 </Button>
+               )}
+-
+-              {/* Stack Placement/Transfer Selector */}
+-              <div className="mt-4 rounded-xl bg-ivory/5 p-3.5 border border-ivory/10">
+-                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-brass">Queue Stack Placement</span>
+-                <p className="text-[11px] text-linen/70 mt-0.5 mb-3">Join or transfer directly into a specific stack:</p>
+-                <div className="space-y-2">
+-                  {(() => {
+-                    const groups = getWaitingGroups(players, courts, matches, stackOrder);
+-                    const totalGroupsToShow = Math.max(groups.length, 3);
+-                    
+-                    return Array.from({ length: totalGroupsToShow }).map((_, idx) => {
+-                      const group = groups[idx] || [];
+-                      const hasCurrentPlayer = group.some(p => p.id === player.id);
+-                      const names = group.filter(p => !p.isVacant).map(p => p.displayName.split(" ")[0]).join(" / ");
+-                      
+-                      return (
+-                        <div key={idx} className="flex items-center justify-between p-2 rounded-xl bg-[#092b21] border border-white/5">
+-                          <div className="min-w-0 flex-1 pr-2">
+-                            <p className="text-[10px] font-black text-brass uppercase">Stack {idx + 1}</p>
+-                            <p className="text-xs text-ivory/80 font-semibold truncate mt-0.5">
+-                              {names || "Empty / Open"}
+-                            </p>
+-                          </div>
+-                          <button
+-                            disabled={hasCurrentPlayer}
+-                            onClick={async () => {
+-                              let targetIndex = stackOrder.length;
+-                              if (group.length > 0) {
+-                                const idxInOrder = stackOrder.indexOf(group[0].id);
+-                                if (idxInOrder !== -1) {
+-                                  targetIndex = idxInOrder;
+-                                }
+-                              }
+-                              await movePlayerToIndex(player.id, targetIndex);
+-                            }}
+-                            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition shrink-0 ${
+-                              hasCurrentPlayer
+-                                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+-                                : "bg-brass text-forest hover:bg-ivory"
+-                            }`}
+-                          >
+-                            {hasCurrentPlayer ? "Current" : player.checkedIn && !player.parked ? "Transfer" : "Check In"}
+-                          </button>
+-                        </div>
+-                      );
+-                    });
+-                  })()}
+-                </div>
+-              </div>
+             </div>
+ 
+-            <PlayerTvPreview />
+-
+             {/* 2. Profile Card */}
+             <div className="mt-4 rounded-xl bg-[#124a39] p-4">
+               <div className="mb-3 flex items-center justify-between border-b border-[#2f7b61] pb-2.5">
+@@ -4000,18 +4157,6 @@ function PlayerView() {
+                     </div>
+                   </div>
+                   <div className="flex justify-between items-baseline">
+-                    <span className="text-linen/50 text-xs">Phone</span>
+-                    <span className="font-mono text-xs text-ivory">{player.phoneNumber || "Not set"}</span>
+-                  </div>
+-                  {player.preferredPlayStyle && (
+-                    <div className="flex justify-between items-baseline">
+-                      <span className="text-linen/50 text-xs">Play Style</span>
+-                      <span className="font-medium text-ivory">{player.preferredPlayStyle}</span>
+-                    </div>
+-                  )}
+-                  {player.emergencyNote && (
+-                    <div className="flex justify-between items-baseline">
+-                      <span className="text-linen/50 text-xs">Emergency Notes</span>
+                       <span className="text-xs text-clay font-semibold">{player.emergencyNote}</span>
+                     </div>
+                   )}
+@@ -4271,7 +4416,7 @@ function PlayerView() {
+                                         const endorsementsList = JSON.parse(globalSaved);
+                                         for (const [targetPlayerId, info] of Object.entries(feedbackRecs)) {
+                                           endorsementsList.push({
+-                                            id: crypto.randomUUID(),
++                                            id: generateId(),
+                                             targetPlayerId,
+                                             reviewerName: player.displayName,
+                                             chat: info.chat,
+@@ -4449,17 +4594,61 @@ function PlayerTvPreview() {
+   );
+ }
+ 
+-function CourtTimer({ matchId, size }: { matchId: string; size: "small" | "large" }) {
+-  const now = useNow();
++function CourtTimer({ matchId, size }: { matchId: string; size: "small" | "large" | "scoreboard" }) {
+   const match = useClubStore((state) => state.matches.find((item) => item.id === matchId));
+   const duration = useClubStore((state) => state.matchDurationMinutes);
++  const timerRef = React.useRef<HTMLDivElement>(null);
++
++  React.useEffect(() => {
++    if (!match?.startedAt || !timerRef.current) return;
++    
++    let frameId: number;
++    const updateTimer = () => {
++      if (!timerRef.current) return;
++      const remainingMs = getRemainingMilliseconds(match.startedAt!, duration, Date.now());
++      const isOvertime = remainingMs < 0;
++      const label = formatClockMilliseconds(Math.abs(remainingMs));
++      const text = isOvertime ? `-${label}` : label;
++      
++      if (timerRef.current.textContent !== text) {
++        timerRef.current.textContent = text;
++      }
++      
++      const sizeClasses = size === "scoreboard" ? "rounded-[3rem] px-12 py-8 text-[110px] leading-none tracking-tighter min-w-[280px] shadow-2xl" :
++                          size === "mockup" ? "rounded-full px-12 py-3 text-[56px] leading-none tracking-tight min-w-[280px] shadow-lg" :
++                          size === "large" ? "rounded-full mt-auto px-4 py-2 text-[clamp(2rem,3.2vw,4rem)] leading-none tracking-normal" : "rounded-full mt-5 px-5 py-3 text-3xl tracking-normal";
++                          
++      if (isOvertime) {
++        if (!timerRef.current.classList.contains("bg-red-500/20")) {
++          timerRef.current.className = `text-center font-black tabular-nums bg-red-500/20 text-red-500 border border-red-500/50 shadow-[0_0_30px_rgba(239,68,68,0.3)] ${sizeClasses}`;
++        }
++      } else {
++        if (timerRef.current.classList.contains("bg-red-500/20") || size === "mockup") {
++          timerRef.current.className = `text-center font-black tabular-nums ${size === "mockup" ? "bg-[#062016] text-white" : "bg-black/40 text-white backdrop-blur-xl border border-white/10"} ${sizeClasses}`;
++        }
++      }
++      
++      frameId = requestAnimationFrame(updateTimer);
++    };
++    
++    frameId = requestAnimationFrame(updateTimer);
++    return () => cancelAnimationFrame(frameId);
++  }, [match?.startedAt, duration, size]);
++
+   if (!match?.startedAt) return null;
+-  const remainingMs = getRemainingMilliseconds(match.startedAt, duration, now);
+-  const overtime = remainingMs < 0;
+-  const label = formatClockMilliseconds(Math.abs(remainingMs));
++  const initialRemainingMs = getRemainingMilliseconds(match.startedAt, duration, Date.now());
++  const initialOvertime = initialRemainingMs < 0;
++  
++  const initialSizeClasses = size === "scoreboard" ? "rounded-[3rem] px-12 py-8 text-[110px] leading-none tracking-tighter min-w-[280px] shadow-2xl" :
++                             size === "mockup" ? "rounded-full px-12 py-3 text-[56px] leading-none tracking-tight min-w-[280px] shadow-lg" :
++                             size === "large" ? "rounded-full mt-auto px-4 py-2 text-[clamp(2rem,3.2vw,4rem)] leading-none tracking-normal" : "rounded-full mt-5 px-5 py-3 text-3xl tracking-normal";
++
+   return (
+-    <div className={`rounded-full text-center font-black tracking-normal tabular-nums ${overtime ? "bg-clay text-ivory" : "bg-brass text-forest"} ${size === "large" ? "mt-auto px-4 py-2 text-[clamp(2rem,3.2vw,4rem)] leading-none" : "mt-5 px-5 py-3 text-3xl"}`}>
+-      {overtime ? "-" : ""}{label}
++    <div 
++      ref={timerRef}
++      className={`text-center font-black tabular-nums ${initialOvertime ? "bg-red-500/20 text-red-500 border border-red-500/50 shadow-[0_0_30px_rgba(239,68,68,0.3)]" : size === "mockup" ? "bg-[#062016] text-white" : "bg-black/40 text-white backdrop-blur-xl border border-white/10"} ${initialSizeClasses}`}
++    >
++      {initialOvertime ? "-" : ""}{formatClockMilliseconds(Math.abs(initialRemainingMs))}
+     </div>
+   );
+ }
+@@ -4499,6 +4688,8 @@ function PlayerChip({
+       draggable={draggable}
+       onDragStart={(event) => {
+         if (draggable) {
++          event.dataTransfer.effectAllowed = "move";
++          event.dataTransfer.setData("text/plain", playerId);
+           event.dataTransfer.setData("text/player-id", playerId);
+         }
+       }}
+@@ -4534,9 +4725,39 @@ function RankBadge({ skillLevel, compact = false }: { skillLevel: ReturnType<typ
+   );
+ }
+ 
++function useTvScale() {
++  const [scale, setScale] = React.useState(1);
++  React.useEffect(() => {
++    function handleResize() {
++      const scaleX = window.innerWidth / 1920;
++      const scaleY = window.innerHeight / 1080;
++      setScale(Math.min(scaleX, scaleY));
++    }
++    handleResize();
++    window.addEventListener("resize", handleResize);
++    return () => window.removeEventListener("resize", handleResize);
++  }, []);
++  return scale;
++}
++
+ function DisplayView({ setView }: { setView: (view: ViewMode) => void }) {
+   const { courts, matches, players: allPlayers, stackOrder, clubStatus } = useClubStore();
++  const matchDurationMinutes = useClubStore((state) => state.matchDurationMinutes);
++  const setMatchDurationMinutes = useClubStore((state) => state.setMatchDurationMinutes);
+   const now = useNow();
++  const [showTimerEdit, setShowTimerEdit] = React.useState(false);
++  
++  const [tvClock, setTvClock] = React.useState(() => {
++    const d = new Date();
++    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
++  });
++  React.useEffect(() => {
++    const id = setInterval(() => {
++      const d = new Date();
++      setTvClock(d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }));
++    }, 1000);
++    return () => clearInterval(id);
++  }, []);
+ 
+   const players = React.useMemo(() => {
+     return allPlayers.filter(p => 
+@@ -4545,7 +4766,6 @@ function DisplayView({ setView }: { setView: (view: ViewMode) => void }) {
+       matches.some(m => m.status === "InProgress" && (m.teamAPlayerIds.includes(p.id) || m.teamBPlayerIds.includes(p.id)))
+     );
+   }, [allPlayers, courts, matches]);
+-  const matchDurationMinutes = useClubStore((state) => state.matchDurationMinutes);
+   const announcedOvertimeRef = React.useRef<Record<string, number>>({});
+   const announcedReservationsRef = React.useRef<Record<string, string>>({});
+ 
+@@ -4660,7 +4880,7 @@ function DisplayView({ setView }: { setView: (view: ViewMode) => void }) {
+     { id: `vacant-tv-empty-${index}-4`, displayName: "Waiting", skillLevel: "Newbie" as const, rating: 0, tags: [], checkedIn: false, parked: false, totalGamesPlayed: 0, totalDaysPlayed: 0, statusNote: undefined, isVacant: true }
+   ]);
+   return (
+-    <section className="tv-display relative z-10 bg-forest text-ivory">
++    <section className="tv-display relative z-10 flex h-[100dvh] w-screen overflow-hidden bg-forest text-ivory">
+       <style dangerouslySetInnerHTML={{ __html: `
+         @keyframes gradientShift {
+           0% { background-position: 0% 50%; }
+@@ -4672,6 +4892,13 @@ function DisplayView({ setView }: { setView: (view: ViewMode) => void }) {
+           background-size: 400% 400%;
+           animation: gradientShift 8s ease infinite;
+         }
++        @keyframes pulseBorder {
++          0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); border-color: rgba(239, 68, 68, 0.4); }
++          50% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); border-color: rgba(239, 68, 68, 1); }
++        }
++        .animate-overtime {
++          animation: pulseBorder 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
++        }
+       `}} />
+       <AnimatePresence>
+         {activeBillboard && (
+@@ -4691,40 +4918,40 @@ function DisplayView({ setView }: { setView: (view: ViewMode) => void }) {
+               animate={{ scale: 1, y: 0 }}
+               exit={{ scale: 0.95, y: -20 }}
+               transition={{ type: "spring", damping: 20, stiffness: 100 }}
+-              className="w-full max-w-5xl text-center z-10"
++              className="w-full max-w-[1800px] text-center z-10"
+             >
+-              <span className="inline-flex items-center gap-2 rounded-full bg-brass/10 px-4 py-1.5 text-base font-black text-brass border border-brass/25 uppercase tracking-wider mb-4">
+-                <Megaphone className="h-5 w-5 animate-bounce" />
++              <span className="inline-flex items-center gap-2 rounded-full bg-brass/10 px-6 py-2.5 text-2xl font-black text-brass border border-brass/25 uppercase tracking-wider mb-6">
++                <Megaphone className="h-8 w-8 animate-bounce" />
+                 <span>Walk-Up Announcement</span>
+               </span>
+ 
+-              <h1 className="font-display text-[clamp(4rem,7vw,9rem)] font-black leading-none tracking-tight text-ivory mb-2">
++              <h1 className="font-display text-[clamp(6rem,10vw,12rem)] font-black leading-none tracking-tight text-ivory mb-4">
+                 {activeBillboard.courtName.toUpperCase()}
+               </h1>
+-              <p className="text-xl md:text-2xl text-linen/80 font-bold max-w-2xl mx-auto mb-12">
++              <p className="text-3xl md:text-5xl text-linen/80 font-bold max-w-4xl mx-auto mb-16">
+                 Your stack is active. Please proceed to the court now.
+               </p>
+ 
+-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 px-4">
++              <div className="grid grid-cols-4 gap-8 px-8">
+                 {activeBillboard.players.map((p, idx) => (
+                   <motion.div
+                     key={p.displayName + idx}
+                     initial={{ opacity: 0, y: 30 }}
+                     animate={{ opacity: 1, y: 0 }}
+                     transition={{ delay: 0.15 + idx * 0.1, type: "spring" }}
+-                    className="relative flex flex-col items-center p-6 rounded-[2rem] border border-white/10 bg-[#0b3a2c] shadow-2xl hover:border-brass/35 transition-all"
++                    className="relative flex flex-col items-center p-10 rounded-[3rem] border border-white/10 bg-[#0b3a2c] shadow-2xl hover:border-brass/35 transition-all"
+                   >
+-                    <div className="h-24 w-24 md:h-28 md:w-28 rounded-full overflow-hidden border-3 border-brass/40 shadow-xl bg-forest mb-4 relative">
++                    <div className="h-40 w-40 md:h-48 md:w-48 rounded-full overflow-hidden border-4 border-brass/40 shadow-2xl bg-forest mb-8 relative">
+                       <img
+                         src={p.avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(p.displayName)}`}
+                         alt={p.displayName}
+                         className="h-full w-full object-cover"
+                       />
+                     </div>
+-                    <h3 className="text-2xl font-black text-white truncate max-w-full">
+-                      {p.displayName}
++                    <h3 className="text-4xl md:text-5xl font-black text-white truncate max-w-full">
++                      {p.displayName.substring(0, 10)}
+                     </h3>
+-                    <span className="mt-2.5 px-3 py-1 rounded-full text-[10px] font-black uppercase bg-white/10 text-ivory/70 border border-white/5 tracking-wider">
++                    <span className="mt-6 px-6 py-2 rounded-full text-xl md:text-2xl font-black uppercase bg-white/10 text-ivory/70 border border-white/5 tracking-wider">
+                       {p.skillLevel}
+                     </span>
+                   </motion.div>
+@@ -4734,132 +4961,197 @@ function DisplayView({ setView }: { setView: (view: ViewMode) => void }) {
+           </motion.div>
+         )}
+       </AnimatePresence>
+-      <div className="mx-auto flex h-full max-w-[1920px] flex-col">
+-        <div className="fixed left-7 top-7 z-50">
+-          <button
+-            onClick={() => setView("landing")}
+-            className="rounded-full border border-ivory/30 bg-ivory/12 px-4 py-2 text-sm font-black uppercase tracking-wider text-ivory backdrop-blur hover:bg-ivory hover:text-forest transition flex items-center gap-1.5 shadow-lg"
+-          >
+-            <ArrowLeft className="h-4.5 w-4.5" />
+-            <span>Go Back</span>
+-          </button>
+-        </div>
+-        <div className="tv-display-header flex shrink-0 items-end justify-between border-b border-ivory/10 pb-4 pr-52">
+-          <div>
+-            <p className="text-base font-black uppercase tracking-wider text-brass">HAFF Leisure Club</p>
+-            <h1 className="tv-display-title text-[clamp(3.5rem,5vw,6rem)] font-black leading-none tracking-normal">NOW PLAYING</h1>
++           <div className="mx-auto flex min-h-0 w-full max-w-[1920px] flex-1 flex-col bg-[#082218] p-4 lg:p-8 text-white font-sans gap-4">
++        {/* Header Panel */}
++        <div className="flex shrink-0 items-center justify-between pb-2">
++          <div className="flex items-center gap-6">
++            <button onClick={() => setView("landing")} className="flex items-center gap-2 rounded-full border border-white/20 px-5 py-2 text-sm font-bold uppercase tracking-wider text-white hover:bg-white/10 transition">
++              <ArrowLeft size={16} /> Back
++            </button>
++            <div className="flex items-center gap-4">
++              <div className="flex items-center justify-center h-16 w-16 rounded-2xl bg-white/5 border border-white/10 p-2">
++                <LogoMark />
++              </div>
++              <div>
++                <p className="text-sm font-bold uppercase tracking-[0.2em] text-[#cbe953]">HAFF LEISURE CLUB</p>
++                <h1 className="text-5xl font-black uppercase tracking-tight text-white mt-1">NOW PLAYING</h1>
++              </div>
++            </div>
++          </div>
++          
++          <div className="flex items-center gap-8">
++            <div className="flex flex-col items-end">
++              <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-white mb-1">
++                <Timer size={16} className="text-[#cbe953]" />
++                {matchDurationMinutes} min
++              </div>
++              <p className="text-[10px] uppercase tracking-widest text-white/40">Session Elapsed</p>
++            </div>
++            <div className="h-10 w-px bg-white/10"></div>
++            <div className="flex flex-col items-end">
++              <p className="text-[10px] font-bold uppercase tracking-widest text-white/40 mb-1">Live Time</p>
++              <p className="text-4xl font-black tabular-nums tracking-tight text-white">{tvClock}</p>
++            </div>
+           </div>
+-          <p className="hidden text-3xl font-black tracking-normal lg:block">OPEN PLAY</p>
+         </div>
++
+         {clubStatus && (
+-          <div className="mt-3 flex shrink-0 items-center gap-3 rounded-xl bg-brass px-5 py-3 text-forest">
+-            <span className="h-3 w-3 shrink-0 rounded-full bg-clay" />
+-            <p className="truncate text-2xl font-black leading-tight tracking-normal">{clubStatus}</p>
++          <div className="flex shrink-0 items-center gap-4 rounded-2xl bg-white/5 border border-white/10 px-6 py-4 text-white shadow-xl">
++            <span className="h-3 w-3 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.8)] animate-pulse" />
++            <p className="truncate text-xl font-black tracking-widest uppercase">{clubStatus}</p>
+           </div>
+         )}
+         {overtimeCourts.length > 0 && (
+-          <div className="mt-3 shrink-0 rounded-xl bg-clay px-5 py-3 text-ivory">
+-            <p className="text-2xl font-black uppercase tracking-normal">
+-              Overtime: {overtimeCourts.map(({ court, milliseconds }) => `${court.name} -${formatClockMilliseconds(milliseconds)}`).join("   ")}
++          <div className="shrink-0 animate-overtime rounded-2xl bg-red-500/10 border border-red-500/40 px-6 py-4 shadow-[0_0_30px_rgba(239,68,68,0.2)]">
++            <p className="text-2xl font-black uppercase tracking-tight text-red-400 flex items-center gap-4 drop-shadow-[0_0_10px_rgba(239,68,68,0.6)]">
++              <span className="text-3xl">⏰ OVERTIME:</span> {overtimeCourts.map(({ court, milliseconds }) => `${court.name} +${formatClockMilliseconds(milliseconds)}`).join("   ")}
+             </p>
+           </div>
+         )}
+-        <div className="tv-display-layout mt-4 grid min-h-0 flex-1 grid-cols-[minmax(300px,23%)_1fr] gap-4">
+-          <aside className="tv-queue-rail min-h-0 overflow-hidden rounded-2xl border border-ivory/10 bg-[#061f18] shadow-[0_18px_48px_rgba(0,0,0,0.28)]">
+-            <div className="border-b border-ivory/10 px-5 py-4">
+-              <p className="text-sm font-black uppercase tracking-normal text-brass">Up Next</p>
+-              <p className="mt-1 text-2xl font-black tracking-normal text-ivory">Queue Stacks</p>
+-            </div>
+-            <div className="tv-vertical-marquee h-[calc(100%-81px)] overflow-hidden px-3 py-3">
+-              <div className="tv-vertical-marquee-track">
+-                {[0, 1].map((copy) => (
+-                  <div aria-hidden={copy === 1} className="grid shrink-0 gap-3 pb-3" key={copy}>
+-                    {displayQueueGroups.map((group, index) => (
+-                      <div className="tv-queue-stack overflow-hidden rounded-xl bg-ivory text-forest" key={`${copy}-${group.map((player) => player.id).join("-")}`}>
+-                        <div className="flex items-center justify-between bg-brass px-4 py-2 text-forest">
+-                          <span className="text-base font-black uppercase tracking-normal">Stack {index + 1}</span>
+-                          <span className="text-sm font-black">{group.filter((player) => !player.isVacant).length}/4</span>
++
++        {/* Queue Stacks Panel */}
++        <div className="flex min-h-0 shrink-0 gap-6 rounded-3xl bg-[#0b3123] p-4 shadow-xl border border-[#cbe953]/20">
++          {/* Queue Stacks Header */}
++          <div className="flex shrink-0 flex-col items-start justify-center px-4 py-2 w-56">
++            <p className="text-[#cbe953] font-black uppercase tracking-widest text-sm flex items-center gap-2 mb-1"><Users size={18}/> Up Next</p>
++            <h2 className="text-3xl font-black text-white leading-tight">Queue Stacks</h2>
++            <p className="text-xs text-white/50 mt-3 leading-relaxed pr-4">Players waiting for next available court</p>
++          </div>
++
++          {/* Queue Stacks List */}
++          <div className="flex min-h-0 flex-1 gap-4 overflow-x-auto no-scrollbar pb-2">
++            {displayQueueGroups.map((group, index) => {
++              const playerCount = group.filter((p) => !p.isVacant).length;
++              return (
++                <div key={index} className="flex min-w-[300px] shrink-0 flex-col rounded-2xl bg-[#fdfbf7] p-4 text-[#062016] shadow-lg">
++                  <div className="flex items-center justify-between border-b border-[#062016]/10 pb-2 mb-3">
++                    <span className="text-sm font-black uppercase tracking-widest text-[#062016]">Stack {index + 1}</span>
++                    <span className="text-xs font-black text-[#062016]/50">{playerCount}/4</span>
++                  </div>
++                  <div className="flex flex-col gap-3">
++                    {group.map((player, pIdx) => {
++                      if (player.isVacant) {
++                        return (
++                          <div key={pIdx} className="flex items-center gap-4 opacity-50 py-1">
++                            <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-dashed border-[#062016]/30 text-[#062016]/40">
++                              <Plus size={18} />
++                            </div>
++                            <span className="text-xs font-black text-[#062016]/40 uppercase tracking-widest">Open Slot</span>
++                          </div>
++                        );
++                      }
++                      return (
++                        <div key={player.id} className="flex items-center gap-4 py-1">
++                          <img src={getPlayerAvatar(player)} alt="" className="h-12 w-12 rounded-full border border-black/10 object-cover shadow-sm" />
++                          <div className="min-w-0 flex-1">
++                            <p className="truncate text-base font-black leading-none">{player.displayName}</p>
++                            <div className="mt-1.5 flex items-center gap-2">
++                              <span className="text-[10px] font-bold text-emerald-600 uppercase">{player.skillLevel}</span>
++                              {player.statusNote && <span className="rounded-full bg-black/5 px-2 py-0.5 text-[9px] font-bold text-black/60">{player.statusNote}</span>}
++                            </div>
++                          </div>
+                         </div>
+-                        <div className="grid gap-px bg-forest/10">
+-                          {group.map((player) => (
+-                            <div className="flex min-w-0 items-center gap-3 bg-ivory px-3 py-2.5" key={player.id}>
+-                              <img
+-                                src={getPlayerAvatar(player)}
+-                                alt=""
+-                                className="h-12 w-12 shrink-0 rounded-full border-2 border-forest/15 bg-linen object-cover"
+-                              />
++                      );
++                    })}
++                  </div>
++                  {playerCount === 4 && (
++                    <div className="mt-auto pt-4 pb-1 text-center text-[10px] font-black text-emerald-600 uppercase tracking-widest">Full</div>
++                  )}
++                </div>
++              );
++            })}
++          </div>
++        </div>
++
++        {/* Courts Section */}
++        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto no-scrollbar pb-10">
++          {courts.map((court) => {
++            const match = matches.find((item) => item.id === court.currentMatchId);
++            return (
++              <div key={court.id} className="flex min-h-[140px] overflow-hidden rounded-3xl bg-[#fdfbf7] shadow-xl border border-black/5">
++                {/* Court Left Tab */}
++                <div className="flex w-40 shrink-0 flex-col items-center justify-center bg-[#07241A] p-4 text-white">
++                  <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full border-[1.5px] border-[#cbe953] text-[#cbe953]">
++                    <Activity size={26} />
++                  </div>
++                  <h3 className="text-xl font-black uppercase tracking-widest">{court.name}</h3>
++                </div>
++
++                {/* Court Body */}
++                <div className="flex flex-1 items-stretch px-8 py-4">
++                  {match ? (
++                    <div className="flex flex-1 items-center justify-between">
++                      {/* Team A */}
++                      <div className="flex w-[35%] flex-col gap-4">
++                        {match.teamAPlayerIds.map((id) => {
++                          const player = allPlayers.find((p) => p.id === id);
++                          if (!player) return <div key={id} className="flex h-16 items-center gap-4 opacity-50"><div className="h-16 w-16 rounded-full border-2 border-dashed border-black/20"/><p className="text-sm font-bold text-black/40">Empty Slot</p></div>;
++                          return (
++                            <div key={id} className="flex items-center gap-6">
++                              <img src={getPlayerAvatar(player)} alt="" className="h-16 w-16 shrink-0 rounded-full border border-black/10 object-cover shadow-md bg-black/5" />
+                               <div className="min-w-0">
+-                                <p className="truncate text-lg font-black leading-tight tracking-normal">{player.displayName}</p>
+-                                <p className="truncate text-xs font-bold leading-5 text-forest/70">
+-                                  {player.statusNote ? `Note: ${player.statusNote}` : player.isVacant ? "Open player slot" : player.skillLevel}
+-                                </p>
++                                <p className="truncate text-lg font-black text-[#062016]">{player.displayName}</p>
++                                <p className="text-[11px] font-bold text-emerald-600 mt-1 uppercase tracking-widest">{player.skillLevel}</p>
++                                {player.statusNote && <span className="mt-1.5 inline-block rounded-full bg-[#062016]/5 px-2.5 py-1 text-[10px] font-bold text-[#062016]/60">{player.statusNote}</span>}
+                               </div>
+                             </div>
+-                          ))}
++                          );
++                        })}
++                      </div>
++
++                      {/* Timer & VS center */}
++                      <div className="flex shrink-0 items-center gap-8 px-4">
++                        <span className="text-3xl font-black text-[#062016]/10 uppercase tracking-widest">VS</span>
++                        <div className="flex flex-col items-center gap-3">
++                          <span className="rounded-full bg-emerald-100 px-4 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-700">In Use</span>
++                          <CourtTimer matchId={match.id} size="mockup" />
++                          <span className="rounded-full bg-[#062016]/5 px-4 py-1 text-[10px] font-black uppercase tracking-widest text-[#062016]/60">Running</span>
+                         </div>
++                        <span className="text-3xl font-black text-[#062016]/10 uppercase tracking-widest">VS</span>
++                      </div>
++
++                      {/* Team B */}
++                      <div className="flex w-[35%] flex-col gap-4 items-start pl-8 border-l border-black/5">
++                        {match.teamBPlayerIds.map((id) => {
++                          const player = allPlayers.find((p) => p.id === id);
++                          if (!player) return <div key={id} className="flex h-16 items-center gap-4 opacity-50"><div className="h-16 w-16 rounded-full border-2 border-dashed border-black/20"/><p className="text-sm font-bold text-black/40">Empty Slot</p></div>;
++                          return (
++                            <div key={id} className="flex items-center gap-6">
++                              <img src={getPlayerAvatar(player)} alt="" className="h-16 w-16 shrink-0 rounded-full border border-black/10 object-cover shadow-md bg-black/5" />
++                              <div className="min-w-0">
++                                <p className="truncate text-lg font-black text-[#062016]">{player.displayName}</p>
++                                <p className="text-[11px] font-bold text-emerald-600 mt-1 uppercase tracking-widest">{player.skillLevel}</p>
++                                {player.statusNote && <span className="mt-1.5 inline-block rounded-full bg-[#062016]/5 px-2.5 py-1 text-[10px] font-bold text-[#062016]/60">{player.statusNote}</span>}
++                              </div>
++                            </div>
++                          );
++                        })}
+                       </div>
+-                    ))}
+-                  </div>
+-                ))}
+-              </div>
+-            </div>
+-          </aside>
+-          <div className="tv-court-grid grid h-full min-w-0 grid-cols-2 grid-rows-2 gap-4">
+-            {courts.map((court) => {
+-              const match = matches.find((item) => item.id === court.currentMatchId);
+-              return (
+-                <div key={court.id} className="display-court flex min-h-0 flex-col overflow-hidden rounded-2xl p-[clamp(0.85rem,1.2vw,1.25rem)] text-ivory">
+-                  <div className="flex items-center justify-between">
+-                    <h2 className="tv-court-title text-[clamp(2rem,2.5vw,3.5rem)] font-black tracking-normal text-ivory">{court.name}</h2>
+-                    <span className={`tv-court-status rounded-full px-4 py-1.5 text-base font-black uppercase ${
+-                      court.status === "InUse"
+-                        ? (match?.mode === "Reserved" ? "bg-amber-500 text-forest border border-brass/50" : "bg-amber-400 text-forest")
+-                        : court.status === "Maintenance"
+-                        ? "bg-clay text-ivory"
+-                        : court.status === "Paused"
+-                        ? "bg-ivory text-forest"
+-                        : "bg-brass text-forest animate-pulse"
+-                    }`}>
+-                      {court.status === "InUse" 
+-                        ? (match?.mode === "Reserved" ? "RESERVED USE" : "IN USE") 
+-                        : court.status === "Maintenance" 
+-                        ? "MAINTENANCE" 
+-                        : court.status === "Paused" 
+-                        ? "PAUSED" 
+-                        : court.status === "Reserved" 
+-                        ? "RESERVED" 
+-                        : court.status.toUpperCase()}
+-                    </span>
+-                  </div>
+-                  {match ? (
+-                    <div className="mt-3 flex min-h-0 flex-1 flex-col">
+-                      <PlayerNames ids={match.teamAPlayerIds} className="font-black leading-tight tracking-normal" showRanks tone="light" compact />
+-                      <p className="my-1 text-sm font-black uppercase tracking-[0.16em] text-brass">versus</p>
+-                      <PlayerNames ids={match.teamBPlayerIds} className="font-black leading-tight tracking-normal" showRanks tone="light" compact />
+-                      <CourtTimer matchId={match.id} size="large" />
+                     </div>
+                   ) : (
+-                    <div className="mt-6">
+-                      {court.status === "Reserved" && court.reservedPlayerIds?.length ? (
+-                        <>
+-                          <p className="text-xl font-black uppercase tracking-[0.16em] text-brass">Reserved for</p>
+-                          <PlayerNames ids={court.reservedPlayerIds} className="mt-3 text-[clamp(1.6rem,2.2vw,3rem)] font-black leading-tight tracking-normal" showRanks tone="light" />
+-                        </>
+-                      ) : court.status === "Maintenance" ? (
+-                        <p className="mt-12 text-4xl font-black tracking-normal text-clay uppercase">Under Maintenance</p>
+-                      ) : court.status === "Paused" ? (
+-                        <p className="mt-12 text-4xl font-black tracking-normal text-linen uppercase">Paused</p>
+-                      ) : court.status === "InUse" ? (
+-                        <p className="mt-12 text-4xl font-black tracking-normal text-amber-400 uppercase">Match Starting...</p>
+-                      ) : (
+-                        <p className="mt-12 text-4xl font-black tracking-normal text-brass uppercase">AVAILABLE</p>
+-                      )}
+-                    </div>
++                     <div className="flex flex-1 items-center justify-center text-center">
++                        {court.status === "Reserved" ? (
++                          <div className="flex flex-col items-center justify-center">
++                            <p className="text-sm font-black uppercase tracking-widest text-emerald-700 opacity-90 mb-2">Reserved for</p>
++                            {court.reservedPlayerIds?.length ? (
++                               <PlayerNames ids={court.reservedPlayerIds} className="text-2xl font-black tracking-tight text-[#062016]" showRanks tone="dark" />
++                            ) : (
++                               <p className="text-3xl font-black tracking-tight text-[#062016]">{court.reservedFor || "Special Event"}</p>
++                            )}
++                          </div>
++                        ) : court.status === "Maintenance" ? (
++                          <p className="text-2xl font-black tracking-widest text-red-600 uppercase">Under Maintenance</p>
++                        ) : court.status === "Paused" ? (
++                          <p className="text-2xl font-black tracking-widest text-yellow-600 uppercase">Paused</p>
++                        ) : (
++                          <p className="text-2xl font-black tracking-widest text-[#062016]/20 uppercase">Available</p>
++                        )}
++                     </div>
+                   )}
+                 </div>
+-              );
+-            })}
+-          </div>
++              </div>
++            );
++          })}
+         </div>
+       </div>
+     </section>
+@@ -5168,24 +5460,29 @@ function StackBuilder({
+ 
+   return (
+     <Card className="bg-[#173f32] text-ivory">
+-      <div className="flex items-center justify-between gap-3">
++      <div className="flex items-center justify-between gap-3 border-b border-white/5 pb-3">
+         <div>
+           <p className="text-xs font-bold uppercase tracking-[0.24em] text-brass">Queue manager</p>
+-          <h2 className="font-display text-4xl leading-none">
+-            <span className="lg:hidden">Set the play order</span>
+-            <span className="hidden lg:inline">Drag players to reorder</span>
++          <h2 className="font-display text-2xl font-black uppercase tracking-wide mt-1 text-ivory">
++            Queue Stacks
+           </h2>
+         </div>
+-        <p className="hidden max-w-xs text-right text-xs leading-5 text-linen/65 sm:block">
+-          On mobile, choose a position from the menu. On larger screens, drag names over others to insert them.
+-        </p>
++        <Button
++          onClick={() => {
++            playSound("checkin");
++            useClubStore.getState().generateMatches();
++          }}
++          className="bg-brass text-forest hover:bg-linen font-black text-xs px-3.5 py-2 rounded-xl flex items-center gap-1 min-h-0 shadow-md transition active:scale-95 shrink-0"
++        >
++          <Zap size={13} /> Assign Stacks
++        </Button>
+       </div>
+       <div 
+         className="mt-5 grid min-w-0 gap-3 xl:grid-cols-2 2xl:grid-cols-3 min-h-32"
+         onDragOver={(event) => event.preventDefault()}
+         onDrop={(event) => {
+           event.preventDefault();
+-          const droppedId = event.dataTransfer.getData("text/player-id") || draggingPlayerId;
++          const droppedId = event.dataTransfer.getData("text/plain") || event.dataTransfer.getData("text/player-id") || draggingPlayerId;
+           // If dropped outside a specific player, append to the end of the queue
+           if (droppedId && waiting.findIndex(p => p.id === droppedId) === -1) {
+              movePlayerToIndex(droppedId, waiting.length);
+@@ -5215,6 +5512,8 @@ function StackBuilder({
+                     draggable={canDrag}
+                     onDragStart={(event) => {
+                       event.stopPropagation();
++                      event.dataTransfer.effectAllowed = "move";
++                      event.dataTransfer.setData("text/plain", player.id);
+                       event.dataTransfer.setData("text/player-id", player.id);
+                       setDraggingPlayerId(player.id);
+                     }}
+@@ -5226,7 +5525,7 @@ function StackBuilder({
+                     onDrop={(event) => {
+                       event.preventDefault();
+                       event.stopPropagation();
+-                      const droppedId = event.dataTransfer.getData("text/player-id") || draggingPlayerId;
++                      const droppedId = event.dataTransfer.getData("text/plain") || event.dataTransfer.getData("text/player-id") || draggingPlayerId;
+                       if (droppedId && droppedId !== player.id) {
+                         movePlayerToIndex(droppedId, overallIndex);
+                       }
+@@ -5370,6 +5669,8 @@ function ReservedStack({ courtId }: { courtId: string }) {
+               key={player!.id} 
+               draggable
+               onDragStart={(event) => {
++                event.dataTransfer.effectAllowed = "move";
++                event.dataTransfer.setData("text/plain", player!.id);
+                 event.dataTransfer.setData("text/player-id", player!.id);
+               }}
+               className="rounded-2xl bg-white/60 px-3 py-2 cursor-grab active:cursor-grabbing hover:bg-white/80 transition"

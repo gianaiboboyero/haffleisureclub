@@ -304,48 +304,44 @@ Paginated chat, send/edit/delete, reactions, reports. Optional Ably push.
 
 ## 12. Deployment Configuration
 
-**Target stack:** Cloudflare Pages (frontend) + Supabase (Postgres + Edge Functions API).
+**Target stack:** Vercel (frontend + `/api` routes) + Supabase (Postgres + Realtime).
 
-See [DEPLOY_QUICKSTART.md](./DEPLOY_QUICKSTART.md) and [SUPABASE_CLOUDFLARE_SETUP.md](./SUPABASE_CLOUDFLARE_SETUP.md).
+See [DEPLOY_QUICKSTART.md](./DEPLOY_QUICKSTART.md) and [VERCEL_SUPABASE_DEPLOY.md](./VERCEL_SUPABASE_DEPLOY.md).
 
-### Cloudflare Pages
+### Vercel
 
-- Build: `npm ci && npm run build:pages` → `dist/web`
-- SPA routing: `apps/web/public/_redirects`
-- Env: `VITE_API_URL` → Supabase Edge Function URL
+- Build: `npm ci && npm run build:web` → `dist/web` (`vercel.json`)
+- SPA routing: rewrites in `vercel.json`
+- Env: `NEXT_PUBLIC_SUPABASE_*`, `DATABASE_URL`, etc. (see deploy guide)
 
 ### Supabase
 
 - Postgres via `DATABASE_URL` (pooler) / `DIRECT_URL` (migrations)
-- API: `supabase functions deploy haff-api`
+- Browser reads/writes session, players, chat via Supabase client + Realtime
 - Secrets: `INITIAL_ADMIN_EMAIL`, `FRONTEND_ORIGIN`, `ABLY_API_KEY`, etc.
-
-### Legacy: Vercel (`vercel.json`)
-
-- Previously hosted SPA + `/api` serverless — **avoid for production** (free tier egress limits)
-- Local dev: `npm run dev:full` still works with Vercel CLI
 
 ### Required environment variables
 
 | Variable | Where | Purpose |
 |----------|-------|---------|
-| `DATABASE_URL` | Supabase secrets | PostgreSQL pooled connection |
-| `DIRECT_URL` | Supabase secrets / local `.env` | Direct connection (migrations) |
-| `VITE_API_URL` | Cloudflare Pages | Supabase function base URL |
-| `INITIAL_ADMIN_EMAIL` | Supabase secrets | First admin account |
-| `FRONTEND_ORIGIN` | Supabase secrets | CORS allowlist |
-| `ABLY_API_KEY` | Supabase secrets | Push sync (optional) |
-| `FEEDBACK_HASH_SECRET` | Supabase secrets | Feedback rate-limit salt |
-| `TURNSTILE_SECRET_KEY` | Supabase secrets | Register CAPTCHA (optional) |
+| `DATABASE_URL` | Vercel | PostgreSQL pooled connection |
+| `DIRECT_URL` | Local / migrations | Direct connection |
+| `NEXT_PUBLIC_SUPABASE_URL` | Vercel | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Vercel | Supabase anon key |
+| `INITIAL_ADMIN_EMAIL` | Vercel | First admin account |
+| `FRONTEND_ORIGIN` | Vercel | CORS allowlist |
+| `ABLY_API_KEY` | Vercel (optional) | Push sync |
+| `FEEDBACK_HASH_SECRET` | Vercel | Feedback rate-limit salt |
+| `TURNSTILE_SECRET_KEY` | Vercel (optional) | Register CAPTCHA |
 
 ### npm scripts
 
 | Command | Purpose |
 |---------|---------|
 | `npm run dev:web` | Local Vite dev :5173 |
-| `npm run dev:full` | Vercel dev (legacy local API + web) |
-| `npm start` | Node API (`server/production.ts`) → Supabase Postgres |
-| `npm run build:pages` | Production build for Cloudflare Pages |
+| `npm run dev:full` | Vercel dev (local API + web) |
+| `npm start` | Node API (`server/production.ts`) |
+| `npm run build:web` | Production build for Vercel |
 
 ---
 
@@ -355,16 +351,16 @@ See [DEPLOY_QUICKSTART.md](./DEPLOY_QUICKSTART.md) and [SUPABASE_CLOUDFLARE_SETU
 
 | Service | Role | Billing model |
 |---------|------|---------------|
-| **Cloudflare Pages** | Static frontend | Free; unlimited bandwidth |
-| **Supabase** | Postgres + Edge Functions API | Free tier; watch 5 GB egress / 500K function invocations |
+| **Vercel** | Static frontend + auth/sync API routes | Hobby; static assets + minimal `/api` |
+| **Supabase** | Postgres + Realtime + Storage | Free tier; watch egress + realtime connections |
 | **Ably** (optional) | Push sync for session + chat | Free tier ~6M messages/mo |
-| **Namecheap** | Domain registrar | Annual fee; DNS via Cloudflare |
+| **Namecheap** | Domain registrar | Annual fee |
 
 **Previous stack (deprecated)**
 
 | Service | Issue |
 |---------|--------|
-| Vercel Hobby | Paused at ~37 GB Fast Origin Transfer from HTTP polling |
+| Cloudflare Pages | Removed — split frontend deploy; use Vercel instead |
 | Oracle VM | Replaced by Supabase-only backend |
 
 Bandwidth protections in code: `?ping=1`, Ably push, minimal POST bodies, TV-trimmed GET, 60s fallback poll.

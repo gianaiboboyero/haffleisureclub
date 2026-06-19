@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "supabase": {
+      "url": "https://mcp.supabase.com/mcp?project_ref=hmhhgmuuusknmucjlkth&organization_slug=koypniyxsxrkqgtztqwc&read_only=true"
+    }
+  }
+}
