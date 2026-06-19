@@ -1,18 +1,15 @@
 import { create } from "zustand";
 import { db, getDeviceId, seedCourts } from "../lib/db";
 import { playSound, speakAnnouncement } from "../lib/sound";
-import { todayKey, generateId, sortCourts, reconcileCourtsWithMatches, reconcileStackOrder, mergeSharedMatches, stripUnauthorizedCheckIns, resolveAuthorizedCheckInIds, splitStackGroups, flattenStackGroups } from "../lib/utils";
+import { todayKey, generateId, sortCourts, mergeSessionCourtRuntime, reconcileCourtsWithMatches, reconcileStackOrder, mergeSharedMatches, stripUnauthorizedCheckIns, resolveAuthorizedCheckInIds, splitStackGroups, flattenStackGroups, MAX_STACKS, countStackGroups } from "../lib/utils";
 import {
-  mergeKudosById,
-  mergeReviewsByKey,
-  migrateLegacyKudos,
-  parseMatchReviews,
-  parsePlayerKudos,
   type MatchReviewRecord,
   type PlayerKudosEntry
 } from "../lib/playerKudos";
 import type { Court, Match, Player, Toast, Session, Reservation, Transaction, Testimonial, Achievement, Announcement, TvBroadcast } from "../lib/types";
-import { apiFetch, apiJson } from "../lib/api";
+import { normalizeTransaction } from "../lib/finance";
+import { CHECK_IN_FEE } from "../lib/pricing";
+import { apiFetch, apiJson, parseResponseJson } from "../lib/api";
 import { markRosterSynced, rosterSyncFresh } from "../lib/syncPolicy";
 import { useSupabaseData } from "../lib/dataSource";
 import {
@@ -25,6 +22,14 @@ import { fetchCourts as fetchSupabaseCourts, seedCourtsIfEmpty } from "../lib/su
 import { fetchPlayersCompact } from "../lib/supabase/players";
 import { updatePlayerOnSupabase, fetchMissingPlayers } from "../lib/supabase/playerUpdate";
 import { fetchReservationsRange } from "../lib/supabase/reservations";
+import {
+  liveDb,
+  loadStackOrderFromStorage,
+  migrateServerLiveStateEpoch,
+  saveCurrentSessionId,
+  saveStackOrder,
+  serverAuthoritativeLiveState
+} from "../lib/liveStateCache";
 
 let suppressSharedPublishUntil = 0;
 let suppressSharedRefreshUntil = 0;
@@ -210,11 +215,16 @@ function mapServerPlayerToClient(server: Record<string, unknown>, local?: Player
   };
 }
 
-function mergePlayersFromServer(localPlayers: Player[], serverPlayers: Record<string, unknown>[]) {
+function mergePlayersFromServer(
+  localPlayers: Player[],
+  serverPlayers: Record<string, unknown>[],
+  options?: { authoritative?: boolean }
+) {
   const localById = new Map(localPlayers.map((player) => [player.id, player]));
   const merged = serverPlayers.map((serverPlayer) =>
     mapServerPlayerToClient(serverPlayer, localById.get(String(serverPlayer.id)))
   );
+  if (options?.authoritative) return merged;
   for (const localPlayer of localPlayers) {
     if (!merged.some((player) => player.id === localPlayer.id)) {
       merged.push(localPlayer);
@@ -223,7 +233,22 @@ function mergePlayersFromServer(localPlayers: Player[], serverPlayers: Record<st
   return merged;
 }
 
-function mergeCourtsFromServer(localCourts: Court[], serverCourts: Record<string, unknown>[]): Court[] {
+const ROSTER_EPOCH = "2026-06-18-authoritative-v1";
+const COURT_EPOCH = "2026-06-18-authoritative-v1";
+
+async function purgeLocalPlayersNotOnServer(serverIds: Set<string>) {
+  if (serverAuthoritativeLiveState()) return;
+  const local = await db.players.toArray();
+  const stale = local.filter((player) => !serverIds.has(player.id));
+  if (stale.length === 0) return;
+  await liveDb.playersBulkDelete(stale.map((player) => player.id));
+}
+
+function mergeCourtsFromServer(
+  localCourts: Court[],
+  serverCourts: Record<string, unknown>[],
+  options?: { authoritative?: boolean }
+): Court[] {
   const localById = new Map(localCourts.map((court) => [court.id, court]));
   const merged: Court[] = serverCourts.map((serverCourt, index) => {
     const id = String(serverCourt.id);
@@ -242,13 +267,15 @@ function mergeCourtsFromServer(localCourts: Court[], serverCourts: Record<string
       version: local?.version
     };
   });
-  for (const localCourt of localCourts) {
-    if (!merged.some((court) => court.id === localCourt.id)) {
-      merged.push({
-        ...localCourt,
-        priority: localCourt.number ?? localCourt.priority ?? 0,
-        reservable: localCourt.reservable ?? true
-      });
+  if (!options?.authoritative) {
+    for (const localCourt of localCourts) {
+      if (!merged.some((court) => court.id === localCourt.id)) {
+        merged.push({
+          ...localCourt,
+          priority: localCourt.number ?? localCourt.priority ?? 0,
+          reservable: localCourt.reservable ?? true
+        });
+      }
     }
   }
   return sortCourts(merged).slice(0, MAX_COURTS);
@@ -262,7 +289,7 @@ async function enforceCourtLimit(courts: Court[]): Promise<Court[]> {
   const keep = sorted.slice(0, MAX_COURTS);
   const remove = sorted.slice(MAX_COURTS);
   for (const court of remove) {
-    await db.courts.delete(court.id);
+    await liveDb.courtsDelete(court.id);
     await db.syncQueue.where("entityId").equals(court.id).delete();
   }
   return keep;
@@ -389,7 +416,7 @@ async function resolvePlayersFromSession(
   return Array.from(byId.values());
 }
 
-type ViewMode = "landing" | "admin" | "player" | "tv" | "calendar" | "finance" | "community";
+type ViewMode = "landing" | "admin" | "player" | "tv" | "calendar" | "finance";
 
 type ClubState = {
   players: Player[];
@@ -443,7 +470,9 @@ type ClubState = {
   cancelReservation: (id: string, reason?: string) => Promise<void>;
 
   // Transaction Actions
-  addTransaction: (transaction: Omit<Transaction, "id" | "status" | "timestamp">) => Promise<void>;
+  addTransaction: (
+    transaction: Omit<Transaction, "id" | "timestamp"> & { status?: Transaction["status"] }
+  ) => Promise<string>;
   completeTransaction: (id: string) => Promise<void>;
   voidTransaction: (id: string, reason: string) => Promise<void>;
   deleteTransaction: (id: string) => Promise<void>;
@@ -453,6 +482,7 @@ type ClubState = {
   checkOut: (playerId: string) => Promise<void>;
   checkOutAll: () => Promise<void>;
   movePlayerToIndex: (playerId: string, targetIndex: number, byAdmin?: boolean) => Promise<void>;
+  appendPlayersToQueue: (playerIds: string[]) => Promise<void>;
   moveStackToIndex: (fromGroupIndex: number, toGroupIndex: number) => Promise<void>;
   addEmptyStack: () => Promise<void>;
   removeStackAtIndex: (groupIndex: number) => Promise<void>;
@@ -506,32 +536,15 @@ type ClubState = {
   seedDemoPlayers: () => Promise<void>;
 };
 
-const getInitialMatchReviews = (): MatchReviewRecord[] => {
+const getInitialMatchReviews = (): MatchReviewRecord[] => [];
+const getInitialPlayerKudos = (): PlayerKudosEntry[] => [];
+
+const persistKudosLocal = (_playerKudos: PlayerKudosEntry[], _matchReviews: MatchReviewRecord[]) => {
   try {
-    const saved = localStorage.getItem("haff-match-reviews-v2");
-    if (saved) return parseMatchReviews(JSON.parse(saved));
+    localStorage.removeItem("haff-player-kudos");
+    localStorage.removeItem("haff-match-reviews-v2");
   } catch {
     // ignore
-  }
-  return [];
-};
-
-const getInitialPlayerKudos = (): PlayerKudosEntry[] => {
-  try {
-    const saved = localStorage.getItem("haff-player-kudos");
-    if (saved) return parsePlayerKudos(JSON.parse(saved));
-  } catch {
-    // ignore
-  }
-  return migrateLegacyKudos();
-};
-
-const persistKudosLocal = (playerKudos: PlayerKudosEntry[], matchReviews: MatchReviewRecord[]) => {
-  try {
-    localStorage.setItem("haff-player-kudos", JSON.stringify(playerKudos));
-    localStorage.setItem("haff-match-reviews-v2", JSON.stringify(matchReviews));
-  } catch {
-    // ignore quota errors
   }
 };
 
@@ -570,6 +583,132 @@ const getInitialAnnouncements = () => {
   return defaults;
 };
 
+type ClubStoreSet = (partial: Partial<ClubState> | ((state: ClubState) => Partial<ClubState>)) => void;
+type ClubStoreGet = () => ClubState;
+
+function mapStoredReservations(rawReservations: Reservation[], players: Player[]) {
+  return rawReservations.map((r) => {
+    const paymentStatus = r.paymentStatus === "Pending" ? ("Paid" as const) : r.paymentStatus;
+    const hostDisplayName =
+      r.hostDisplayName
+      ?? players.find((player) => player.id === r.hostPlayerId)?.displayName
+      ?? (r.hostPlayerId === "admin" ? "Admin" : undefined);
+    return hostDisplayName ? { ...r, paymentStatus, hostDisplayName } : { ...r, paymentStatus };
+  });
+}
+
+function mapStoredTransactions(rawTransactions: Transaction[]) {
+  return rawTransactions.map((transaction) => normalizeTransaction(transaction));
+}
+
+/** Supabase mode: load roster from server, then Session — no IndexedDB for live ops. */
+async function hydrateFromServer(set: ClubStoreSet, get: ClubStoreGet) {
+  await migrateServerLiveStateEpoch();
+  try {
+    if (localStorage.getItem("haff-roster-epoch") !== ROSTER_EPOCH) {
+      await liveDb.playersClear();
+      localStorage.setItem("haff-roster-epoch", ROSTER_EPOCH);
+      try {
+        sessionStorage.removeItem("haff-roster-pulled-at");
+      } catch {
+        // ignore
+      }
+    }
+    if (localStorage.getItem("haff-court-epoch") !== COURT_EPOCH) {
+      await liveDb.courtsClear();
+      localStorage.setItem("haff-court-epoch", COURT_EPOCH);
+    }
+  } catch {
+    // ignore quota errors
+  }
+
+  const [rawReservations, rawTransactions] = await Promise.all([
+    db.reservations.toArray(),
+    db.transactions.toArray()
+  ]);
+
+  let players: Player[] = [];
+  let courts: Court[] = sortCourts(
+    seedCourts.map((court, index) => {
+      const number = court.number ?? index + 1;
+      return {
+        ...court,
+        number,
+        priority: number,
+        reservable: court.reservable ?? true,
+        status: "Available" as const
+      };
+    })
+  );
+  const matches: Match[] = [];
+  const stackOrder: string[] = [];
+  const currentSessionId = get().currentSessionId || "default-active-session";
+  const reservations = mapStoredReservations(rawReservations, players);
+  const transactions = mapStoredTransactions(rawTransactions);
+  const sessions: Session[] = [
+    {
+      id: currentSessionId,
+      name: "Open Play Session",
+      date: new Date().toISOString().split("T")[0],
+      startTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      status: "Active",
+      mode: "Open Play",
+      courtIds: courts.map((c) => c.id),
+      checkedInPlayerIds: [],
+      settings: {}
+    }
+  ];
+
+  if (navigator.onLine) {
+    try {
+      await seedCourtsIfEmpty();
+      const [serverPlayers, serverCourts] = await Promise.all([
+        fetchPlayersCompact(),
+        fetchSupabaseCourts()
+      ]);
+      if (serverPlayers.length > 0) {
+        players = mergePlayersFromServer([], serverPlayers as Record<string, unknown>[], {
+          authoritative: true
+        }).map((player) => ({
+          ...player,
+          skillLevel: normalizeSkillLevel(player.skillLevel)
+        }));
+      }
+      if (serverCourts.length > 0) {
+        courts = mergeCourtsFromServer([], serverCourts as Record<string, unknown>[], {
+          authoritative: true
+        });
+      }
+      if (serverPlayers.length > 0 || serverCourts.length > 0) {
+        markRosterSynced();
+      }
+    } catch {
+      // Session fetch below may still succeed
+    }
+  }
+
+  set({
+    players,
+    courts,
+    matches,
+    sessions,
+    reservations,
+    transactions,
+    currentSessionId,
+    stackOrder,
+    pendingSyncCount: 0,
+    clubStatus: localStorage.getItem("haff-club-status") ?? "",
+    playerKudos: getInitialPlayerKudos(),
+    matchReviews: getInitialMatchReviews(),
+    hydrated: false
+  });
+
+  if (navigator.onLine) {
+    await get().refreshSharedState({ force: true });
+  }
+  set({ hydrated: true });
+}
+
 export const useClubStore = create<ClubState>((set, get) => ({
   players: [],
   courts: [],
@@ -591,18 +730,20 @@ export const useClubStore = create<ClubState>((set, get) => ({
     }, 5000);
   },
   clearBillboard: () => set({ activeBillboard: null }),
-  currentSessionId: localStorage.getItem("haff-current-session-id") ?? "default-active-session",
-  stackOrder: JSON.parse(localStorage.getItem("haff-stack-order") ?? "[]") as string[],
+  currentSessionId: serverAuthoritativeLiveState()
+    ? "default-active-session"
+    : localStorage.getItem("haff-current-session-id") ?? "default-active-session",
+  stackOrder: loadStackOrderFromStorage(),
   toasts: [],
   view: (() => {
     const path = window.location.pathname.replace(/^\//, "");
     if (path === "home" || path === "landing") return "landing";
     if (path === "parking") return "player";
-    if (["landing", "admin", "player", "tv", "calendar", "finance", "community"].includes(path)) return path;
+    if (["landing", "admin", "player", "tv", "calendar", "finance"].includes(path)) return path;
     const hash = window.location.hash.replace(/^#\/?/, "");
     if (hash === "home" || hash === "landing") return "landing";
     if (hash === "parking") return "player";
-    if (["landing", "admin", "player", "tv", "calendar", "finance", "community"].includes(hash)) return hash;
+    if (["landing", "admin", "player", "tv", "calendar", "finance"].includes(hash)) return hash;
     if (hash === "display") return "tv";
     if (hash === "payments" || hash === "revenue") return "finance";
     if (hash === "schedule" || hash === "reservation") return "calendar";
@@ -643,12 +784,36 @@ export const useClubStore = create<ClubState>((set, get) => ({
   },
   hydrate: async () => {
     if (Date.now() < suppressSharedRefreshUntil) return;
+    if (serverAuthoritativeLiveState()) {
+      await hydrateFromServer(set, get);
+      return;
+    }
     const online = navigator.onLine;
     const pendingSyncCount = await db.syncQueue.where("status").equals("Pending").count();
 
+    if (useSupabaseData()) {
+      try {
+        if (localStorage.getItem("haff-roster-epoch") !== ROSTER_EPOCH) {
+          await liveDb.playersClear();
+          localStorage.setItem("haff-roster-epoch", ROSTER_EPOCH);
+          try {
+            sessionStorage.removeItem("haff-roster-pulled-at");
+          } catch {
+            // ignore
+          }
+        }
+        if (localStorage.getItem("haff-court-epoch") !== COURT_EPOCH) {
+          await db.courts.clear();
+          localStorage.setItem("haff-court-epoch", COURT_EPOCH);
+        }
+      } catch {
+        // ignore quota errors
+      }
+    }
+
     // 1. Load local data immediately — don't wait for server
     if ((await db.courts.count()) === 0) {
-      await db.courts.bulkPut(seedCourts);
+      await liveDb.courtsBulkPut(seedCourts);
     }
 
     const [rawPlayers, rawCourts, matches, sessions, rawReservations, rawTransactions] = await Promise.all([
@@ -680,7 +845,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       })
     );
     if (normalizedCourts.length !== rawCourts.length) {
-      await db.courts.bulkPut(normalizedCourts);
+      await liveDb.courtsBulkPut(normalizedCourts);
     }
     const courts = normalizedCourts;
     const reservations = rawReservations.map((r) => {
@@ -708,16 +873,18 @@ export const useClubStore = create<ClubState>((set, get) => ({
         settings: {}
       };
       sessions.push(defaultSession);
-      void db.sessions.put(defaultSession);
+      void liveDb.sessionsPut(defaultSession);
     }
     if (!currentSessionId) {
       currentSessionId = sessions[0]?.id || "default-active-session";
     }
-    localStorage.setItem("haff-current-session-id", currentSessionId);
+    saveCurrentSessionId(currentSessionId);
 
-    const storedOrder = JSON.parse(localStorage.getItem("haff-stack-order") ?? "[]") as string[];
-    const stackOrder = reconcileStackOrder(storedOrder, players, matches, courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    const storedOrder = loadStackOrderFromStorage();
+    const stackOrder = reconcileStackOrder(storedOrder, players, matches, courts, {
+      autoAppendMissing: false,
+    });
+    saveStackOrder(stackOrder);
 
     // 2. Render immediately with local data
     set({
@@ -739,13 +906,13 @@ export const useClubStore = create<ClubState>((set, get) => ({
     // 3. Background: persist normalizations + server sync (non-blocking)
     void (async () => {
       await Promise.all([
-        db.players.bulkPut(players),
-        db.courts.bulkPut(courts),
+        liveDb.playersBulkPut(players),
+        liveDb.courtsBulkPut(courts),
         db.reservations.bulkPut(reservations),
         db.transactions.bulkPut(transactions),
       ]);
 
-      if (online && pendingSyncCount === 0 && !rosterSyncFresh()) {
+      if (online && !rosterSyncFresh()) {
         try {
           if (useSupabaseData()) {
             await seedCourtsIfEmpty();
@@ -756,14 +923,22 @@ export const useClubStore = create<ClubState>((set, get) => ({
             const updates: Promise<unknown>[] = [];
             if (serverPlayers.length > 0) {
               updates.push((async () => {
-                const mergedPlayers = mergePlayersFromServer(players, serverPlayers as Record<string, unknown>[]);
-                await db.players.bulkPut(mergedPlayers);
+                const mergedPlayers = mergePlayersFromServer(
+                  players,
+                  serverPlayers as Record<string, unknown>[],
+                  { authoritative: true }
+                );
+                const serverIds = new Set(mergedPlayers.map((player) => player.id));
+                await purgeLocalPlayersNotOnServer(serverIds);
+                await liveDb.playersBulkPut(mergedPlayers);
               })());
             }
             if (serverCourts.length > 0) {
               updates.push((async () => {
-                const mergedCourts = mergeCourtsFromServer(courts, serverCourts as Record<string, unknown>[]);
-                await db.courts.bulkPut(mergedCourts);
+                const mergedCourts = mergeCourtsFromServer(courts, serverCourts as Record<string, unknown>[], {
+                  authoritative: true
+                });
+                await liveDb.courtsBulkPut(mergedCourts);
               })());
             }
             if (serverPlayers.length > 0 || serverCourts.length > 0) {
@@ -783,23 +958,23 @@ export const useClubStore = create<ClubState>((set, get) => ({
             apiFetch("/api/courts")
           ]);
           const updates: Promise<unknown>[] = [];
-          if (resPlayers.ok) {
-            const response = await resPlayers.json();
+          if (resPlayers.ok && resPlayers.headers.get("content-type")?.includes("application/json")) {
+            const response = await parseResponseJson<{ players?: unknown[] } | unknown[]>(resPlayers);
             const serverPlayers = Array.isArray(response) ? response : response.players;
             if (Array.isArray(serverPlayers)) {
               updates.push((async () => {
                 const mergedPlayers = mergePlayersFromServer(players, serverPlayers as Record<string, unknown>[]);
-                await db.players.bulkPut(mergedPlayers);
+                await liveDb.playersBulkPut(mergedPlayers);
               })());
             }
           }
-          if (resCourts.ok) {
-            const response = await resCourts.json();
+          if (resCourts.ok && resCourts.headers.get("content-type")?.includes("application/json")) {
+            const response = await parseResponseJson<{ courts?: unknown[] } | unknown[]>(resCourts);
             const serverCourts = Array.isArray(response) ? response : response.courts;
             if (Array.isArray(serverCourts) && serverCourts.length > 0) {
               updates.push((async () => {
                 const mergedCourts = mergeCourtsFromServer(courts, serverCourts as Record<string, unknown>[]);
-                await db.courts.bulkPut(mergedCourts);
+                await liveDb.courtsBulkPut(mergedCourts);
               })());
             }
           }
@@ -831,7 +1006,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     }
   },
   refreshSharedState: async (options) => {
-    if (!options?.force && Date.now() < suppressSharedRefreshUntil) return;
+    if (Date.now() < suppressSharedRefreshUntil) return;
     if (!options?.force && Date.now() < syncBackoffUntil) return;
     const currentSessionId = get().currentSessionId;
     if (!currentSessionId || !navigator.onLine) return;
@@ -869,9 +1044,18 @@ export const useClubStore = create<ClubState>((set, get) => ({
         markSyncDegraded(set);
         return;
       }
-      shared = await response.json();
+      shared = await parseResponseJson(response);
       }
       markSyncHealthy(set, typeof shared.updatedAt === "string" ? shared.updatedAt : null);
+
+      // If the server found no active session (updatedAt === null) but we have live
+      // local state (stack, active matches), skip applying the empty shell — the server
+      // is likely returning a transient "no session" response during a race condition.
+      if (shared.updatedAt === null) {
+        const localStack = get().stackOrder;
+        const localActiveMatches = get().matches.filter((m) => m.status === "InProgress");
+        if (localStack.length > 0 || localActiveMatches.length > 0) return;
+      }
 
       if (shared.unchanged === true) {
         const incomingTvBroadcast = parseTvBroadcast(shared.tvBroadcast);
@@ -893,7 +1077,12 @@ export const useClubStore = create<ClubState>((set, get) => ({
       get().players,
       Array.isArray(shared.matches) ? shared.matches : get().matches
     );
-    const incomingStack = Array.isArray(shared.stackOrder) ? shared.stackOrder : get().stackOrder;
+    // Prefer server stack; but if the server sent an empty array while local has
+    // entries, keep the local stack — it is more recent (possible publish-then-fetch race).
+    const incomingStack =
+      Array.isArray(shared.stackOrder) && (shared.stackOrder.length > 0 || get().stackOrder.length === 0)
+        ? shared.stackOrder
+        : get().stackOrder;
     const stackedPlayerIds = new Set<string>(
       incomingStack.filter((id: string) => id !== "vacant").map(String)
     );
@@ -913,44 +1102,55 @@ export const useClubStore = create<ClubState>((set, get) => ({
         return { ...player, tags: [...tags, "AdminCheckedIn"] };
       });
     }
-    const rawCourts = Array.isArray(shared.courts) && shared.courts.length > 0 ? shared.courts : get().courts;
+    const localCourts =
+      get().courts.length > 0
+        ? get().courts
+        : serverAuthoritativeLiveState()
+          ? []
+          : await db.courts.toArray();
+    const rawCourts =
+      Array.isArray(shared.courts) && shared.courts.length > 0
+        ? useSupabaseData()
+          ? mergeSessionCourtRuntime(localCourts, shared.courts, MAX_COURTS)
+          : (shared.courts as Court[])
+        : localCourts;
     const matches = Array.isArray(shared.matches)
-      ? mergeSharedMatches(get().matches, shared.matches as Match[])
+      ? serverAuthoritativeLiveState()
+        // In Supabase mode the server is authoritative, but don't replace active
+        // local matches with an empty list (session-not-found / race condition guard).
+        ? (shared.matches as Match[]).length > 0 || !get().matches.some((m) => m.status === "InProgress")
+          ? (shared.matches as Match[])
+          : get().matches
+        : mergeSharedMatches(get().matches, shared.matches as Match[])
       : get().matches;
-    players = stripUnauthorizedCheckIns(players, matches);
+    // Do NOT call stripUnauthorizedCheckIns here: resolvePlayersFromSession
+    // already honoured adminCheckedInIds (via resolveAuthorizedCheckInIds) and
+    // stripUnauthorizedCheckIns would wipe everyone who lacks the AdminCheckedIn
+    // tag whenever the server's adminCheckedInIds array is momentarily empty
+    // (race condition), clearing the entire waiting queue on every poll cycle.
     const courts = reconcileCourtsWithMatches(rawCourts, matches);
-    const stackOrder = reconcileStackOrder(incomingStack, players, matches, courts);
+    const stackOrder = reconcileStackOrder(incomingStack, players, matches, courts, {
+      autoAppendMissing: false
+    });
     const remoteReservations = useSupabaseData()
       ? []
       : Array.isArray(shared.reservations) ? (shared.reservations as Reservation[]) : [];
     const reservations = remoteReservations.length > 0
       ? mergeReservations(get().reservations, remoteReservations)
       : get().reservations;
-    const remoteKudos = parsePlayerKudos(shared.playerKudos);
-    const playerKudos = remoteKudos.length > 0
-      ? mergeKudosById(get().playerKudos, remoteKudos)
-      : get().playerKudos;
-    const remoteReviews = parseMatchReviews(shared.matchReviews);
-    const matchReviews = remoteReviews.length > 0
-      ? mergeReviewsByKey(get().matchReviews, remoteReviews)
-      : get().matchReviews;
     const currentSignature = JSON.stringify({
       players: playerProfileSignature(get().players),
       courts: get().courts,
       matches: get().matches,
       stackOrder: get().stackOrder,
-      reservations: reservationSignature(get().reservations),
-      playerKudos: get().playerKudos.length,
-      matchReviews: get().matchReviews.length
+      reservations: reservationSignature(get().reservations)
     });
     const nextSignature = JSON.stringify({
       players: playerProfileSignature(players),
       courts,
       matches,
       stackOrder,
-      reservations: reservationSignature(reservations),
-      playerKudos: playerKudos.length,
-      matchReviews: matchReviews.length
+      reservations: reservationSignature(reservations)
     });
     const incomingTvBroadcast = parseTvBroadcast(shared.tvBroadcast);
     const broadcastChanged = Boolean(
@@ -963,15 +1163,16 @@ export const useClubStore = create<ClubState>((set, get) => ({
       return;
     }
     if (!options?.force && Date.now() < suppressSharedRefreshUntil) return;
-    await db.players.bulkPut(players);
-    if (Array.isArray(shared.courts) && shared.courts.length > 0) await db.courts.bulkPut(courts);
-    if (Array.isArray(shared.matches)) {
-      await db.matches.clear();
-      if (matches.length > 0) await db.matches.bulkPut(matches);
+    if (!serverAuthoritativeLiveState()) {
+      await liveDb.playersBulkPut(players);
+      if (courts.length > 0) await liveDb.courtsBulkPut(courts);
+      if (Array.isArray(shared.matches)) {
+        await liveDb.matchesClear();
+        if (matches.length > 0) await liveDb.matchesBulkPut(matches);
+      }
+      if (remoteReservations.length > 0) await db.reservations.bulkPut(reservations);
+      saveStackOrder(stackOrder);
     }
-    if (remoteReservations.length > 0) await db.reservations.bulkPut(reservations);
-    persistKudosLocal(playerKudos, matchReviews);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
     // Mark as remote-apply so the store subscriber does not schedule a
     // re-publish of data we just received from the server, which would
     // race-clobber any admin writes that landed between our fetch and set().
@@ -984,8 +1185,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
         matches,
         stackOrder,
         reservations,
-        playerKudos,
-        matchReviews,
+        playerKudos: [],
+        matchReviews: [],
         ...(broadcastChanged && incomingTvBroadcast ? { tvBroadcast: incomingTvBroadcast } : {})
       });
     } finally {
@@ -1024,7 +1225,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
         markSyncDegraded(set);
         return;
       }
-      const body = await response.json();
+      const body = await parseResponseJson(response);
       markSyncHealthy(set, typeof body.updatedAt === "string" ? body.updatedAt : null);
       if (body.unchanged === true) return;
       await get().refreshSharedState({ force: true, context: options?.context });
@@ -1058,7 +1259,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       applyingRemoteClubBroadcast = false;
       return;
     }
-    void db.players.bulkPut(players);
+    void liveDb.playersBulkPut(players);
     set({ players });
     applyingRemoteClubBroadcast = false;
   },
@@ -1080,6 +1281,17 @@ export const useClubStore = create<ClubState>((set, get) => ({
             skillLevel: player.skillLevel,
             statusNote: player.statusNote ?? null
           }));
+    // Keep the session JSON small: drop completed matches older than 30 minutes.
+    // InProgress + recent Completed matches are preserved so TVs and the admin
+    // still see just-finished games, but stale history doesn't bloat every write.
+    const COMPLETED_MATCH_RETAIN_MS = 30 * 60_000;
+    const now = Date.now();
+    const publishMatches = state.matches.filter((m) => {
+      if (m.status !== "Completed") return true;
+      if (!m.startedAt) return false;
+      return now - new Date(m.startedAt).getTime() < COMPLETED_MATCH_RETAIN_MS;
+    });
+
     try {
       if (useSupabaseData()) {
         const body = await publishClubState({
@@ -1090,11 +1302,9 @@ export const useClubStore = create<ClubState>((set, get) => ({
             .map((player) => player.id),
           stackOrder: state.stackOrder,
           courts: state.courts,
-          matches: state.matches,
+          matches: publishMatches,
           reservations: [],
-          playerProfiles: [],
-          playerKudos: state.playerKudos,
-          matchReviews: state.matchReviews
+          playerProfiles: []
         }, { slim: true });
         if (body) markSyncHealthy(set, body.updatedAt);
       } else {
@@ -1109,15 +1319,13 @@ export const useClubStore = create<ClubState>((set, get) => ({
             .map((player) => player.id),
           stackOrder: state.stackOrder,
           courts: state.courts,
-          matches: state.matches,
+          matches: publishMatches,
           reservations: state.reservations,
-          playerProfiles: syncedProfiles,
-          playerKudos: state.playerKudos,
-          matchReviews: state.matchReviews
+          playerProfiles: syncedProfiles
         })
       });
       if (response.ok && response.headers.get("content-type")?.includes("application/json")) {
-        const body = await response.json();
+        const body = await parseResponseJson(response);
         markSyncHealthy(set, typeof body.updatedAt === "string" ? body.updatedAt : null);
       }
       }
@@ -1161,7 +1369,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       });
       if (!response.ok) throw new Error("broadcast failed");
       if (response.headers.get("content-type")?.includes("application/json")) {
-        const body = await response.json();
+        const body = await parseResponseJson(response);
         markSyncHealthy(set, typeof body.updatedAt === "string" ? body.updatedAt : null);
       }
       }
@@ -1192,8 +1400,10 @@ export const useClubStore = create<ClubState>((set, get) => ({
         )
       });
 
-      if (!response.ok) throw new Error("Sync response error");
-      const result = await response.json();
+      if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) {
+        throw new Error("Sync response error");
+      }
+      const result = await parseResponseJson<{ results?: Array<{ id: string; status: string }> }>(response);
 
       const syncedIds = (result.results ?? [])
         .filter((r: any) => r.status === "Synced")
@@ -1240,10 +1450,10 @@ export const useClubStore = create<ClubState>((set, get) => ({
     );
     const player = players.find((item) => item.id === playerId);
     if (!player) return;
-    await db.players.put(player);
+    await liveDb.playersPut(player);
     await queue("CHECK_IN_PLAYER", "Player", player.id, player);
     playSound("checkin");
-    const toastMsg = `${player.displayName} is checked in${autoLog ? " and paid" : ""} — added to rotation.`;
+    const toastMsg = `${player.displayName} is checked in${autoLog ? " — fee pending" : ""}. Add them to a queue stack when ready.`;
     pushToast(set, "Player checked in", toastMsg, "fun");
 
     // Also update current session's checked-in list if there is an active session
@@ -1255,7 +1465,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
           ...session,
           checkedInPlayerIds: [...session.checkedInPlayerIds, playerId]
         };
-        await db.sessions.put(updatedSession);
+        await liveDb.sessionsPut(updatedSession);
         await queue("UPDATE_SESSION", "Session", session.id, updatedSession);
         set((state) => ({
           sessions: state.sessions.map((s) => s.id === currentSessionId ? updatedSession : s)
@@ -1263,18 +1473,17 @@ export const useClubStore = create<ClubState>((set, get) => ({
       }
     }
 
-    const baseOrder = [...get().stackOrder.filter(id => id !== playerId), playerId];
-    const stackOrder = reconcileStackOrder(baseOrder, players, get().matches, get().courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
-    set({ players, stackOrder });
+    set({ players });
     await get().publishSharedState({ force: true });
 
     if (autoLog) {
       await get().addTransaction({
         playerId,
-        amount: 150,
+        amount: CHECK_IN_FEE,
         type: "CheckInFee",
-        paymentMethod: "Cash"
+        paymentMethod: "Cash",
+        status: "Pending",
+        sessionId: currentSessionId ?? undefined
       });
     }
   },
@@ -1291,7 +1500,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     );
     const player = players.find((item) => item.id === playerId);
     if (!player) return;
-    await db.players.put(player);
+    await liveDb.playersPut(player);
     await queue("CHECK_OUT_PLAYER", "Player", player.id, player);
     pushToast(set, "Player checked out", `${player.displayName} is no longer in open play.`, "system");
 
@@ -1304,7 +1513,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
           ...session,
           checkedInPlayerIds: session.checkedInPlayerIds.filter((id) => id !== playerId)
         };
-        await db.sessions.put(updatedSession);
+        await liveDb.sessionsPut(updatedSession);
         await queue("UPDATE_SESSION", "Session", session.id, updatedSession);
         set((state) => ({
           sessions: state.sessions.map((s) => s.id === currentSessionId ? updatedSession : s)
@@ -1314,7 +1523,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
 
     const baseOrder = get().stackOrder.filter((id) => id !== playerId);
     const stackOrder = reconcileStackOrder(baseOrder, players, get().matches, get().courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ players, stackOrder });
     await get().publishSharedState({ force: true });
   },
@@ -1322,31 +1531,79 @@ export const useClubStore = create<ClubState>((set, get) => ({
     get().suppressRefresh(6000);
     const state = get();
     const checkedInPlayers = state.players.filter(p => p.checkedIn);
-    if (checkedInPlayers.length === 0) return;
+    const hasActiveMatches = state.matches.some((match) => match.status === "InProgress");
 
-    const players = state.players.map(player => 
-      player.checkedIn 
-        ? { 
-            ...player, 
-            checkedIn: false, 
-            tags: (player.tags ?? []).filter(t => t !== "AdminCheckedIn") 
-          } 
+    if (checkedInPlayers.length === 0 && !hasActiveMatches) return;
+
+    const players = state.players.map(player =>
+      player.checkedIn
+        ? {
+            ...player,
+            checkedIn: false,
+            tags: (player.tags ?? []).filter(t => t !== "AdminCheckedIn")
+          }
         : player
     );
 
+    const matches = state.matches.map((match) =>
+      match.status === "InProgress"
+        ? {
+            ...match,
+            status: "Completed" as const,
+            endedAt: new Date().toISOString(),
+            syncStatus: "PendingSync" as const
+          }
+        : match
+    );
+
+    const courts = state.courts.map((court) => ({
+      ...court,
+      status: "Available" as const,
+      currentMatchId: undefined,
+      reservedFor: undefined,
+      reservedPlayerIds: undefined
+    }));
+
+    const checkedOutIds = new Set(checkedInPlayers.map((p) => p.id));
+    const baseOrder = state.stackOrder.filter((id) => !checkedOutIds.has(id));
+    const stackOrder = reconcileStackOrder(baseOrder, players, matches, courts, {
+      autoAppendMissing: false
+    });
+
     const updatedPlayers = players.filter(p => checkedInPlayers.some(cip => cip.id === p.id));
-    await db.players.bulkPut(updatedPlayers);
-    for (const player of updatedPlayers) {
-      await queue("CHECK_OUT_PLAYER", "Player", player.id, player);
+    if (updatedPlayers.length > 0) {
+      await liveDb.playersBulkPut(updatedPlayers);
+      for (const player of updatedPlayers) {
+        await queue("CHECK_OUT_PLAYER", "Player", player.id, player);
+      }
     }
-    pushToast(set, "All players checked out", `Checked out ${checkedInPlayers.length} players.`, "system");
+
+    const finishedMatches = matches.filter(
+      (match, index) => match.status === "Completed" && state.matches[index]?.status === "InProgress"
+    );
+    for (const match of finishedMatches) {
+      await liveDb.matchesPut(match);
+      await queue("FINISH_COURT", "Match", match.id, match);
+    }
+
+    await liveDb.courtsBulkPut(courts);
+    for (const court of courts) {
+      await queue("UPDATE_COURT", "Court", court.id, court);
+    }
+
+    const checkoutCount = checkedInPlayers.length;
+    if (checkoutCount > 0) {
+      pushToast(set, "All players checked out", `Checked out ${checkoutCount} players.`, "system");
+    } else if (hasActiveMatches) {
+      pushToast(set, "Courts cleared", "Active matches ended and courts are available.", "system");
+    }
 
     const currentSessionId = state.currentSessionId;
     if (currentSessionId) {
       const session = state.sessions.find((s) => s.id === currentSessionId);
       if (session) {
         const updatedSession = { ...session, checkedInPlayerIds: [] };
-        await db.sessions.put(updatedSession);
+        await liveDb.sessionsPut(updatedSession);
         await queue("UPDATE_SESSION", "Session", session.id, updatedSession);
         set((s) => ({
           sessions: s.sessions.map((x) => x.id === currentSessionId ? updatedSession : x)
@@ -1354,11 +1611,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
       }
     }
 
-    const checkedOutIds = new Set(checkedInPlayers.map((p) => p.id));
-    const baseOrder = state.stackOrder.filter((id) => !checkedOutIds.has(id));
-    const stackOrder = reconcileStackOrder(baseOrder, players, state.matches, state.courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
-    set({ players, stackOrder });
+    saveStackOrder(stackOrder);
+    set({ players, matches, courts, stackOrder });
     await get().publishSharedState({ force: true });
   },
   movePlayerToIndex: async (playerId: string, targetIndex: number, byAdmin = false) => {
@@ -1391,7 +1645,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
           checkedIn: true,
           tags: [...(player.tags ?? []).filter((t) => t !== "AdminCheckedIn"), "AdminCheckedIn"]
         };
-        await db.players.put(updatedPlayer);
+        await liveDb.playersPut(updatedPlayer);
         await queue("CHECK_IN_PLAYER", "Player", player.id, updatedPlayer);
         
         const currentSessionId = state.currentSessionId;
@@ -1402,7 +1656,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
               ...session,
               checkedInPlayerIds: [...session.checkedInPlayerIds, playerId]
             };
-            await db.sessions.put(updatedSession);
+            await liveDb.sessionsPut(updatedSession);
             await queue("UPDATE_SESSION", "Session", session.id, updatedSession);
             set((s) => ({
               sessions: s.sessions.map((x) => x.id === currentSessionId ? updatedSession : x)
@@ -1430,10 +1684,28 @@ export const useClubStore = create<ClubState>((set, get) => ({
     }
 
     const latest = get();
-    const stackOrder = reconcileStackOrder(currentOrder, latest.players, latest.matches, latest.courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    const stackOrder = reconcileStackOrder(currentOrder, latest.players, latest.matches, latest.courts, {
+      autoAppendMissing: false,
+    });
+    saveStackOrder(stackOrder);
     set({ stackOrder });
     await get().publishSharedState({ force: true });
+  },
+  appendPlayersToQueue: async (playerIds) => {
+    if (playerIds.length === 0) return;
+    get().suppressRefresh(6000);
+    const state = get();
+    const baseOrder = [...state.stackOrder];
+    for (const id of playerIds) {
+      if (!baseOrder.includes(id)) baseOrder.push(id);
+    }
+    const stackOrder = reconcileStackOrder(baseOrder, state.players, state.matches, state.courts, {
+      autoAppendMissing: false,
+    });
+    saveStackOrder(stackOrder);
+    set({ stackOrder });
+    await get().publishSharedState({ force: true });
+    pushToast(set, "Added to queue", `${playerIds.length} player(s) placed in the rotation queue.`, "system");
   },
   moveStackToIndex: async (fromGroupIndex, toGroupIndex) => {
     const state = get();
@@ -1450,9 +1722,9 @@ export const useClubStore = create<ClubState>((set, get) => ({
       state.courts,
       { autoAppendMissing: false }
     );
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ stackOrder });
-    await get().publishSharedState();
+    await get().publishSharedState({ force: true });
   },
   removeStackAtIndex: async (groupIndex) => {
     const state = get();
@@ -1461,30 +1733,38 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const removed = groups[groupIndex] ?? [];
     const removedPlayers = removed.filter((id) => id !== "vacant" && id !== "reserved");
     groups.splice(groupIndex, 1);
+    // Re-append removed real players to the tail so they stay in rotation.
+    // Reconcile with autoAppendMissing: false but seed them at the end manually.
+    const baseOrder = [...flattenStackGroups(groups), ...removedPlayers];
+    get().suppressRefresh(6000);
     const stackOrder = reconcileStackOrder(
-      flattenStackGroups(groups),
+      baseOrder,
       state.players,
       state.matches,
       state.courts,
-      { autoAppendMissing: removedPlayers.length > 0 }
+      { autoAppendMissing: false }
     );
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ stackOrder });
-    await get().publishSharedState();
+    await get().publishSharedState({ force: true });
     const label = groupIndex === 0 ? "Stack Next" : `Stack ${groupIndex}`;
     if (removedPlayers.length > 0) {
-      pushToast(set, "Stack removed", `${label} deleted. ${removedPlayers.length} player(s) moved back into rotation.`, "system");
+      pushToast(set, "Stack dissolved", `${label} dissolved. ${removedPlayers.length} player(s) moved to end of queue.`, "system");
     } else {
       pushToast(set, "Stack removed", `${label} deleted.`, "system");
     }
   },
   addEmptyStack: async () => {
     const state = get();
+    if (countStackGroups(state.stackOrder) >= MAX_STACKS) {
+      pushToast(set, "Stack limit reached", `Maximum of ${MAX_STACKS} stacks. Remove one before adding another.`, "system");
+      return;
+    }
     const nextOrder = [...state.stackOrder, "vacant", "vacant", "vacant", "vacant"];
     const stackOrder = reconcileStackOrder(nextOrder, state.players, state.matches, state.courts, {
       autoAppendMissing: false
     });
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ stackOrder });
     await get().publishSharedState();
   },
@@ -1500,7 +1780,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const stackOrder = reconcileStackOrder(order, state.players, state.matches, state.courts, {
       autoAppendMissing: false
     });
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ stackOrder });
     await get().publishSharedState();
   },
@@ -1512,7 +1792,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       totalGamesPlayed: 0,
       totalDaysPlayed: 0
     };
-    await db.players.put(newPlayer);
+    await liveDb.playersPut(newPlayer);
     await queue("CREATE_PLAYER", "Player", newPlayer.id, newPlayer);
     const players = [...get().players, newPlayer];
     set({ players });
@@ -1524,13 +1804,13 @@ export const useClubStore = create<ClubState>((set, get) => ({
     if (useSupabaseData()) {
       next = await updatePlayerOnSupabase(player, options);
     }
-    await db.players.put(next);
+    await liveDb.playersPut(next);
     if (!useSupabaseData()) {
       await queue("UPDATE_PLAYER", "Player", next.id, next);
     }
     const players = get().players.map((p) => p.id === next.id ? next : p);
     const stackOrder = reconcileStackOrder(get().stackOrder, players, get().matches, get().courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ players, stackOrder });
     if (!useSupabaseData()) {
       await get().publishSharedState();
@@ -1540,13 +1820,14 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const player = get().players.find((p) => p.id === playerId);
     if (!player) return;
     const updatedPlayer = { ...player, isActive: false, checkedIn: false };
-    await db.players.put(updatedPlayer);
+    await liveDb.playersPut(updatedPlayer);
     await queue("UPDATE_PLAYER", "Player", playerId, updatedPlayer);
     const players = get().players.map((p) => p.id === playerId ? updatedPlayer : p);
     const stackOrder = reconcileStackOrder(get().stackOrder, players, get().matches, get().courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ players, stackOrder });
     pushToast(set, "Player archived", `${player.displayName} has been deactivated.`, "system");
+    await get().publishSharedState({ force: true });
   },
 
   // Court Actions
@@ -1564,18 +1845,18 @@ export const useClubStore = create<ClubState>((set, get) => ({
       priority: courtData.priority ?? maxPriority + 1,
       reservable: courtData.reservable ?? true
     };
-    await db.courts.put(newCourt);
+    await liveDb.courtsPut(newCourt);
     await queue("CREATE_COURT", "Court", newCourt.id, newCourt);
     const courts = [...get().courts, newCourt];
     set({ courts });
     pushToast(set, "Court added", `${newCourt.name} has been added.`, "system");
   },
   updateCourt: async (court) => {
-    await db.courts.put(court);
+    await liveDb.courtsPut(court);
     await queue("UPDATE_COURT", "Court", court.id, court);
     const courts = get().courts.map((c) => c.id === court.id ? court : c);
     const stackOrder = reconcileStackOrder(get().stackOrder, get().players, get().matches, courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ courts, stackOrder });
     pushToast(set, "Court updated", `${court.name} has been updated.`, "system");
     await get().publishSharedState();
@@ -1601,16 +1882,16 @@ export const useClubStore = create<ClubState>((set, get) => ({
     );
     if (activeMatch) {
       const completedMatch = { ...activeMatch, status: "Completed" as const, endTime: new Date().toISOString() };
-      await db.matches.put(completedMatch);
+      await liveDb.matchesPut(completedMatch);
       await queue("UPDATE_MATCH", "Match", activeMatch.id, completedMatch);
       set({ matches: get().matches.map((m) => m.id === activeMatch.id ? completedMatch : m) });
     }
     
-    await db.courts.delete(courtId);
+    await liveDb.courtsDelete(courtId);
     await queue("DELETE_COURT", "Court", courtId, { id: courtId });
     const courts = get().courts.filter((c) => c.id !== courtId);
     const stackOrder = reconcileStackOrder(get().stackOrder, get().players, get().matches, courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ courts, stackOrder });
     pushToast(set, "Court deleted", `${court.name} has been deleted.`, "system");
     await get().publishSharedState();
@@ -1623,7 +1904,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const [moved] = reordered.splice(fromIndex, 1);
     reordered.splice(targetIndex, 0, moved);
     const courts = reordered.map((court, index) => ({ ...court, number: index + 1, priority: index + 1 }));
-    await db.courts.bulkPut(courts);
+    await liveDb.courtsBulkPut(courts);
     for (const court of courts) {
       await queue("UPDATE_COURT", "Court", court.id, court);
     }
@@ -1638,19 +1919,19 @@ export const useClubStore = create<ClubState>((set, get) => ({
       ...sessionData,
       id: `session-${generateId()}`
     };
-    await db.sessions.put(newSession);
+    await liveDb.sessionsPut(newSession);
     await queue("CREATE_SESSION", "Session", newSession.id, newSession);
     const sessions = [...get().sessions, newSession];
     let currentSessionId = get().currentSessionId;
     if (!currentSessionId) {
       currentSessionId = newSession.id;
-      localStorage.setItem("haff-current-session-id", currentSessionId);
+      saveCurrentSessionId(currentSessionId);
     }
     set({ sessions, currentSessionId });
     pushToast(set, "Session created", `${newSession.name} has been created.`, "system");
   },
   updateSession: async (session) => {
-    await db.sessions.put(session);
+    await liveDb.sessionsPut(session);
     await queue("UPDATE_SESSION", "Session", session.id, session);
     const sessions = get().sessions.map((s) => s.id === session.id ? session : s);
     set({ sessions });
@@ -1659,14 +1940,14 @@ export const useClubStore = create<ClubState>((set, get) => ({
   deleteSession: async (sessionId) => {
     const session = get().sessions.find((s) => s.id === sessionId);
     if (!session) return;
-    await db.sessions.delete(sessionId);
+    await liveDb.sessionsDelete(sessionId);
     await queue("DELETE_SESSION", "Session", sessionId, { id: sessionId });
     const sessions = get().sessions.filter((s) => s.id !== sessionId);
     let currentSessionId = get().currentSessionId;
     if (currentSessionId === sessionId) {
       currentSessionId = sessions[0]?.id ?? null;
       if (currentSessionId) {
-        localStorage.setItem("haff-current-session-id", currentSessionId);
+        saveCurrentSessionId(currentSessionId);
       } else {
         localStorage.removeItem("haff-current-session-id");
       }
@@ -1692,14 +1973,14 @@ export const useClubStore = create<ClubState>((set, get) => ({
       reservedFor: undefined,
       reservedPlayerIds: undefined
     }));
-    await db.courts.bulkPut(updatedCourts);
+    await liveDb.courtsBulkPut(updatedCourts);
 
     // 2. Clear checked-in status of all players
     const updatedPlayers = state.players.map((p) => ({
       ...p,
       checkedIn: false
     }));
-    await db.players.bulkPut(updatedPlayers);
+    await liveDb.playersBulkPut(updatedPlayers);
 
     // 3. Create a new active session
     const newSession: Session = {
@@ -1713,16 +1994,16 @@ export const useClubStore = create<ClubState>((set, get) => ({
       checkedInPlayerIds: [],
       settings: {}
     };
-    await db.sessions.put(newSession);
+    await liveDb.sessionsPut(newSession);
     await queue("CREATE_SESSION", "Session", newSession.id, newSession);
 
     const sessions = [...state.sessions, newSession];
     const currentSessionId = newSession.id;
-    localStorage.setItem("haff-current-session-id", currentSessionId);
+    saveCurrentSessionId(currentSessionId);
     
     // Clear stacks
     const stackOrder: string[] = [];
-    localStorage.setItem("haff-stack-order", "[]");
+    saveStackOrder([]);
 
     set({
       courts: updatedCourts,
@@ -1755,7 +2036,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       reservedFor: undefined,
       reservedPlayerIds: undefined
     }));
-    await db.courts.bulkPut(updatedCourts);
+    await liveDb.courtsBulkPut(updatedCourts);
 
     // Mark session as completed
     const updatedSession: Session = {
@@ -1763,7 +2044,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       status: "Completed",
       endTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     };
-    await db.sessions.put(updatedSession);
+    await liveDb.sessionsPut(updatedSession);
     await queue("UPDATE_SESSION", "Session", updatedSession.id, updatedSession);
 
     // Clear checked-in status of all players
@@ -1771,12 +2052,12 @@ export const useClubStore = create<ClubState>((set, get) => ({
       ...p,
       checkedIn: false
     }));
-    await db.players.bulkPut(updatedPlayers);
+    await liveDb.playersBulkPut(updatedPlayers);
 
     const sessions = state.sessions.map((s) => (s.id === currentSessionId ? updatedSession : s));
 
     localStorage.removeItem("haff-current-session-id");
-    localStorage.setItem("haff-stack-order", "[]");
+    saveStackOrder([]);
 
     set({
       sessions,
@@ -1819,11 +2100,11 @@ export const useClubStore = create<ClubState>((set, get) => ({
         : c
     );
     const updatedCourt = courts.find((c) => c.id === courtId)!;
-    await db.courts.put(updatedCourt);
+    await liveDb.courtsPut(updatedCourt);
     await queue("UPDATE_COURT", "Court", courtId, updatedCourt);
 
     const stackOrder = reconcileStackOrder(nextOrder, state.players, state.matches, courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ courts, stackOrder });
     pushToast(set, "Returned to queue", "Players returned to front of waiting queue.", "system");
     await get().publishSharedState();
@@ -1865,13 +2146,16 @@ export const useClubStore = create<ClubState>((set, get) => ({
         updatedCourts[index] = { ...court, status: "InUse", currentMatchId: match.id };
         currentOrder = currentOrder.slice(4);
       } else {
-        currentOrder = currentOrder.slice(4);
+        // Not enough real checked-in players in this stack group.
+        // Skip this court entirely — do NOT advance currentOrder — so we
+        // don't silently discard the lone waiting player.
+        break;
       }
     }
 
     if (newMatches.length > 0) {
-      await db.matches.bulkPut(newMatches);
-      await db.courts.bulkPut(updatedCourts);
+      await liveDb.matchesBulkPut(newMatches);
+      await liveDb.courtsBulkPut(updatedCourts);
       for (const match of newMatches) {
         await queue("CREATE_MATCH", "Match", match.id, match);
         const c = updatedCourts.find((x) => x.id === match.courtId);
@@ -1888,10 +2172,13 @@ export const useClubStore = create<ClubState>((set, get) => ({
     }
 
     const matches = [...state.matches, ...newMatches];
-    const stackOrder = reconcileStackOrder(currentOrder, state.players, matches, updatedCourts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    const stackOrder = reconcileStackOrder(currentOrder, state.players, matches, updatedCourts, {
+      autoAppendMissing: false,
+    });
+    saveStackOrder(stackOrder);
     set({ matches, courts: updatedCourts, stackOrder });
-    await get().publishSharedState();
+    get().suppressRefresh(8000);
+    await get().publishSharedState({ force: true });
   },
   reserveCourt: async (courtId) => {
     const state = get();
@@ -1935,7 +2222,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     );
     const court = courts.find((item) => item.id === courtId);
     if (!court) return;
-    await db.courts.put(court);
+    await liveDb.courtsPut(court);
     await queue("UPDATE_COURT", "Court", court.id, court);
     pushToast(set, "Court reserved", `${court.name} is held for ${reservedFor}.`, "system");
     
@@ -1943,7 +2230,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     remainingOrder.splice(targetStackIndex * 4, 4);
     
     const stackOrder = reconcileStackOrder(remainingOrder, state.players, state.matches, courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ courts, stackOrder });
     await get().publishSharedState();
   },
@@ -1961,11 +2248,11 @@ export const useClubStore = create<ClubState>((set, get) => ({
     );
     const court = courts.find((item) => item.id === courtId);
     if (!court) return;
-    await db.courts.put(court);
+    await liveDb.courtsPut(court);
     await queue("UPDATE_COURT", "Court", court.id, court);
     pushToast(set, "Court available", `${court.name} is back in rotation.`, "system");
     const stackOrder = reconcileStackOrder(get().stackOrder, get().players, get().matches, courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ courts, stackOrder });
     await get().publishSharedState();
   },
@@ -2005,8 +2292,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
         : item
     );
     const updatedCourt = courts.find((item) => item.id === courtId);
-    await db.matches.put(match);
-    await db.courts.bulkPut(courts);
+    await liveDb.matchesPut(match);
+    await liveDb.courtsBulkPut(courts);
     await queue("START_RESERVED_STACK", "Match", match.id, match);
     if (updatedCourt) {
       await queue("UPDATE_COURT", "Court", updatedCourt.id, updatedCourt);
@@ -2023,7 +2310,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     pushToast(set, "Reserved stack started", `${court.name} is now playing ${court.reservedFor || "open play"}.`, "system");
     const matches = [...state.matches, match];
     const stackOrder = reconcileStackOrder(state.stackOrder, state.players, matches, courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ matches, courts, stackOrder });
     await get().publishSharedState();
   },
@@ -2071,9 +2358,9 @@ export const useClubStore = create<ClubState>((set, get) => ({
     );
     const updatedCourt = courts.find((item) => item.id === courtId);
     try {
-      await db.players.bulkPut(players);
-      await db.matches.put(completed);
-      await db.courts.bulkPut(courts);
+      await liveDb.playersBulkPut(players);
+      await liveDb.matchesPut(completed);
+      await liveDb.courtsBulkPut(courts);
       await queue("FINISH_COURT", "Match", completed.id, completed);
       if (updatedCourt) {
         await queue("UPDATE_COURT", "Court", updatedCourt.id, updatedCourt);
@@ -2084,7 +2371,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const stackOrder = reconcileStackOrder(baseOrder, players, matches, courts, {
       autoAppendMissing: false
     });
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ players, matches, courts, stackOrder });
     pushToast(
       set,
@@ -2104,7 +2391,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       scoreB,
       syncStatus: "PendingSync" as const
     };
-    await db.matches.put(updated);
+    await liveDb.matchesPut(updated);
     await queue("UPDATE_MATCH", "Match", matchId, updated);
     
     set({
@@ -2112,52 +2399,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
     });
     await get().publishSharedState();
   },
-  submitMatchFeedback: async (matchId, reviewerId, reviewerName, scoreA, scoreB, recommendations) => {
-    const state = get();
-    const match = state.matches.find((item) => item.id === matchId);
-    if (!match) return;
-
-    const entries: PlayerKudosEntry[] = [];
-    for (const [toPlayerId, rec] of Object.entries(recommendations)) {
-      if (!rec.pills.length && !rec.note?.trim()) continue;
-      entries.push({
-        id: `${matchId}:${reviewerId}:${toPlayerId}`,
-        matchId,
-        fromPlayerId: reviewerId,
-        fromPlayerName: reviewerName,
-        toPlayerId,
-        pills: rec.pills,
-        note: rec.note?.trim() || undefined,
-        createdAt: new Date().toISOString(),
-      });
-    }
-
-    const review: MatchReviewRecord = {
-      matchId,
-      reviewerId,
-      scoreA,
-      scoreB,
-      reviewedAt: new Date().toISOString(),
-    };
-
-    const updatedMatch = { ...match, scoreA, scoreB, syncStatus: "PendingSync" as const };
-    await db.matches.put(updatedMatch);
-    await queue("UPDATE_MATCH", "Match", matchId, updatedMatch);
-
-    const playerKudos = mergeKudosById(state.playerKudos, entries);
-    const matchReviews = mergeReviewsByKey(
-      state.matchReviews.filter((item) => !(item.matchId === matchId && item.reviewerId === reviewerId)),
-      [review]
-    );
-
-    set({
-      matches: state.matches.map((item) => (item.id === matchId ? updatedMatch : item)),
-      playerKudos,
-      matchReviews,
-    });
-    persistKudosLocal(playerKudos, matchReviews);
-    window.dispatchEvent(new Event("haff-endorsements-updated"));
-    await get().publishSharedState();
+  submitMatchFeedback: async () => {
+    // Kudos removed — no-op.
   },
   assignPlayerToCourt: async (playerId, courtId) => {
     const state = get();
@@ -2180,7 +2423,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
         checkedIn: true,
         tags: [...(player.tags ?? []).filter((t) => t !== "AdminCheckedIn"), "AdminCheckedIn"]
       };
-      await db.players.put(updatedPlayer);
+      await liveDb.playersPut(updatedPlayer);
       await queue("CHECK_IN_PLAYER", "Player", player.id, updatedPlayer);
       
       const currentSessionId = state.currentSessionId;
@@ -2191,7 +2434,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
             ...session,
             checkedInPlayerIds: [...session.checkedInPlayerIds, playerId]
           };
-          await db.sessions.put(updatedSession);
+          await liveDb.sessionsPut(updatedSession);
           await queue("UPDATE_SESSION", "Session", session.id, updatedSession);
           set({
             sessions: state.sessions.map((x) => x.id === currentSessionId ? updatedSession : x)
@@ -2238,18 +2481,20 @@ export const useClubStore = create<ClubState>((set, get) => ({
     for (const c of updatedCourts) {
       const oldC = state.courts.find((o) => o.id === c.id);
       if (JSON.stringify(oldC) !== JSON.stringify(c)) {
-        await db.courts.put(c);
+        await liveDb.courtsPut(c);
         await queue("UPDATE_COURT_STATUS", "Court", c.id, c);
       }
     }
 
     const remainingOrder = get().stackOrder.filter((id) => id !== playerId);
     const stackOrder = reconcileStackOrder(remainingOrder, updatedPlayers, state.matches, updatedCourts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
 
     set({ players: updatedPlayers, courts: updatedCourts, stackOrder });
     pushToast(set, "Player assigned to court", `${player.displayName} assigned to ${court.name}.`, "fun");
     speakAnnouncement(`${player.displayName} assigned to ${court.name}.`);
+    get().suppressRefresh(6000);
+    await get().publishSharedState({ force: true });
   },
   removePlayerFromCourt: async (playerId) => {
     const state = get();
@@ -2293,7 +2538,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
           endedAt: new Date().toISOString()
         };
         updatedMatches = state.matches.map(m => m.id === match.id ? completedMatch : m);
-        await db.matches.put(completedMatch);
+        await liveDb.matchesPut(completedMatch);
         await queue("UPDATE_MATCH", "Match", match.id, completedMatch);
         
         updatedCourts = updatedCourts.map(c => {
@@ -2310,7 +2555,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
           teamBPlayerIds: newTeamB
         };
         updatedMatches = state.matches.map(m => m.id === match.id ? updatedMatch : m);
-        await db.matches.put(updatedMatch);
+        await liveDb.matchesPut(updatedMatch);
         await queue("UPDATE_MATCH", "Match", match.id, updatedMatch);
       }
     }
@@ -2319,7 +2564,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       for (const c of updatedCourts) {
         const oldC = state.courts.find((o) => o.id === c.id);
         if (JSON.stringify(oldC) !== JSON.stringify(c)) {
-          await db.courts.put(c);
+          await liveDb.courtsPut(c);
           await queue("UPDATE_COURT_STATUS", "Court", c.id, c);
         }
       }
@@ -2335,7 +2580,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     }
 
     const stackOrder = reconcileStackOrder(nextStackOrder, state.players, updatedMatches, updatedCourts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ courts: updatedCourts, stackOrder, matches: updatedMatches });
     
     pushToast(set, "Player returned to lounge", `${player.displayName} returned to check-in lounge queue.`, "system");
@@ -2375,12 +2620,12 @@ export const useClubStore = create<ClubState>((set, get) => ({
       updatedMatch.teamBPlayerIds = newTeamB;
     }
 
-    await db.matches.put(updatedMatch);
+    await liveDb.matchesPut(updatedMatch);
     await queue("UPDATE_MATCH", "Match", freshMatch.id, updatedMatch);
     
     const remainingOrder = freshState.stackOrder.filter((id) => id !== playerId);
     const stackOrder = reconcileStackOrder(remainingOrder, freshState.players, [...freshState.matches.filter(m => m.id !== freshMatch.id), updatedMatch], freshState.courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     
     set({
       matches: freshState.matches.map(m => m.id === freshMatch.id ? updatedMatch : m),
@@ -2413,12 +2658,15 @@ export const useClubStore = create<ClubState>((set, get) => ({
     await db.reservations.put(reservation);
     await queue("CREATE_RESERVATION", "Reservation", id, reservation);
     
-    if (status === "Confirmed" && reservation.paymentStatus === "Paid") {
+    if (status === "Confirmed") {
       await get().addTransaction({
         playerId: reservationData.hostPlayerId,
         amount: reservationData.feeAmount,
         type: "CourtReservation",
-        paymentMethod: "EWallet"
+        paymentMethod: reservation.paymentStatus === "Paid" ? "Cash" : "GCash",
+        status: reservation.paymentStatus === "Paid" ? "Success" : "Pending",
+        reservationId: id,
+        sessionId: get().currentSessionId ?? undefined
       });
     }
 
@@ -2450,15 +2698,16 @@ export const useClubStore = create<ClubState>((set, get) => ({
   approveReservation: async (id) => {
     const reservation = get().reservations.find((r) => r.id === id);
     if (!reservation || reservation.status !== "Requested") return;
-    await get().updateReservation(id, { status: "Confirmed", paymentStatus: "Paid" });
-    if (reservation.paymentStatus !== "Paid") {
-      await get().addTransaction({
-        playerId: reservation.hostPlayerId,
-        amount: reservation.feeAmount,
-        type: "CourtReservation",
-        paymentMethod: "EWallet"
-      });
-    }
+    await get().updateReservation(id, { status: "Confirmed", paymentStatus: "Pending" });
+    await get().addTransaction({
+      playerId: reservation.hostPlayerId,
+      amount: reservation.feeAmount,
+      type: "CourtReservation",
+      paymentMethod: "GCash",
+      status: "Pending",
+      reservationId: id,
+      sessionId: get().currentSessionId ?? undefined
+    });
     playSound("checkin");
     pushToast(set, "Reservation approved", "The court booking has been confirmed.", "system");
   },
@@ -2498,31 +2747,34 @@ export const useClubStore = create<ClubState>((set, get) => ({
   },
   addTransaction: async (txData) => {
     const id = generateId();
+    const { status = "Success", ...rest } = txData;
     const transaction: Transaction = {
-      ...txData,
+      ...rest,
       id,
-      status: "Success",
+      status,
       timestamp: new Date().toISOString()
     };
     await db.transactions.put(transaction);
-    await queue("CREATE_TRANSACTION", "Transaction", id, transaction);
     set((state) => ({
       transactions: [...state.transactions, transaction]
     }));
+    return id;
   },
   completeTransaction: async (id) => {
     const tx = get().transactions.find(t => t.id === id);
     if (!tx) return;
     const updated = { ...tx, status: "Success" as const };
     await db.transactions.put(updated);
-    await queue("UPDATE_TRANSACTION", "Transaction", id, updated);
 
-    // If transaction type is CheckInFee, make sure the player is checked in
-    if (tx.type === "CheckInFee") {
-      await get().checkIn(tx.playerId);
-    }
     // Update matching court reservation payment status to Paid if applicable
-    const matchedReservation = get().reservations.find(r => r.hostPlayerId === tx.playerId && r.feeAmount === tx.amount && r.paymentStatus === "Pending");
+    const matchedReservation = tx.reservationId
+      ? get().reservations.find((reservation) => reservation.id === tx.reservationId)
+      : get().reservations.find(
+        (reservation) =>
+          reservation.hostPlayerId === tx.playerId
+          && reservation.feeAmount === tx.amount
+          && reservation.paymentStatus === "Pending"
+      );
     if (matchedReservation) {
       const updatedRes = { ...matchedReservation, paymentStatus: "Paid" as const };
       await db.reservations.put(updatedRes);
@@ -2541,7 +2793,6 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const transaction = get().transactions.find((t) => t.id === id);
     if (!transaction) return;
     await db.transactions.delete(id);
-    await queue("DELETE_TRANSACTION", "Transaction", id, { id });
     set((state) => ({
       transactions: state.transactions.filter((t) => t.id !== id)
     }));
@@ -2557,7 +2808,6 @@ export const useClubStore = create<ClubState>((set, get) => ({
       voidedAt: new Date().toISOString()
     };
     await db.transactions.put(updated);
-    await queue("VOID_TRANSACTION", "Transaction", id, updated);
     try {
       await apiFetch("/api/reservations?action=payment-issue-by-transaction", {
         method: "POST",
@@ -2638,11 +2888,11 @@ export const useClubStore = create<ClubState>((set, get) => ({
       { id: "p-11", displayName: "Erne Enthusiast", skillLevel: "Pro", rating: 4.0, tags: ["Regular"], checkedIn: true, totalDaysPlayed: 3, totalGamesPlayed: 9 },
       { id: "p-12", displayName: "Pickle Power", skillLevel: "Beginner", rating: 1.8, tags: ["Guest"], checkedIn: true, totalDaysPlayed: 1, totalGamesPlayed: 1 }
     ];
-    await db.players.bulkPut(demoPlayers);
+    await liveDb.playersBulkPut(demoPlayers);
     const courts = get().courts;
     const matches = get().matches;
     const stackOrder = reconcileStackOrder(demoPlayers.map(p => p.id), demoPlayers, matches, courts);
-    localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+    saveStackOrder(stackOrder);
     set({ players: demoPlayers, stackOrder });
   }
 }));
@@ -2679,6 +2929,9 @@ function normalizeSkillLevel(skillLevel: string): Player["skillLevel"] {
 }
 
 async function queue(actionType: string, entityType: string, entityId: string, payload: unknown) {
+  if (serverAuthoritativeLiveState()) return;
+  // Finance ledger is device-local; never sync to server (saves Vercel + Postgres on every payment).
+  if (entityType === "Transaction") return;
   const id = generateId();
   const baseVersion =
     typeof payload === "object" && payload && "version" in payload && typeof payload.version === "number"

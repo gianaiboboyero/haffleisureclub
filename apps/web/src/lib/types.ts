@@ -112,9 +112,12 @@ export type Transaction = {
   playerId: string;
   amount: number;
   type: "CheckInFee" | "CourtReservation" | "SessionPass";
-  paymentMethod: "Cash" | "EWallet" | "Card";
+  paymentMethod: "Cash" | "GCash" | "Maya" | "Card" | "EWallet";
   status: "Pending" | "Success" | "Failed" | "Voided";
   timestamp: string;
+  referenceNote?: string;
+  sessionId?: string;
+  reservationId?: string;
   voidReason?: string;
   voidedAt?: string;
 };

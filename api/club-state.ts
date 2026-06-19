@@ -177,7 +177,11 @@ const filterAuthorizedCheckIns = (
     const allowed = new Set([...adminCheckedInIds, ...onCourt]);
     return checkedInIds.filter((id) => allowed.has(id));
   }
-  return checkedInIds.filter((id) => onCourt.has(id));
+  // When there is no admin authority list at all, trust the full incoming
+  // checkedIn list (same fallback as sessionTransform.ts).  Filtering down
+  // to only on-court players would wipe the entire waiting queue whenever
+  // adminCheckedInIds happens to be empty (race condition / fresh session).
+  return checkedInIds;
 };
 
 const normalizeStack = (value: unknown, checkedInIds: string[]) => {
@@ -320,8 +324,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       adminCheckedInIds,
       settings.matches
     );
-    const stackOrder = normalizeStack(settings.stackOrder, checkedInPlayerIds);
-    const matches = Array.isArray(settings.matches) ? settings.matches : [];
+    // Normalize stack against rawCheckedIn (same as sessionTransform.ts) so
+    // stack slots are only vacated when a player is genuinely absent from the
+    // session record, not when they were filtered out by a race on
+    // adminCheckedInIds.
+    const stackOrder = normalizeStack(settings.stackOrder, rawCheckedIn);
+    // Trim completed matches older than 30 min on read — mirrors the publish path.
+    const MATCH_RETAIN_MS = 30 * 60_000;
+    const readNow = Date.now();
+    const allMatches = Array.isArray(settings.matches) ? settings.matches : [];
+    const matches = allMatches.filter((m: unknown) => {
+      const match = m as { status?: string; startedAt?: string };
+      if (match.status !== "Completed") return true;
+      if (!match.startedAt) return false;
+      return readNow - new Date(match.startedAt).getTime() < MATCH_RETAIN_MS;
+    });
     const allProfiles = playerProfilesFrom(settings.playerProfiles);
     const slimProfiles = trimProfiles(allProfiles, checkedInPlayerIds, stackOrder, matches);
     const lightView = tvView || playerView;
@@ -334,8 +351,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       matches,
       reservations: lightView ? [] : reservationsFrom(settings.reservations),
       playerProfiles: [],
-      playerKudos: lightView ? [] : playerKudosFrom(settings.playerKudos),
-      matchReviews: lightView ? [] : matchReviewsFrom(settings.matchReviews),
+      playerKudos: [],
+      matchReviews: [],
       tvBroadcast: tvBroadcastFrom(settings.tvBroadcast),
       updatedAt: session?.updatedAt ?? null
     });
@@ -392,8 +409,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let matches = Array.isArray(currentSettings.matches) ? currentSettings.matches : [];
   let reservations = reservationsFrom(currentSettings.reservations);
   let playerProfiles = playerProfilesFrom(currentSettings.playerProfiles);
-  let playerKudos = playerKudosFrom(currentSettings.playerKudos);
-  let matchReviews = matchReviewsFrom(currentSettings.matchReviews);
   let tvBroadcast = tvBroadcastFrom(currentSettings.tvBroadcast);
 
   if (actor.role === "ADMIN") {
@@ -410,12 +425,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     playerProfiles = Array.isArray(req.body?.playerProfiles)
       ? playerProfilesFrom(req.body.playerProfiles)
       : playerProfiles;
-    if (Array.isArray(req.body?.playerKudos)) {
-      playerKudos = playerKudosFrom(req.body.playerKudos);
-    }
-    if (Array.isArray(req.body?.matchReviews)) {
-      matchReviews = matchReviewsFrom(req.body.matchReviews);
-    }
     if (req.body?.tvBroadcast) {
       const incomingBroadcast = tvBroadcastFrom(req.body.tvBroadcast);
       if (incomingBroadcast) tvBroadcast = incomingBroadcast;
@@ -446,21 +455,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const others = reservations.filter((item) => item.hostPlayerId !== actor.playerId);
       reservations = [...others, ...own];
     }
-    if (Array.isArray(req.body?.playerKudos)) {
-      const own = playerKudosFrom(req.body.playerKudos).filter((entry) => entry.fromPlayerId === actor.playerId);
-      const others = playerKudos.filter((entry) => entry.fromPlayerId !== actor.playerId);
-      playerKudos = mergeById(others, own);
-    }
-    if (Array.isArray(req.body?.matchReviews)) {
-      const own = matchReviewsFrom(req.body.matchReviews).filter((entry) => entry.reviewerId === actor.playerId);
-      const others = matchReviews.filter((entry) => entry.reviewerId !== actor.playerId);
-      matchReviews = mergeReviews(others, own);
-    }
   }
 
   const {
     playerProfiles: _legacyProfiles,
     reservations: _legacyReservations,
+    playerKudos: _legacyKudos,
+    matchReviews: _legacyReviews,
     ...restSettings
   } = currentSettings as Record<string, unknown>;
 
@@ -470,8 +471,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     stackOrder,
     courts,
     matches,
-    playerKudos,
-    matchReviews,
     tvBroadcast
   } as Prisma.InputJsonValue;
 
@@ -493,8 +492,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       matches,
       reservations,
       playerProfiles,
-      playerKudos,
-      matchReviews,
+      playerKudos: [],
+      matchReviews: [],
       tvBroadcast,
       updatedAt: updated.updatedAt
     });

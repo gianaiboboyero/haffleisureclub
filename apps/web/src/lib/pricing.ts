@@ -1,3 +1,6 @@
+/** Open-play check-in fee (PHP). */
+export const CHECK_IN_FEE = 150;
+
 /** Court rental rate (PHP per hour). Keep in sync with prisma Reservation.feeAmount default. */
 export const COURT_HOURLY_FEE = 300;
 

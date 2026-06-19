@@ -22,6 +22,10 @@ type SessionRow = {
   version: number;
 };
 
+// Only fetch columns the app actually reads — omitting large unused columns
+// (e.g. courtIds, name, date, mode) saves egress bytes on every poll.
+const SESSION_COLUMNS = "id, status, checkedInPlayerIds, settings, updatedAt, version";
+
 async function findActiveSession(sessionId?: string): Promise<SessionRow | null> {
   const supabase = getSupabase();
   if (!supabase) return null;
@@ -29,7 +33,7 @@ async function findActiveSession(sessionId?: string): Promise<SessionRow | null>
   if (sessionId) {
     const { data } = await supabase
       .from("Session")
-      .select("*")
+      .select(SESSION_COLUMNS)
       .eq("id", sessionId)
       .maybeSingle();
     if (data?.status === "Active") return data as SessionRow;
@@ -37,7 +41,7 @@ async function findActiveSession(sessionId?: string): Promise<SessionRow | null>
 
   const { data } = await supabase
     .from("Session")
-    .select("*")
+    .select(SESSION_COLUMNS)
     .eq("status", "Active")
     .order("updatedAt", { ascending: false })
     .limit(1)
@@ -133,8 +137,8 @@ export type PublishClubStateInput = {
   matches: Match[];
   reservations: unknown[];
   playerProfiles: PlayerProfileSnapshot[];
-  playerKudos: unknown[];
-  matchReviews: unknown[];
+  playerKudos?: unknown[];
+  matchReviews?: unknown[];
 };
 
 export async function publishClubState(
@@ -164,15 +168,19 @@ export async function publishClubState(
   }
 
   const currentSettings = (session.settings ?? {}) as ClubSettings;
-  const { playerProfiles: _legacyProfiles, reservations: _legacyReservations, ...restSettings } = currentSettings;
+  const {
+    playerProfiles: _legacyProfiles,
+    reservations: _legacyReservations,
+    playerKudos: _legacyKudos,
+    matchReviews: _legacyReviews,
+    ...restSettings
+  } = currentSettings;
   const settings: ClubSettings = {
     ...restSettings,
     adminCheckedInIds: input.adminCheckedInIds,
     stackOrder: input.stackOrder,
     courts: input.courts,
     matches: input.matches,
-    playerKudos: input.playerKudos,
-    matchReviews: input.matchReviews,
     tvBroadcast: currentSettings.tvBroadcast
   };
   if (!options?.slim) {

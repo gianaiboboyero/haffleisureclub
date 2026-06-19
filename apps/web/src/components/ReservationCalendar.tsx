@@ -22,7 +22,7 @@ type CalReservation = Reservation & { publicLabel?: string };
 type Member = { id: string; role: "ADMIN" | "MEMBER"; playerId?: string; displayName: string } | null;
 
 import { getCourtSetting } from "../lib/courtSettings";
-import { apiFetch } from "../lib/api";
+import { apiFetch, parseResponseJson } from "../lib/api";
 import { useSupabaseData } from "../lib/dataSource";
 import { subscribeSupabaseReservations } from "../lib/supabase/realtime";
 import { COURT_HOURLY_FEE, estimateCourtFee, formatPeso } from "../lib/pricing";
@@ -572,7 +572,7 @@ export function ReservationCalendar() {
 
   React.useEffect(() => {
     apiFetch("/api/auth?action=me")
-      .then((r) => r.json())
+      .then((r) => parseResponseJson<{ user?: Member | null }>(r))
       .then((d) => setMember(d.user ?? null))
       .catch(() => setMember(null));
   }, []);

@@ -83,12 +83,12 @@ export const filterAuthorizedCheckIns = (
   adminCheckedInIds: string[],
   matches: unknown
 ) => {
+  // No admin check-in data published yet (race / fresh session) — trust the full
+  // checkedIn list so no one is silently stripped from the session.
+  if (adminCheckedInIds.length === 0) return checkedInIds;
   const onCourt = activeMatchPlayerIds(matches);
-  if (adminCheckedInIds.length > 0) {
-    const allowed = new Set([...adminCheckedInIds, ...onCourt]);
-    return checkedInIds.filter((id) => allowed.has(id));
-  }
-  return checkedInIds.filter((id) => onCourt.has(id));
+  const allowed = new Set([...adminCheckedInIds, ...onCourt]);
+  return checkedInIds.filter((id) => allowed.has(id));
 };
 
 export const normalizeStack = (value: unknown, checkedInIds: string[]) => {
@@ -156,9 +156,22 @@ export function buildSharedPayload(
 
   const adminCheckedInIds = stringArray(settings.adminCheckedInIds);
   const rawCheckedIn = session.checkedInPlayerIds ?? [];
-  const matches = Array.isArray(settings.matches) ? (settings.matches as Match[]) : [];
+  // Trim completed matches older than 30 minutes on the READ path, mirroring the
+  // 30-minute window already applied on the publish path. This keeps egress small:
+  // a busy session won't keep growing the settings blob indefinitely.
+  const MATCH_RETAIN_MS = 30 * 60_000;
+  const now = Date.now();
+  const allMatches = Array.isArray(settings.matches) ? (settings.matches as Match[]) : [];
+  const matches = allMatches.filter((m: Match) => {
+    if (m.status !== "Completed") return true;
+    if (!m.startedAt) return false;
+    return now - new Date(m.startedAt).getTime() < MATCH_RETAIN_MS;
+  });
   const checkedInPlayerIds = filterAuthorizedCheckIns(rawCheckedIn, adminCheckedInIds, matches);
-  const stackOrder = normalizeStack(settings.stackOrder, checkedInPlayerIds);
+  // Use the full rawCheckedIn list for stack normalization so that players are only
+  // replaced with "vacant" when they genuinely aren't in the session at all — not when
+  // they were incidentally excluded by the adminCheckedInIds filter (e.g. race condition).
+  const stackOrder = normalizeStack(settings.stackOrder, rawCheckedIn);
   const allProfiles = playerProfilesFrom(settings.playerProfiles);
   const slimProfiles = trimProfiles(allProfiles, checkedInPlayerIds, stackOrder, matches);
   const lightView = options?.lightView ?? false;
@@ -174,8 +187,8 @@ export function buildSharedPayload(
     matches,
     reservations: omitReservations ? [] : Array.isArray(settings.reservations) ? settings.reservations : [],
     playerProfiles: omitProfiles ? [] : slimProfiles,
-    playerKudos: lightView ? [] : Array.isArray(settings.playerKudos) ? settings.playerKudos : [],
-    matchReviews: lightView ? [] : Array.isArray(settings.matchReviews) ? settings.matchReviews : [],
+    playerKudos: [],
+    matchReviews: [],
     tvBroadcast: settings.tvBroadcast ?? null,
     updatedAt
   };

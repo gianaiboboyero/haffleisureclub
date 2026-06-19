@@ -39,11 +39,6 @@ export async function uploadPlayerAvatar(
   return { avatarUrl, avatarVersion: version };
 }
 
-export async function removeLegacyInlineAvatar(playerId: string) {
-  const supabase = getSupabase();
-  if (!supabase) return;
-  const { data } = await supabase.storage.from(BUCKET).list(playerId);
-  if (!data?.length) return;
-  const paths = data.map((item) => `${playerId}/${item.name}`);
-  await supabase.storage.from(BUCKET).remove(paths);
+export async function removeLegacyInlineAvatar(_playerId: string) {
+  // Listing avatars requires a broad storage policy; uploads use upsert on a versioned path.
 }

@@ -16,7 +16,6 @@ import {
   MapPin,
   Clock,
   Volume2,
-  MessageCircle,
   LogIn,
   UserPlus,
   Plus,
@@ -66,7 +65,7 @@ const CircularBadge = ({ onClick }: { onClick: () => void }) => (
 );
 
 interface LandingViewProps {
-  setView: (view: "landing" | "admin" | "player" | "tv" | "calendar" | "finance" | "community") => void;
+  setView: (view: "landing" | "admin" | "player" | "tv" | "calendar" | "finance") => void;
   signedIn: boolean;
 }
 
@@ -729,9 +728,6 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
                 </blockquote>
               ))}
             </div>
-            <button onClick={() => setView("community")} className="mt-5 flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-brass px-5 font-black text-forest">
-              <MessageCircle size={18} /> Open community
-            </button>
           </div>
 
           {/* Right Column: Community voice */}

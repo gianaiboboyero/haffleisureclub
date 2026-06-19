@@ -9,13 +9,18 @@ ON CONFLICT (id) DO UPDATE SET
   allowed_mime_types = EXCLUDED.allowed_mime_types;
 
 DROP POLICY IF EXISTS "haff_avatar_public_read" ON storage.objects;
+DROP POLICY IF EXISTS "haff_avatar_object_read" ON storage.objects;
 DROP POLICY IF EXISTS "haff_avatar_player_write" ON storage.objects;
 DROP POLICY IF EXISTS "haff_avatar_player_update" ON storage.objects;
 DROP POLICY IF EXISTS "haff_avatar_player_delete" ON storage.objects;
 
-CREATE POLICY "haff_avatar_public_read" ON storage.objects
+-- Path-scoped read (public bucket URLs work without listing the whole bucket)
+CREATE POLICY "haff_avatar_object_read" ON storage.objects
   FOR SELECT TO anon, authenticated
-  USING (bucket_id = 'avatars');
+  USING (
+    bucket_id = 'avatars'
+    AND name ~ '^[A-Za-z0-9_-]+/v[0-9]+\.webp$'
+  );
 
 CREATE POLICY "haff_avatar_player_write" ON storage.objects
   FOR INSERT TO anon, authenticated

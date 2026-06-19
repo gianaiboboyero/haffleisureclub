@@ -97,6 +97,31 @@ export function sortCourts(courts: Court[]) {
   });
 }
 
+/** Apply live session fields onto the canonical court list (id/name/number from DB). */
+export function mergeSessionCourtRuntime(localCourts: Court[], sessionCourts: unknown[], maxCourts = 3): Court[] {
+  const byId = new Map(
+    sessionCourts
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object"))
+      .map((entry) => [String(entry.id), entry])
+  );
+  return sortCourts(
+    localCourts.map((court) => {
+      const session = byId.get(court.id);
+      if (!session) return court;
+      return {
+        ...court,
+        status: (session.status ?? court.status) as Court["status"],
+        currentMatchId:
+          session.currentMatchId != null ? String(session.currentMatchId) : court.currentMatchId,
+        reservedFor: typeof session.reservedFor === "string" ? session.reservedFor : court.reservedFor,
+        reservedPlayerIds: Array.isArray(session.reservedPlayerIds)
+          ? session.reservedPlayerIds.map(String)
+          : court.reservedPlayerIds
+      };
+    })
+  ).slice(0, maxCourts);
+}
+
 export function resolvePlayerById(id: string, players: Player[]): Player {
   if (id === "vacant" || id.startsWith("vacant")) {
     return { ...createTvVacantSlot(id), displayName: "Open Slot" };
@@ -202,19 +227,67 @@ export function getStackLabel(groupIndex: number): string {
   return groupIndex === 0 ? "Stack Next" : `Stack ${groupIndex}`;
 }
 
+/** Checked-in players waiting to play (not on court, not reserved). */
+export function getCheckedInPoolPlayers(
+  players: Player[],
+  matches: Match[],
+  courts: Court[]
+): Player[] {
+  const activeIds = getOnCourtPlayerIds(matches);
+  const reservedIds = new Set(courts.flatMap((court) => court.reservedPlayerIds ?? []));
+  return players
+    .filter(
+      (player) =>
+        player.isActive !== false &&
+        player.checkedIn &&
+        !activeIds.has(player.id) &&
+        !reservedIds.has(player.id)
+    )
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+export function getPlayerStackPlacement(playerId: string, stackOrder: string[]) {
+  const index = stackOrder.indexOf(playerId);
+  if (index < 0) return null;
+  const groupIndex = Math.floor(index / SLOTS_PER_STACK);
+  const slotInGroup = (index % SLOTS_PER_STACK) + 1;
+  return {
+    groupIndex,
+    slotInGroup,
+    label: getStackLabel(groupIndex),
+  };
+}
+
+export function isPlayerInQueue(playerId: string, stackOrder: string[]) {
+  return stackOrder.includes(playerId);
+}
+
 export function stackGroupKey(stackOrder: string[], groupIndex: number): string {
-  const slots = stackOrder.slice(groupIndex * 4, groupIndex * 4 + 4);
+  const slots = stackOrder.slice(groupIndex * SLOTS_PER_STACK, groupIndex * SLOTS_PER_STACK + SLOTS_PER_STACK);
   return `stack-${groupIndex}-${slots.join("|") || "empty"}`;
 }
+
+export const SLOTS_PER_STACK = 4;
+export const MAX_STACKS = 9;
 
 /** Keep stack slot structure; preserve vacant placeholders like server normalizeStack. */
 export function splitStackGroups(stackOrder: string[]): string[][] {
   if (stackOrder.length === 0) return [];
   const groups: string[][] = [];
-  for (let index = 0; index < stackOrder.length; index += 4) {
-    groups.push(stackOrder.slice(index, index + 4));
+  for (let index = 0; index < stackOrder.length; index += SLOTS_PER_STACK) {
+    groups.push(stackOrder.slice(index, index + SLOTS_PER_STACK));
   }
   return groups;
+}
+
+export function capStackOrder(stackOrder: string[], maxStacks = MAX_STACKS): string[] {
+  const maxSlots = maxStacks * SLOTS_PER_STACK;
+  if (stackOrder.length <= maxSlots) return stackOrder;
+  return stackOrder.slice(0, maxSlots);
+}
+
+export function countStackGroups(stackOrder: string[]): number {
+  return splitStackGroups(stackOrder).length;
 }
 
 export function flattenStackGroups(groups: string[][]): string[] {
@@ -276,7 +349,7 @@ export function reconcileStackOrder(
   }
 
   if (cleaned.length === 0) return [];
-  return cleaned;
+  return capStackOrder(cleaned);
 }
 
 export function getOnCourtPlayerIds(matches: Match[]): Set<string> {
@@ -308,8 +381,13 @@ export function resolveAuthorizedCheckInIds(
   }
   for (const id of localAdminTagged) authorized.add(id);
   for (const id of onCourt) authorized.add(id);
+  // When there is no admin authority data at all (empty adminCheckedInIds AND no
+  // locally-tagged players), fall back to trusting the full incoming checkedIn list
+  // rather than returning only on-court players.  Returning only on-court players would
+  // wipe everyone waiting in the queue whenever the server has a data race or the
+  // session is fresh.
   if ((adminCheckedInIds ?? []).length === 0 && localAdminTagged.size === 0) {
-    return new Set(onCourt);
+    return new Set(checkedInIds);
   }
   return authorized;
 }
@@ -356,29 +434,34 @@ export function isUsableAvatarUrl(url?: string | null): url is string {
   }
 }
 
-export function dicebearAvatar(seed: string, style: "fun-emoji" | "avataaars" | "notionists" = "fun-emoji") {
+export function tapbackAvatar(seed: string): string {
+  const safeSeed = encodeURIComponent(seed.trim() || "player");
+  return `https://www.tapback.co/api/avatar/${safeSeed}.webp`;
+}
+
+export function dicebearAvatar(seed: string, style: "fun-emoji" | "avataaars" | "notionists" = "avataaars") {
   const safeSeed = encodeURIComponent(seed.trim() || "player");
   return `https://api.dicebear.com/7.x/${style}/svg?seed=${safeSeed}`;
 }
 
 export function getPlayerAvatar(player?: { id?: string; displayName?: string; avatarUrl?: string | null }) {
   if (isUsableAvatarUrl(player?.avatarUrl)) return player.avatarUrl;
-  const seed = player?.id || player?.displayName || "player";
-  return dicebearAvatar(seed, "fun-emoji");
+  const seed = player?.displayName?.trim() || player?.id || "player";
+  return tapbackAvatar(seed);
 }
 
 export const AVATAR_PRESETS = [
-  { name: "😎 Cool", seed: "cool-player" },
-  { name: "🎮 Gamer", seed: "gamer-player" },
-  { name: "🏆 Champ", seed: "champion-player" },
-  { name: "⚡ Fast", seed: "lightning-player" },
-  { name: "🔥 Fire", seed: "fire-player" },
-  { name: "🌟 Star", seed: "star-player" },
-  { name: "🎯 Ace", seed: "ace-player" },
-  { name: "💎 Pro", seed: "diamond-player" },
-  { name: "🚀 Rocket", seed: "rocket-player" },
-  { name: "🎪 Fun", seed: "fun-player" }
+  { name: "Cool", seed: "cool-player" },
+  { name: "Gamer", seed: "gamer-player" },
+  { name: "Champ", seed: "champion-player" },
+  { name: "Fast", seed: "lightning-player" },
+  { name: "Fire", seed: "fire-player" },
+  { name: "Star", seed: "star-player" },
+  { name: "Ace", seed: "ace-player" },
+  { name: "Pro", seed: "diamond-player" },
+  { name: "Rocket", seed: "rocket-player" },
+  { name: "Fun", seed: "fun-player" },
 ].map((preset) => ({
   ...preset,
-  url: dicebearAvatar(preset.seed, "fun-emoji")
+  url: tapbackAvatar(preset.seed),
 }));

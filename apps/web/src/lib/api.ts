@@ -13,16 +13,26 @@ export async function apiFetch(path: string, options?: RequestInit): Promise<Res
   });
 }
 
+/** Safely parse a fetch Response — never throws on HTML error pages or invalid JSON. */
+export async function parseResponseJson<T = Record<string, unknown>>(response: Response): Promise<T> {
+  const text = await response.text();
+  if (!text.trim()) return {} as T;
+  if (!response.headers.get("content-type")?.includes("application/json")) {
+    return {} as T;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return {} as T;
+  }
+}
+
 export async function apiJson<T = unknown>(path: string, options?: RequestInit): Promise<T> {
   const response = await apiFetch(path, {
     headers: { "Content-Type": "application/json", ...(options?.headers ?? {}) },
     ...options
   });
-  const text = await response.text();
-  const data =
-    text && response.headers.get("content-type")?.includes("application/json")
-      ? (JSON.parse(text) as T)
-      : ({} as T);
+  const data = await parseResponseJson<T>(response);
   if (!response.ok) {
     const message =
       typeof data === "object" && data !== null && "error" in data

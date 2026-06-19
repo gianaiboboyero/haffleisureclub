@@ -50,7 +50,8 @@ import {
   BarChart2,
   Ban,
   ArrowLeft,
-  RotateCcw
+  RotateCcw,
+  Share2
 } from "lucide-react";
 import { Button, Card, Badge } from "./components/ui";
 import { Chip } from "./components/ui/heroui-chip";
@@ -58,33 +59,49 @@ import { AiLoader } from "./components/ui/ai-loader";
 import { ProfilePhotoCropper } from "./components/ProfilePhotoCropper";
 import { readProfileImageFile, isInlineAvatarData } from "./lib/profilePhoto";
 import { useSupabaseData } from "./lib/dataSource";
+import { serverAuthoritativeLiveState, saveStackOrder, liveDb } from "./lib/liveStateCache";
+import { notifyTvDisplayRefresh, openTvDisplayWindow, shouldManageTvDisplayWindow, closeManagedTvDisplayWindow } from "./lib/tvDisplayWindow";
 import { uploadPlayerAvatar } from "./lib/supabase/storage";
-import { COURT_HOURLY_FEE } from "./lib/pricing";
+import { COURT_HOURLY_FEE, CHECK_IN_FEE, formatPeso } from "./lib/pricing";
+import {
+  countPendingTransactions,
+  filterTransactionsByRange,
+  formatTransactionType,
+  getOutstandingCheckIns,
+  normalizePaymentMethod,
+  PAYMENT_METHODS,
+  revenueByPaymentMethod,
+  sumSuccessfulRevenue,
+  type LedgerRange,
+  type PaymentMethod
+} from "./lib/finance";
 import { manilaDateTimeIso, reservationDateKey } from "./lib/reservationTime";
 import { subscribeToClubState, subscribeSupabasePlayers } from "./lib/realtime";
 import {
   clubPollIntervalMs,
+  isIdleView,
+  isClubPushHealthy,
+  rosterSyncFresh,
   PUBLISH_DEBOUNCE_MS,
   REALTIME_REFRESH_DEBOUNCE_MS
 } from "./lib/syncPolicy";
 import { useClubStore, subscribeClubStateBroadcast } from "./store/useClubStore";
 import { db } from "./lib/db";
-import { sortCourts, getPlayerAvatar, getActiveCourtMatch, getTvStackGroups, getStackDisplayGroups, getStackLabel, stackGroupKey, reconcileStackOrder, createTvVacantSlot, resolveMatchTeamPlayers, resolvePlayerById, getPlayerStatusNote, getPlayerDisplayLabel, AVATAR_PRESETS, dicebearAvatar, isUsableAvatarUrl } from "./lib/utils";
+import { sortCourts, getPlayerAvatar, getActiveCourtMatch, getTvStackGroups, getStackDisplayGroups, getStackLabel, stackGroupKey, reconcileStackOrder, createTvVacantSlot, resolveMatchTeamPlayers, resolvePlayerById, getPlayerStatusNote, getPlayerDisplayLabel, AVATAR_PRESETS, tapbackAvatar, isUsableAvatarUrl, MAX_STACKS } from "./lib/utils";
+import { formatEstimatedPlayTime, getPlayerWaitStatus, getRemainingMilliseconds } from "./lib/playerWait";
 import { getCourtSetting, getCourtSettings, saveCourtSettings, type CourtSettings } from "./lib/courtSettings";
-import {
-  PLAY_KUDOS_PILLS,
-  getMatchOpponentIds,
-  kudosForMatch,
-  kudosForPlayer,
-  tallyKudosPills,
-} from "./lib/playerKudos";
+import { getMatchOpponentIds } from "./lib/playerKudos";
+import { computePlayerStats, formatMinutesPlayed } from "./lib/playerStats";
+import { StoryShareModal } from "./components/StoryShareModal";
+import { TvPickleballCourt } from "./components/TvPickleballCourt";
+import { CheckedInStack } from "./components/CheckedInStack";
 import { getVoiceStyle, isSoundEnabled, playSound, setSoundEnabled, setVoiceStyle, speakAnnouncement, unlockAudio } from "./lib/sound";
 import type { VoiceStyle } from "./lib/sound";
 import type { Court, Match, Player, TvBroadcast } from "./lib/types";
 import "./styles/globals.css";
 import { Analytics } from "@vercel/analytics/react";
 import { SKIP_ADMIN_LOGIN } from "./lib/devFlags";
-import { apiFetch, apiJson } from "./lib/api";
+import { apiFetch, apiJson, parseResponseJson } from "./lib/api";
 
 const LandingView = React.lazy(() =>
   import("./components/LandingView").then((module) => ({ default: module.LandingView }))
@@ -95,10 +112,6 @@ const ReservationCalendar = React.lazy(() =>
 const AdminReservationCalendar = React.lazy(() =>
   import("./components/ReservationCalendar").then((module) => ({ default: module.AdminReservationCalendar }))
 );
-const CommunityView = React.lazy(() =>
-  import("./components/CommunityView").then((module) => ({ default: module.CommunityView }))
-);
-
 type SessionMember = {
   id: string;
   email: string;
@@ -206,9 +219,9 @@ function App() {
       } else if (path === "parking" || hash === "parking") {
         window.history.replaceState(null, "", "/player");
         targetView = "player";
-      } else if (["admin", "player", "tv", "calendar", "finance", "community"].includes(path)) {
+      } else if (["admin", "player", "tv", "calendar", "finance"].includes(path)) {
         targetView = path as ViewMode;
-      } else if (["admin", "player", "tv", "calendar", "finance", "community"].includes(hash)) {
+      } else if (["admin", "player", "tv", "calendar", "finance"].includes(hash)) {
         targetView = hash as ViewMode;
       } else if (path === "display" || hash === "display") {
         targetView = "tv";
@@ -266,6 +279,7 @@ function App() {
         window.clearTimeout(sharedPublishTimer);
         sharedPublishTimer = window.setTimeout(() => {
           void state.publishSharedState().then(() => {
+            notifyTvDisplayRefresh();
             if (socket?.connected) socket.emit("state_changed");
           });
         }, PUBLISH_DEBOUNCE_MS);
@@ -291,11 +305,14 @@ function App() {
 
     let realtimeRefreshTimer: number | undefined;
     const scheduleRealtimeRefresh = () => {
+      const view = useClubStore.getState().view;
+      if (isIdleView(view) || document.hidden) return;
       window.clearTimeout(realtimeRefreshTimer);
       realtimeRefreshTimer = window.setTimeout(() => {
-        const view = useClubStore.getState().view;
+        const currentView = useClubStore.getState().view;
+        if (isIdleView(currentView) || document.hidden) return;
         const context =
-          view === "tv" ? "tv" : view === "player" ? "player" : "default";
+          currentView === "tv" ? "tv" : currentView === "player" ? "player" : "default";
         void useClubStore.getState().refreshSharedState({ force: true, context });
       }, REALTIME_REFRESH_DEBOUNCE_MS);
     };
@@ -306,23 +323,41 @@ function App() {
 
     const unsubscribePlayerRoster = useSupabaseData()
       ? subscribeSupabasePlayers(() => {
-          void useClubStore.getState().hydrate();
+          // A Player row changed — refresh the shared session state (picks up
+          // profile changes embedded in the session payload). Only do a full
+          // hydrate when the roster cache has expired (> 4 hr old), avoiding
+          // a complete DB re-fetch on every admin check-in action.
+          // Skip entirely for background/hidden tabs — they will catch up on focus.
+          if (document.hidden) return;
+          const store = useClubStore.getState();
+          if (!rosterSyncFresh()) {
+            void store.hydrate();
+          } else {
+            void store.refreshSharedState({ force: true });
+          }
         })
       : () => undefined;
 
     const applyIncomingStackOrder = (incoming: string[]) => {
+      if (serverAuthoritativeLiveState()) return;
       useClubStore.getState().runAsRemoteBroadcast(() => {
         const state = useClubStore.getState();
-        const stackOrder = reconcileStackOrder(incoming, state.players, state.matches, state.courts);
+        const stackOrder = reconcileStackOrder(incoming, state.players, state.matches, state.courts, {
+          autoAppendMissing: false
+        });
         if (stackOrder.join("|") !== state.stackOrder.join("|")) {
-          localStorage.setItem("haff-stack-order", JSON.stringify(stackOrder));
+          saveStackOrder(stackOrder);
           useClubStore.setState({ stackOrder });
         }
       });
     };
 
     const unsubscribeClubBroadcast = subscribeClubStateBroadcast(
-      () => { void useClubStore.getState().refreshSharedState({ force: true }); },
+      () => {
+        const view = useClubStore.getState().view;
+        if (isIdleView(view) || document.hidden) return;
+        void useClubStore.getState().refreshSharedState({ force: true });
+      },
       (stackOrder) => {
         applyIncomingStackOrder(stackOrder);
       },
@@ -333,6 +368,7 @@ function App() {
     );
 
     const onStackStorage = (event: StorageEvent) => {
+      if (serverAuthoritativeLiveState()) return;
       if (event.key !== "haff-stack-order" || !event.newValue) return;
       try {
         const parsed = JSON.parse(event.newValue);
@@ -343,6 +379,14 @@ function App() {
       }
     };
     window.addEventListener("storage", onStackStorage);
+
+    const onWindowFocus = () => {
+      const view = useClubStore.getState().view;
+      if (view === "admin" || view === "tv" || view === "player") {
+        void useClubStore.getState().refreshSharedState({ force: true, context: view === "tv" ? "tv" : view === "player" ? "player" : "default" });
+      }
+    };
+    window.addEventListener("focus", onWindowFocus);
 
     // Socket.IO Connection Event Handlers
     if (socket) {
@@ -375,6 +419,7 @@ function App() {
         unsubscribeClubRealtime();
         unsubscribePlayerRoster();
         window.removeEventListener("storage", onStackStorage);
+        window.removeEventListener("focus", onWindowFocus);
         socket.off("connect", onConnect);
         socket.off("disconnect", onDisconnect);
         socket.off("sync_update", onSyncUpdate);
@@ -396,6 +441,7 @@ function App() {
       unsubscribeClubRealtime();
       unsubscribePlayerRoster();
       window.removeEventListener("storage", onStackStorage);
+      window.removeEventListener("focus", onWindowFocus);
     };
   }, [refreshPendingSyncCount, setOnline, hydrate]);
 
@@ -434,17 +480,6 @@ function App() {
           {view === "tv" && <DisplayView key="tv" setView={setView} />}
           {view === "calendar" && <React.Suspense fallback={<LoadingScreen />}><ReservationCalendar key="calendar" /></React.Suspense>}
           {view === "finance" && <FinanceView key="finance" />}
-          {view === "community" && (
-            <React.Suspense fallback={<LoadingScreen />}>
-              <CommunityView
-                key="community"
-                member={sessionMember}
-                sessionReady={sessionReady}
-                onAuth={setSessionMember}
-                onLogout={() => setSessionMember(null)}
-              />
-            </React.Suspense>
-          )}
         </AnimatePresence>
       </div>
       {view !== "tv" && <FloatingDock view={view} setView={setView} isAdmin={SKIP_ADMIN_LOGIN || sessionMember?.role === "ADMIN"} />}
@@ -464,7 +499,7 @@ function AccountMenu({
 }) {
   const [open, setOpen] = React.useState(false);
   if (!member) return null;
-  const avatar = isUsableAvatarUrl(member.avatarUrl) ? member.avatarUrl : dicebearAvatar(member.displayName, "fun-emoji");
+  const avatar = isUsableAvatarUrl(member.avatarUrl) ? member.avatarUrl : tapbackAvatar(member.displayName);
   return (
     <div
       className="fixed"
@@ -566,7 +601,7 @@ function useSmoothNow(enabled = true) {
   return now;
 }
 
-type ViewMode = "landing" | "admin" | "player" | "tv" | "calendar" | "finance" | "community";
+type ViewMode = "landing" | "admin" | "player" | "tv" | "calendar" | "finance";
 
 function TopBar({ 
   view, 
@@ -694,7 +729,7 @@ function InlineAccountMenu({
       </div>
     );
   }
-  const avatar = isUsableAvatarUrl(member.avatarUrl) ? member.avatarUrl : dicebearAvatar(member.displayName, "fun-emoji");
+  const avatar = isUsableAvatarUrl(member.avatarUrl) ? member.avatarUrl : tapbackAvatar(member.displayName);
   const signOut = async () => {
     await apiFetch("/api/auth?action=logout", { method: "POST" });
     localStorage.removeItem("haff-player-account-id");
@@ -857,6 +892,12 @@ function AdminView() {
   const [isAuthenticated, setIsAuthenticated] = React.useState(
     () => SKIP_ADMIN_LOGIN || localStorage.getItem("haff_admin_authenticated") === "true"
   );
+
+  React.useEffect(() => {
+    if (!isAuthenticated || !shouldManageTvDisplayWindow()) return;
+    openTvDisplayWindow();
+  }, [isAuthenticated]);
+
   const [email, setEmail] = React.useState("gianaibo.dev@gmail.com");
   const [password, setPassword] = React.useState("");
   const [authError, setAuthError] = React.useState("");
@@ -873,11 +914,14 @@ function AdminView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password })
       });
-      const data = await response.json();
+      const data = await parseResponseJson<{ user?: { role?: string }; error?: string }>(response);
       if (response.ok && data.user?.role === "ADMIN") {
         localStorage.setItem("haff_admin_authenticated", "true");
         setIsAuthenticated(true);
         window.dispatchEvent(new Event("haff-auth-change"));
+        if (shouldManageTvDisplayWindow()) {
+          openTvDisplayWindow();
+        }
         playSound("checkin");
       } else {
         setAuthError(data.user ? "This account is not an administrator." : (data.error ?? "Invalid administrator credentials"));
@@ -976,6 +1020,12 @@ function AdminView() {
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <Button
+            onClick={() => openTvDisplayWindow()}
+            className="min-h-10 gap-2 bg-brass px-4 text-xs font-black text-forest hover:bg-linen"
+          >
+            <Monitor size={14} /> TV Display
+          </Button>
+          <Button
             onClick={() => setIsQrOpen(true)}
             className="min-h-10 gap-2 bg-ivory/15 px-4 text-xs font-bold text-ivory hover:bg-ivory/25"
           >
@@ -983,6 +1033,7 @@ function AdminView() {
           </Button>
           <Button
             onClick={() => {
+              closeManagedTvDisplayWindow();
               localStorage.removeItem("haff_admin_authenticated");
               setIsAuthenticated(SKIP_ADMIN_LOGIN);
               playSound("complete");
@@ -1051,24 +1102,6 @@ function AdminView() {
   );
 }
 
-// Court countdown badge (live, smooth centisecond tick)
-function CourtElapsedTimer({ startedAt, matchDurationMinutes, timerPausedAt }: { startedAt: string; matchDurationMinutes: number; timerPausedAt?: string }) {
-  const now = useSmoothNow(!timerPausedAt);
-  const remainingMs = getRemainingMilliseconds(startedAt, matchDurationMinutes, now, timerPausedAt);
-  const overtime = remainingMs < 0;
-  const isNearing = !overtime && remainingMs <= 120_000;
-  return (
-    <span className={`ml-1 inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-black tabular-nums countdown-digits ${
-      overtime ? "bg-red-500/20 text-red-300 animate-pulse" :
-      isNearing ? "bg-amber-500/20 text-amber-300" :
-      "bg-ivory/10 text-ivory/70"
-    }`}>
-      <Clock size={10} />
-      <CountdownClock totalMs={Math.abs(remainingMs)} prefix={overtime ? "-" : ""} />
-    </span>
-  );
-}
-
 function AdminCourtCard({
   court,
   match,
@@ -1120,7 +1153,7 @@ function AdminCourtCard({
   const isTimerPaused = Boolean(match?.timerPausedAt);
 
   const persistMatch = async (updatedMatch: Match, options?: { force?: boolean }) => {
-    await db.matches.put(updatedMatch);
+    await liveDb.matchesPut(updatedMatch);
     useClubStore.setState({
       matches: useClubStore.getState().matches.map((item) => (item.id === updatedMatch.id ? updatedMatch : item)),
     });
@@ -1222,7 +1255,7 @@ function AdminCourtCard({
       }}
     >
       <div>
-        <div className="flex items-center justify-between border-b border-white/5 pb-2 mb-3">
+        <div className="flex items-center justify-between border-b border-white/5 pb-2.5 mb-3">
           <div className="flex items-center gap-2">
             <h2 className="font-display text-xl text-brass font-black uppercase tracking-wide">{court.name}</h2>
             {(court.status === "Available" || court.status === "Reserved") && (
@@ -1241,24 +1274,25 @@ function AdminCourtCard({
             )}
           </div>
 
-          <Chip
-            color={
-              court.status === "InUse" ? "warning" :
-              court.status === "Reserved" ? "accent" :
-              court.status === "Maintenance" ? "danger" : "success"
-            }
-            variant="soft"
-            className="font-black text-[11px] px-3 py-1.5 uppercase tracking-wider rounded-lg"
-          >
-            {court.status === "InUse" ? "IN USE" : court.status}
-          </Chip>
+          <div className="flex items-center gap-2">
+            <Chip
+              color={
+                court.status === "InUse" ? "warning" :
+                court.status === "Reserved" ? "accent" :
+                court.status === "Maintenance" ? "danger" : "success"
+              }
+              variant="soft"
+              className="font-black text-[11px] px-3 py-1.5 uppercase tracking-wider rounded-lg"
+            >
+              {court.status === "InUse" ? "IN USE" : court.status}
+            </Chip>
+          </div>
         </div>
 
         <div className="min-h-12">
-          {court.status === "InUse" && match?.startedAt && (
-            <div className="flex items-center justify-between gap-2 bg-[#051812]/50 rounded-xl p-2 border border-white/5 mb-3">
-              <span className="text-xs text-linen/75">{isTimerPaused ? "Timer paused" : "Time remaining"}</span>
-              <CourtElapsedTimer startedAt={match.startedAt} matchDurationMinutes={matchDurationMinutes} timerPausedAt={match.timerPausedAt} />
+          {court.status === "InUse" && isTimerPaused && (
+            <div className="flex items-center gap-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 mb-2.5">
+              <span className="text-[10px] font-black uppercase text-amber-300">⏸ Timer paused</span>
             </div>
           )}
 
@@ -1381,6 +1415,8 @@ function PlayRotationTab() {
     stackOrder, 
     checkIn, 
     checkOut,
+    checkOutAll,
+    appendPlayersToQueue,
     generateMatches, 
     reserveCourt, 
     startReservedCourt, 
@@ -1407,7 +1443,9 @@ function PlayRotationTab() {
   );
 
   const activePlayers = players.filter((p) => p.isActive !== false);
-  const loungePlayers = activePlayers.filter((player) => {
+  const checkedInCount = activePlayers.filter((p) => p.checkedIn).length;
+  const rosterPlayers = activePlayers.filter((player) => {
+    if (player.checkedIn) return false;
     const query = loungeSearch.trim().toLowerCase();
     if (!query) return true;
     return [
@@ -1416,10 +1454,7 @@ function PlayRotationTab() {
       player.skillLevel,
       ...(player.tags ?? [])
     ].some((value) => value?.toLowerCase().includes(query));
-  }).sort((a, b) => {
-    if (a.checkedIn === b.checkedIn) return 0;
-    return a.checkedIn ? -1 : 1;
-  });
+  }).sort((a, b) => a.displayName.localeCompare(b.displayName));
   const changeVoiceStyle = (style: VoiceStyle) => {
     setSelectedVoiceStyle(style);
     setVoiceStyle(style);
@@ -1442,7 +1477,14 @@ function PlayRotationTab() {
         }
       `}} />
 
-      <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="rounded-2xl border border-white/10 bg-[#0a1f18]/80 px-3 py-2.5 sm:px-4">
+        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brass">Live courts</p>
+        <p className="text-xs text-linen/60 mt-0.5">Courts up top · checked-in stack · queue stacks · roster on the right</p>
+      </div>
+
+      <div className={`grid min-w-0 gap-3 sm:gap-4 ${
+        courts.length === 3 ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3" : "sm:grid-cols-2 xl:grid-cols-3"
+      }`}>
         {sortCourts(courts).map((court) => {
           const match = getActiveCourtMatch(court, matches);
           return (
@@ -1504,9 +1546,23 @@ function PlayRotationTab() {
         </div>
       </div>
 
+      <CheckedInStack
+        players={players}
+        matches={matches}
+        courts={courts}
+        stackOrder={stackOrder}
+        onCheckOut={(playerId) => checkOut(playerId)}
+        onCheckOutAll={() => {
+          if (confirm("Check out all players tonight? This clears the rotation queue.")) {
+            checkOutAll();
+          }
+        }}
+        onAppendToQueue={(playerIds) => appendPlayersToQueue(playerIds)}
+      />
+
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_min(20rem,24vw)]">
         <StackBuilder players={players} courts={courts} matches={matches} stackOrder={stackOrder} />
-        <aside className="min-w-0 space-y-5">
+        <aside className="hidden min-w-0 space-y-5 xl:block">
         <Card className="work-surface">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -1635,27 +1691,16 @@ function PlayRotationTab() {
         >
           <div className="flex items-end justify-between gap-3">
             <div>
-              <h2 className="font-display text-3xl text-ivory">Check-in lounge</h2>
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-clay">Find players</p>
+              <h2 className="font-display text-3xl text-ivory">Player roster</h2>
               <p className="mt-1 text-xs font-semibold text-linen/60">
-                {loungePlayers.length} of {activePlayers.length} players
+                {rosterPlayers.length} not checked in · {checkedInCount} here tonight
               </p>
             </div>
-            {loungePlayers.some(p => p.checkedIn) && (
-              <Button
-                onClick={() => {
-                  if (confirm("Are you sure you want to checkout all checked-in players? This will clear the current open play rotation.")) {
-                    useClubStore.getState().checkOutAll();
-                  }
-                }}
-                className="bg-clay text-ivory hover:bg-clay/90 min-h-10 px-4 text-xs font-bold"
-              >
-                Checkout All
-              </Button>
-            )}
           </div>
           <div className="relative mt-4">
             <Search aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ivory/45" size={17} />
-            <label className="sr-only" htmlFor="lounge-search">Search check-in lounge players</label>
+            <label className="sr-only" htmlFor="lounge-search">Search player roster</label>
             <input
               id="lounge-search"
               className="control-field w-full rounded-xl py-3 pl-10 pr-10 text-sm text-ivory placeholder:text-ivory/45 focus:outline-none"
@@ -1684,82 +1729,51 @@ function PlayRotationTab() {
               className="rounded text-forest focus:ring-forest bg-white/10 border-white/10"
             />
             <label htmlFor="auto-log-payment" className="cursor-pointer select-none text-ivory">
-              Auto-log 150 PHP payment on check-in
+              Auto-log {formatPeso(CHECK_IN_FEE)} check-in fee (pending until collected)
             </label>
           </div>
-          <div className="mt-4 space-y-3 max-h-96 overflow-y-auto pr-1">
-            {loungePlayers.map((player) => {
-              const activeMatchIds = new Set(
-                matches.filter((m) => m.status === "InProgress").flatMap((m) => [...m.teamAPlayerIds, ...m.teamBPlayerIds])
-              );
-              const isPlaying = activeMatchIds.has(player.id);
-              const isDraggable = player.checkedIn && !isPlaying;
-
-              return (
-                <div
-                  key={player.id}
-                  draggable={isDraggable}
-                  onDragStart={(event) => {
-                    event.dataTransfer.setData("text/player-id", player.id);
-                  }}
-                  className={`flex min-h-16 items-center justify-between gap-3 rounded-xl px-3.5 border border-white/5 ${
-                    !player.checkedIn ? "bg-white/5" : "bg-white/12"
-                  } ${
-                    isDraggable ? "cursor-grab active:cursor-grabbing hover:bg-white/5 transition" : ""
-                  }`}
-                  title={isDraggable ? "Drag player into a stack or court" : !player.checkedIn ? "Check in player to assign them" : undefined}
-                >
-                  <div className="flex items-center gap-2.5">
-                    {isDraggable && <GripVertical size={16} className="text-ivory/30 shrink-0" />}
-                    <div className="relative shrink-0">
-                      <div className="h-10 w-10 rounded-full overflow-hidden bg-forest/10 border border-forest/10">
-                        <img 
-                          src={getPlayerAvatar(player)} 
-                          alt={player.displayName} 
-                          className="h-full w-full object-cover" 
-                        />
-                      </div>
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold text-ivory">{player.displayName}</p>
-                      <p className="text-xs text-linen/75">
-                        {isPlaying ? "Playing" : player.skillLevel} · {player.totalGamesPlayed} games
+          <div className="mt-4 space-y-2 max-h-[36rem] overflow-y-auto pr-1">
+            {rosterPlayers.map((player) => (
+              <div
+                key={player.id}
+                className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/[0.03] px-3.5 py-3 transition hover:bg-white/[0.06]"
+              >
+                <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                  <img
+                    src={getPlayerAvatar(player)}
+                    alt={player.displayName}
+                    className="h-10 w-10 rounded-full object-cover border-2 border-white/10"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="font-bold text-ivory text-sm leading-tight truncate">{player.displayName}</p>
+                    <p className="text-[11px] text-linen/55 mt-0.5">
+                      {player.skillLevel} · {player.totalGamesPlayed} games
+                    </p>
+                    {player.statusNote && (
+                      <p className="mt-0.5 max-w-full truncate text-[10px] font-semibold text-brass/70" title={player.statusNote}>
+                        ✦ {player.statusNote}
                       </p>
-                      {player.statusNote && (
-                        <p className="mt-1 max-w-full truncate text-[10px] font-bold text-linen/70" title={player.statusNote}>
-                          Note: {player.statusNote}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex gap-1.5">
-                    {!player.checkedIn ? (
-                      <Button
-                        onClick={() => checkIn(player.id, autoLogPayment, true)}
-                        className="min-h-10 px-4 text-xs font-black bg-brass text-forest hover:bg-brass/90 shadow-sm"
-                      >
-                        Check In
-                      </Button>
-                    ) : isPlaying ? (
-                      <span className="inline-flex items-center rounded-full bg-amber-100/10 px-3 py-1 text-xs font-bold text-amber-300">
-                        Playing
-                      </span>
-                    ) : (
-                      <Button
-                        onClick={() => checkOut(player.id)}
-                        className="min-h-10 px-3 text-xs font-bold bg-clay text-ivory hover:bg-clay/90"
-                      >
-                        Out
-                      </Button>
                     )}
                   </div>
                 </div>
-              );
-            })}
-            {loungePlayers.length === 0 && (
+                <Button
+                  onClick={() => checkIn(player.id, autoLogPayment, true)}
+                  className="min-h-9 px-4 text-xs font-black bg-brass text-forest hover:bg-brass/90 shadow-sm rounded-xl shrink-0"
+                >
+                  Check In
+                </Button>
+              </div>
+            ))}
+            {rosterPlayers.length === 0 && (
               <div className="rounded-xl bg-white/5 px-4 py-8 text-center">
-                <p className="font-semibold text-ivory">No players found</p>
-                <p className="mt-1 text-xs text-linen/60">Try another name, rank, or tag.</p>
+                <p className="font-semibold text-ivory">
+                  {loungeSearch.trim() ? "No players found" : "Everyone is checked in"}
+                </p>
+                <p className="mt-1 text-xs text-linen/60">
+                  {loungeSearch.trim()
+                    ? "Try another name, rank, or tag."
+                    : "See tonight's players in the Checked-in stack above."}
+                </p>
               </div>
             )}
           </div>
@@ -1848,18 +1862,15 @@ function PlayerHistoryPanel({
   const allPlayers = useClubStore((state) => state.players);
   const matches = useClubStore((state) => state.matches);
   const courts = useClubStore((state) => state.courts);
-  const playerKudos = useClubStore((state) => state.playerKudos);
-  const receivedKudos = kudosForPlayer(playerKudos, player.id);
-  const pillTallies = tallyKudosPills(receivedKudos);
-  const recentNotes = receivedKudos
-    .filter((entry) => entry.note || entry.pills.length > 0)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, 6);
-
   const playerMatches = matches
     .filter((match) => match.status === "Completed" && [...match.teamAPlayerIds, ...match.teamBPlayerIds].includes(player.id))
     .sort((a, b) => new Date(b.endedAt ?? 0).getTime() - new Date(a.endedAt ?? 0).getTime())
     .slice(0, maxMatches);
+
+  const liveStats = React.useMemo(
+    () => computePlayerStats(player.id, matches, courts, useClubStore.getState().matchDurationMinutes),
+    [player.id, matches, courts]
+  );
 
   return (
     <div className={className}>
@@ -1869,49 +1880,14 @@ function PlayerHistoryPanel({
           <p className="text-[9px] font-bold uppercase tracking-wider text-linen/60">Games</p>
         </div>
         <div className="rounded-xl bg-white/5 p-3 text-center">
-          <p className="text-xl font-black text-brass">{player.totalDaysPlayed}</p>
-          <p className="text-[9px] font-bold uppercase tracking-wider text-linen/60">Days</p>
+          <p className="text-xl font-black text-brass">{formatMinutesPlayed(liveStats.minutesPlayed)}</p>
+          <p className="text-[9px] font-bold uppercase tracking-wider text-linen/60">Court Time</p>
         </div>
         <div className="rounded-xl bg-white/5 p-3 text-center">
-          <p className="text-xl font-black text-brass">{player.rating.toFixed(1)}</p>
-          <p className="text-[9px] font-bold uppercase tracking-wider text-linen/60">Rating</p>
+          <p className="text-xl font-black text-brass">{player.totalDaysPlayed}</p>
+          <p className="text-[9px] font-bold uppercase tracking-wider text-linen/60">Visits</p>
         </div>
       </div>
-
-      {pillTallies.length > 0 && (
-        <div className="mt-4">
-          <p className="text-[10px] font-black uppercase tracking-wider text-brass">Kudos received</p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {pillTallies.map(([pill, count]) => (
-              <span key={pill} className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] font-bold text-ivory">
-                {pill}
-                <span className="ml-1.5 rounded-full bg-brass px-1.5 text-[9px] font-black text-forest">{count}</span>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {recentNotes.length > 0 && (
-        <div className="mt-4">
-          <p className="text-[10px] font-black uppercase tracking-wider text-brass">Partner notes</p>
-          <div className="mt-2 max-h-36 space-y-2 overflow-y-auto pr-1">
-            {recentNotes.map((entry) => (
-              <div key={entry.id} className="rounded-xl bg-white/5 px-3 py-2 text-xs">
-                <p className="font-bold text-brass">{entry.fromPlayerName}</p>
-                {entry.pills.length > 0 && (
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {entry.pills.map((pill) => (
-                      <span key={pill} className="rounded-full bg-brass/15 px-2 py-0.5 text-[9px] font-bold text-brass">{pill}</span>
-                    ))}
-                  </div>
-                )}
-                {entry.note && <p className="mt-1 italic text-linen/75">“{entry.note}”</p>}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       <div className="mt-4">
         <p className="text-[10px] font-black uppercase tracking-wider text-brass">Match history</p>
@@ -1925,7 +1901,6 @@ function PlayerHistoryPanel({
               const partners = getMatchOpponentIds(match, player.id)
                 .map((id) => allPlayers.find((item) => item.id === id))
                 .filter((item): item is NonNullable<typeof item> => Boolean(item && !item.isVacant));
-              const matchKudos = kudosForMatch(playerKudos, match.id).filter((entry) => entry.toPlayerId === player.id);
               return (
                 <div key={match.id} className="rounded-xl bg-white/5 px-3 py-2 text-xs">
                   <div className="flex items-center justify-between gap-2">
@@ -1934,13 +1909,6 @@ function PlayerHistoryPanel({
                   </div>
                   {partners.length > 0 && (
                     <p className="mt-1 text-[10px] text-linen/65">With {partners.map((item) => item.displayName).join(", ")}</p>
-                  )}
-                  {matchKudos.length > 0 && (
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {matchKudos.flatMap((entry) => entry.pills).map((pill) => (
-                        <span key={`${match.id}-${pill}`} className="rounded-full bg-brass/15 px-2 py-0.5 text-[9px] font-bold text-brass">{pill}</span>
-                      ))}
-                    </div>
                   )}
                   {match.endedAt && (
                     <span className="mt-1 block text-[10px] text-linen/50">
@@ -2154,7 +2122,6 @@ function PlayersCrudTab() {
       />
     )}
     <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
-      {/* Player List */}
       <Card className="work-surface">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="font-display text-3xl">Player Roster ({filtered.length})</h2>
@@ -2318,7 +2285,7 @@ function PlayersCrudTab() {
                 <img
                   alt="Player photo preview"
                   className="h-20 w-20 shrink-0 rounded-full bg-ivory object-cover"
-                  src={avatarUrl || dicebearAvatar(displayName || "Player", "fun-emoji")}
+                  src={avatarUrl || tapbackAvatar(displayName || "Player")}
                 />
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-bold uppercase tracking-wider text-brass">Profile photo</p>
@@ -2531,7 +2498,7 @@ function PlayersCrudTab() {
 
             {editingPlayer && (
               <div className="border-t border-white/10 pt-4">
-                <p className="text-xs font-black uppercase tracking-wider text-brass mb-3">Play history & kudos</p>
+                <p className="text-xs font-black uppercase tracking-wider text-brass mb-3">Play history</p>
                 <PlayerHistoryPanel player={editingPlayer} maxMatches={12} />
               </div>
             )}
@@ -2800,8 +2767,9 @@ function CalendarView() {
 
   React.useEffect(() => {
     apiFetch("/api/auth?action=me")
-      .then((response) => response.json())
+      .then((response) => parseResponseJson<{ user?: { role?: string } }>(response))
       .then((data) => setIsAuthenticated(data.user?.role === "ADMIN"))
+      .catch(() => setIsAuthenticated(false))
       .finally(() => setCheckingAuth(false));
   }, []);
 
@@ -2814,7 +2782,7 @@ function CalendarView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password })
       });
-      const data = await response.json();
+      const data = await parseResponseJson<{ user?: { role?: string }; error?: string }>(response);
       if (response.ok && data.user?.role === "ADMIN") {
         setIsAuthenticated(true);
         setAuthError("");
@@ -2912,8 +2880,9 @@ function FinanceView() {
 
   React.useEffect(() => {
     apiFetch("/api/auth?action=me")
-      .then((response) => response.json())
+      .then((response) => parseResponseJson<{ user?: { role?: string } }>(response))
       .then((data) => setIsAuthenticated(data.user?.role === "ADMIN"))
+      .catch(() => setIsAuthenticated(false))
       .finally(() => setCheckingAuth(false));
   }, []);
 
@@ -2926,7 +2895,7 @@ function FinanceView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password })
       });
-      const data = await response.json();
+      const data = await parseResponseJson<{ user?: { role?: string }; error?: string }>(response);
       if (response.ok && data.user?.role === "ADMIN") {
         setIsAuthenticated(true);
         setAuthError("");
@@ -3238,14 +3207,41 @@ function CalendarTab() {
 // PAYMENTS & REVENUE TAB
 // ----------------------------------------------------
 function PaymentsTab() {
-  const { transactions, players, addTransaction, voidTransaction } = useClubStore();
+  const { transactions, players, addTransaction, completeTransaction, voidTransaction, deleteTransaction } = useClubStore();
   const [selectedPlayerId, setSelectedPlayerId] = React.useState("");
-  const [txAmount, setTxAmount] = React.useState("150");
-  const [txType, setTxType] = React.useState<"CheckInFee" | "CourtReservation">("CheckInFee");
+  const [txAmount, setTxAmount] = React.useState(String(CHECK_IN_FEE));
+  const [txType, setTxType] = React.useState<"CheckInFee" | "CourtReservation" | "SessionPass">("CheckInFee");
+  const [paymentMethod, setPaymentMethod] = React.useState<PaymentMethod>("Cash");
+  const [referenceNote, setReferenceNote] = React.useState("");
+  const [ledgerRange, setLedgerRange] = React.useState<LedgerRange>("today");
 
-  const successTx = transactions.filter(t => t.status === "Success");
-
-  const totalRevenue = successTx.reduce((sum, t) => sum + t.amount, 0);
+  const outstanding = React.useMemo(
+    () => getOutstandingCheckIns(players, transactions),
+    [players, transactions]
+  );
+  const todayTx = React.useMemo(
+    () => filterTransactionsByRange(transactions, "today"),
+    [transactions]
+  );
+  const weekTx = React.useMemo(
+    () => filterTransactionsByRange(transactions, "week"),
+    [transactions]
+  );
+  const monthTx = React.useMemo(
+    () => filterTransactionsByRange(transactions, "month"),
+    [transactions]
+  );
+  const filteredLedger = React.useMemo(
+    () => filterTransactionsByRange(transactions, ledgerRange)
+      .slice()
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp)),
+    [transactions, ledgerRange]
+  );
+  const todayRevenue = sumSuccessfulRevenue(todayTx);
+  const weekRevenue = sumSuccessfulRevenue(weekTx);
+  const monthRevenue = sumSuccessfulRevenue(monthTx);
+  const pendingCount = countPendingTransactions(transactions);
+  const todayBreakdown = revenueByPaymentMethod(todayTx);
 
   const handleManualTx = async () => {
     if (!selectedPlayerId) {
@@ -3257,109 +3253,285 @@ function PaymentsTab() {
       alert("Please enter a valid amount.");
       return;
     }
+    if ((paymentMethod === "GCash" || paymentMethod === "Maya") && !referenceNote.trim()) {
+      alert("Enter the GCash or Maya reference number.");
+      return;
+    }
     await addTransaction({
       playerId: selectedPlayerId,
       amount: val,
       type: txType,
-      paymentMethod: "Cash"
+      paymentMethod,
+      status: "Success",
+      referenceNote: referenceNote.trim() || undefined
     });
-    alert("Payment added to revenue.");
+    setReferenceNote("");
+    alert("Payment logged.");
   };
 
+  const handleCollectOutstanding = async (playerId: string, pendingId?: string) => {
+    if (pendingId) {
+      await completeTransaction(pendingId);
+      return;
+    }
+    await addTransaction({
+      playerId,
+      amount: CHECK_IN_FEE,
+      type: "CheckInFee",
+      paymentMethod: "Cash",
+      status: "Success"
+    });
+  };
+
+  const handleDeleteLedgerEntry = (transactionId: string, status: string) => {
+    const message =
+      status === "Success"
+        ? "Permanently delete this payment? Use Void if you need to keep an audit trail."
+        : "Delete this ledger entry? This cannot be undone.";
+    if (!confirm(message)) return;
+    void deleteTransaction(transactionId);
+  };
+
+  const ledgerRanges: { key: LedgerRange; label: string }[] = [
+    { key: "today", label: "Today" },
+    { key: "week", label: "This week" },
+    { key: "month", label: "This month" },
+    { key: "all", label: "All time" }
+  ];
+
   return (
-    <div className="grid gap-5 md:grid-cols-3">
-      <Card className="p-5 bg-white/5 backdrop-blur-xl border border-white/10 text-ivory shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem] h-fit">
-        <h3 className="font-display text-2xl text-brass border-b border-white/10 pb-2">Log Payment</h3>
-        <div className="mt-4 space-y-4">
-          <div>
-            <label className="text-[10px] font-black uppercase tracking-[0.2em] text-brass block mb-1">Player</label>
-            <select
-              value={selectedPlayerId}
-              onChange={(e) => setSelectedPlayerId(e.target.value)}
-              className="w-full rounded-xl bg-forest/50 text-white border border-white/10 px-3 py-2 text-sm focus:outline-none"
-            >
-              <option value="" className="text-forest">-- Select Player --</option>
-              {players.map(p => (
-                <option key={p.id} value={p.id} className="text-forest">{p.displayName}</option>
-              ))}
-            </select>
+    <div className="space-y-5">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          { label: "Today", value: formatPeso(todayRevenue), hint: `${pendingCount} pending` },
+          { label: "This week", value: formatPeso(weekRevenue), hint: "Mon–today" },
+          { label: "This month", value: formatPeso(monthRevenue), hint: "Calendar month" },
+          { label: "Outstanding", value: String(outstanding.length), hint: "Checked in, unpaid" }
+        ].map((card) => (
+          <Card key={card.label} className="p-4 bg-white/5 backdrop-blur-xl border border-white/10 text-ivory rounded-[1.5rem]">
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brass">{card.label}</p>
+            <p className="mt-2 font-display text-3xl font-bold text-white">{card.value}</p>
+            <p className="mt-1 text-xs text-linen/70">{card.hint}</p>
+          </Card>
+        ))}
+      </div>
+
+      {outstanding.length > 0 && (
+        <Card className="p-5 bg-amber-500/10 backdrop-blur-xl border border-amber-400/20 text-ivory rounded-[2rem]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-400/20 pb-3">
+            <div>
+              <h3 className="font-display text-2xl text-amber-200">Outstanding check-ins</h3>
+              <p className="text-sm text-linen/75">Players on court rotation who still need to pay {formatPeso(CHECK_IN_FEE)}.</p>
+            </div>
+            <span className="rounded-full bg-amber-400/15 px-3 py-1 text-xs font-black text-amber-100">
+              {outstanding.length} unpaid
+            </span>
           </div>
-          <div>
-            <label className="text-[10px] font-black uppercase tracking-[0.2em] text-brass block mb-1">Fee Amount (PHP)</label>
-            <input
-              type="number"
-              value={txAmount}
-              onChange={(e) => setTxAmount(e.target.value)}
-              className="w-full rounded-xl bg-forest/50 text-white border border-white/10 px-3 py-2 text-sm focus:outline-none"
-            />
-          </div>
-          <div>
-            <label className="text-[10px] font-black uppercase tracking-[0.2em] text-brass block mb-1">Fee Category</label>
-            <div className="flex gap-2">
-              {["CheckInFee", "CourtReservation"].map(type => (
-                <button
-                  key={type}
-                  type="button"
-                  onClick={() => setTxType(type as any)}
-                  className={`flex-1 py-1.5 rounded-lg text-xs font-bold border transition ${txType === type ? 'bg-brass text-forest border-brass' : 'bg-transparent text-white border-white/10 hover:bg-white/5'}`}
+          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {outstanding.map(({ player, pendingTransaction }) => (
+              <div key={player.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
+                <div>
+                  <p className="font-bold text-white">{player.displayName}</p>
+                  <p className="text-xs text-linen/70">
+                    {pendingTransaction ? "Fee logged, awaiting collection" : "No fee logged yet"}
+                  </p>
+                </div>
+                <Button
+                  onClick={() => void handleCollectOutstanding(player.id, pendingTransaction?.id)}
+                  className="shrink-0 bg-brass text-forest hover:bg-brass/90 font-black px-4 py-2 rounded-xl border-none"
                 >
-                  {type === "CheckInFee" ? "Check In" : "Court Rent"}
+                  Mark paid
+                </Button>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
+        <Card className="p-5 bg-white/5 backdrop-blur-xl border border-white/10 text-ivory shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem] h-fit">
+          <h3 className="font-display text-2xl text-brass border-b border-white/10 pb-2">Log payment</h3>
+          <div className="mt-4 space-y-4">
+            <div>
+              <label className="text-[10px] font-black uppercase tracking-[0.2em] text-brass block mb-1">Player</label>
+              <select
+                value={selectedPlayerId}
+                onChange={(e) => setSelectedPlayerId(e.target.value)}
+                className="w-full rounded-xl bg-forest/50 text-white border border-white/10 px-3 py-2 text-sm focus:outline-none"
+              >
+                <option value="" className="text-forest">-- Select player --</option>
+                {players.map((player) => (
+                  <option key={player.id} value={player.id} className="text-forest">{player.displayName}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-black uppercase tracking-[0.2em] text-brass block mb-1">Amount (PHP)</label>
+              <input
+                type="number"
+                value={txAmount}
+                onChange={(e) => setTxAmount(e.target.value)}
+                className="w-full rounded-xl bg-forest/50 text-white border border-white/10 px-3 py-2 text-sm focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] font-black uppercase tracking-[0.2em] text-brass block mb-1">Category</label>
+              <div className="grid grid-cols-3 gap-2">
+                {(["CheckInFee", "CourtReservation", "SessionPass"] as const).map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => {
+                      setTxType(type);
+                      if (type === "CheckInFee") setTxAmount(String(CHECK_IN_FEE));
+                      if (type === "CourtReservation") setTxAmount(String(COURT_HOURLY_FEE));
+                    }}
+                    className={`py-2 rounded-lg text-[11px] font-bold border transition ${
+                      txType === type ? "bg-brass text-forest border-brass" : "bg-transparent text-white border-white/10 hover:bg-white/5"
+                    }`}
+                  >
+                    {type === "CheckInFee" ? "Check-in" : type === "CourtReservation" ? "Court" : "Pass"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="text-[10px] font-black uppercase tracking-[0.2em] text-brass block mb-1">Payment method</label>
+              <div className="grid grid-cols-2 gap-2">
+                {PAYMENT_METHODS.map((method) => (
+                  <button
+                    key={method}
+                    type="button"
+                    onClick={() => setPaymentMethod(method)}
+                    className={`py-2 rounded-lg text-xs font-bold border transition ${
+                      paymentMethod === method ? "bg-brass text-forest border-brass" : "bg-transparent text-white border-white/10 hover:bg-white/5"
+                    }`}
+                  >
+                    {method}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {(paymentMethod === "GCash" || paymentMethod === "Maya") && (
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-brass block mb-1">Reference number</label>
+                <input
+                  value={referenceNote}
+                  onChange={(e) => setReferenceNote(e.target.value)}
+                  placeholder="e.g. 091234567890"
+                  className="w-full rounded-xl bg-forest/50 text-white border border-white/10 px-3 py-2 text-sm focus:outline-none"
+                />
+              </div>
+            )}
+            <Button
+              onClick={() => void handleManualTx()}
+              className="w-full bg-brass text-forest hover:bg-brass/90 font-black py-3 rounded-xl border-none mt-2"
+            >
+              Submit payment
+            </Button>
+          </div>
+        </Card>
+
+        <Card className="p-5 bg-white/5 backdrop-blur-xl border border-white/10 text-ivory shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem] space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
+            <div>
+              <h3 className="font-display text-2xl text-brass font-bold">Revenue ledger</h3>
+              <p className="text-xs text-linen/70 mt-1">
+                Cash {formatPeso(todayBreakdown.Cash)} · GCash {formatPeso(todayBreakdown.GCash)} · Maya {formatPeso(todayBreakdown.Maya)}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {ledgerRanges.map((range) => (
+                <button
+                  key={range.key}
+                  type="button"
+                  onClick={() => setLedgerRange(range.key)}
+                  className={`rounded-full px-3 py-1 text-[11px] font-black border transition ${
+                    ledgerRange === range.key
+                      ? "bg-brass text-forest border-brass"
+                      : "bg-transparent text-white border-white/10 hover:bg-white/5"
+                  }`}
+                >
+                  {range.label}
                 </button>
               ))}
             </div>
           </div>
-          <Button
-            onClick={handleManualTx}
-            className="w-full bg-brass text-forest hover:bg-brass/90 font-black py-3 rounded-xl border-none mt-2"
-          >
-            Submit Transaction
-          </Button>
-        </div>
-      </Card>
 
-      <Card className="p-5 bg-white/5 backdrop-blur-xl border border-white/10 text-ivory shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem] md:col-span-2 space-y-5">
-        <div>
-          <div className="flex justify-between items-center border-b border-white/10 pb-2">
-            <h3 className="font-display text-2xl text-brass font-bold">Revenue Ledger</h3>
-            <span className="bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 text-xs font-black px-3 py-1 rounded-full">
-              Total: PHP {totalRevenue}
-            </span>
-          </div>
-          <div className="mt-3 space-y-2 max-h-48 overflow-y-auto">
-            {transactions.slice().sort((a, b) => b.timestamp.localeCompare(a.timestamp)).map(t => {
-              const player = players.find(p => p.id === t.playerId);
+          <div className="space-y-2 max-h-[28rem] overflow-y-auto pr-1">
+            {filteredLedger.map((transaction) => {
+              const player = players.find((item) => item.id === transaction.playerId);
+              const method = normalizePaymentMethod(transaction.paymentMethod);
+              const isVoided = transaction.status === "Voided";
+              const isPending = transaction.status === "Pending";
               return (
-                <div key={t.id} className={`flex items-center justify-between gap-3 border-b border-white/5 pb-2 text-xs ${t.status === "Voided" ? "opacity-55" : ""}`}>
-                  <div>
-                    <p className="font-bold text-white">{player?.displayName}</p>
-                    <p className="text-ivory/70">{t.type} via {t.paymentMethod} · {t.status}</p>
-                    {t.voidReason && <p className="mt-0.5 text-[10px] text-red-300">Voided: {t.voidReason}</p>}
+                <div
+                  key={transaction.id}
+                  className={`flex items-center justify-between gap-3 rounded-2xl border border-white/5 bg-black/15 px-4 py-3 text-sm ${
+                    isVoided ? "opacity-55" : ""
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <p className="font-bold text-white truncate">{player?.displayName ?? "Unknown player"}</p>
+                    <p className="text-xs text-linen/70">
+                      {formatTransactionType(transaction.type)} · {method} · {transaction.status}
+                    </p>
+                    <p className="text-[11px] text-linen/50">
+                      {new Date(transaction.timestamp).toLocaleString("en-PH", { timeZone: "Asia/Manila" })}
+                    </p>
+                    {transaction.referenceNote && (
+                      <p className="text-[11px] text-brass/90 mt-0.5">Ref: {transaction.referenceNote}</p>
+                    )}
+                    {transaction.voidReason && (
+                      <p className="mt-0.5 text-[10px] text-red-300">Voided: {transaction.voidReason}</p>
+                    )}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`font-mono font-bold ${t.status === "Voided" ? "text-ivory/40 line-through" : "text-emerald-400"}`}>+ PHP {t.amount}</span>
-                    {t.status === "Success" && (
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className={`font-mono font-bold ${
+                      isVoided ? "text-ivory/40 line-through" : isPending ? "text-amber-300" : "text-emerald-400"
+                    }`}>
+                      {formatPeso(transaction.amount)}
+                    </span>
+                    {isPending && (
+                      <button
+                        className="rounded-lg bg-emerald-500/15 px-2 py-1 font-black text-emerald-200 hover:bg-emerald-500/25"
+                        onClick={() => void completeTransaction(transaction.id)}
+                        type="button"
+                      >
+                        Collect
+                      </button>
+                    )}
+                    {transaction.status === "Success" && (
                       <button
                         className="rounded-lg bg-red-500/10 px-2 py-1 font-black text-red-300 hover:bg-red-500/20"
                         onClick={() => {
                           const reason = prompt("Why is this payment being removed?");
                           if (!reason?.trim()) return;
-                          void voidTransaction(t.id, reason);
+                          void voidTransaction(transaction.id, reason);
                         }}
                         type="button"
                       >
                         Void
                       </button>
                     )}
+                    <button
+                      className="rounded-lg bg-white/5 px-2 py-1 font-black text-linen/70 hover:bg-white/10 hover:text-red-200"
+                      onClick={() => handleDeleteLedgerEntry(transaction.id, transaction.status)}
+                      type="button"
+                      title="Delete entry"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 </div>
               );
             })}
-            {transactions.length === 0 && (
-              <p className="text-xs text-ivory/40 italic text-center py-4">No logged revenues yet today.</p>
+            {filteredLedger.length === 0 && (
+              <p className="text-xs text-ivory/40 italic text-center py-8">No transactions in this period.</p>
             )}
           </div>
-        </div>
-      </Card>
+        </Card>
+      </div>
     </div>
   );
 }
@@ -3647,20 +3819,18 @@ function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void }) {
 // PLAYER VIEW SCREEN (QR/PHONE LOGIN INCLUDED)
 // ----------------------------------------------------
 function PlayerView() {
-  const {
-    players,
-    courts,
-    matches,
-    stackOrder,
-    matchDurationMinutes,
-    updatePlayer,
-    submitMatchFeedback,
-    playerKudos,
-    matchReviews,
-    setView,
-    hydrated,
-    refreshSharedState,
-  } = useClubStore();
+  // Narrow selectors so this view only re-renders when court/match/player data
+  // actually changes, not on every unrelated store mutation (toasts, admin UI, etc.).
+  const players = useClubStore((s) => s.players);
+  const courts = useClubStore((s) => s.courts);
+  const matches = useClubStore((s) => s.matches);
+  const stackOrder = useClubStore((s) => s.stackOrder);
+  const matchDurationMinutes = useClubStore((s) => s.matchDurationMinutes);
+  const updatePlayer = useClubStore((s) => s.updatePlayer);
+  const setView = useClubStore((s) => s.setView);
+  const hydrated = useClubStore((s) => s.hydrated);
+  const hydrate = useClubStore((s) => s.hydrate);
+  const refreshSharedState = useClubStore((s) => s.refreshSharedState);
   const [selectedPlayerId, setSelectedPlayerId] = React.useState<string | null>(() => localStorage.getItem("haff-player-account-id"));
   const [sessionMember, setSessionMember] = React.useState<{ playerId?: string; displayName: string } | null>(null);
   const [checkingSession, setCheckingSession] = React.useState(true);
@@ -3669,7 +3839,15 @@ function PlayerView() {
 
   const activePlayers = players.filter((p) => p.isActive !== false);
   const player = activePlayers.find((item) => item.id === selectedPlayerId);
-  const status = player ? getPlayerWaitStatus(player.id, players, courts, matches, stackOrder, matchDurationMinutes, now) : null;
+  // Coarsen the clock dependency to per-minute: queue position and estimated play
+  // times change at most once per minute, so recomputing every second is wasteful
+  // across 100 player tabs. The 1 Hz `now` is still used for display elsewhere.
+  const nowMinute = Math.floor(now / 60_000);
+  const status = React.useMemo(
+    () => player ? getPlayerWaitStatus(player.id, players, courts, matches, stackOrder, matchDurationMinutes, now) : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [player?.id, players, courts, matches, stackOrder, matchDurationMinutes, nowMinute]
+  );
   const assignedMatch = selectedPlayerId
     ? matches.find((match) => match.status === "InProgress" && [...match.teamAPlayerIds, ...match.teamBPlayerIds].includes(selectedPlayerId))
     : undefined;
@@ -3695,32 +3873,39 @@ function PlayerView() {
   const [profilePhotoError, setProfilePhotoError] = React.useState("");
   const [photoCropSource, setPhotoCropSource] = React.useState<string | null>(null);
 
-  const [reviewingMatch, setReviewingMatch] = React.useState<ReturnType<typeof useClubStore.getState>["matches"][number] | null>(null);
-  const [feedbackScores, setFeedbackScores] = React.useState({ scoreA: 0, scoreB: 0 });
-  const [feedbackRecs, setFeedbackRecs] = React.useState<Record<string, { note: string; pills: string[] }>>({});
-  
-  const [endorsementTrigger, setEndorsementTrigger] = React.useState(0);
-  React.useEffect(() => {
-    const handleUpdate = () => setEndorsementTrigger((prev) => prev + 1);
-    window.addEventListener("haff-endorsements-updated", handleUpdate);
-    return () => window.removeEventListener("haff-endorsements-updated", handleUpdate);
-  }, []);
+  // Story share state
+  const [showStoryModal, setShowStoryModal] = React.useState(false);
 
   React.useEffect(() => {
-    void refreshSharedState().finally(() => setRosterSynced(true));
+    // hydrate() in the root App effect already called refreshSharedState on startup.
+    // If the store is already hydrated when PlayerView mounts, skip the duplicate
+    // full-fetch — just unblock the loading screen. Only fetch if we somehow arrive
+    // here before hydration completes (edge case: fast navigation before first load).
+    if (useClubStore.getState().hydrated) {
+      setRosterSynced(true);
+    } else {
+      void refreshSharedState({ force: true, context: "player" }).finally(() => setRosterSynced(true));
+    }
   }, [refreshSharedState]);
+
+  const syncPlayerRoster = React.useCallback(async () => {
+    await hydrate();
+    await refreshSharedState({ force: true, context: "player" });
+    setRosterSynced(true);
+  }, [hydrate, refreshSharedState]);
 
   React.useEffect(() => {
     apiFetch("/api/auth?action=me")
-      .then((response) => response.json())
+      .then((response) => parseResponseJson<{ user?: { playerId?: string | null; displayName: string } | null }>(response))
       .then((data) => {
-        const member = data.user as { playerId?: string; displayName: string } | null;
-        setSessionMember(member);
+        const member = data.user ?? null;
+        setSessionMember(member ? { displayName: member.displayName, playerId: member.playerId ?? undefined } : null);
         if (member?.playerId) {
           localStorage.setItem("haff-player-account-id", member.playerId);
           setSelectedPlayerId(member.playerId);
         }
       })
+      .catch(() => setSessionMember(null))
       .finally(() => setCheckingSession(false));
   }, []);
 
@@ -3736,15 +3921,26 @@ function PlayerView() {
   }, [assignedMatch?.id, dismissedTurnMatchId]);
 
   React.useEffect(() => {
-    if (!rosterSynced || !hydrated) return;
-    if (selectedPlayerId && !player) {
-      localStorage.removeItem("haff-player-account-id");
-      setSelectedPlayerId(null);
-      setLoginMethod(null);
-    }
-  }, [player, selectedPlayerId, rosterSynced, hydrated]);
-  
-  if (checkingSession || !hydrated || (Boolean(selectedPlayerId) && !rosterSynced)) return <LoadingScreen />;
+    if (!rosterSynced || !hydrated || !selectedPlayerId) return;
+    if (player) return;
+    void syncPlayerRoster();
+  }, [player, selectedPlayerId, rosterSynced, hydrated, syncPlayerRoster]);
+
+  // Must be called unconditionally before any early returns (Rules of Hooks).
+  const playerLiveStats = React.useMemo(
+    () => player ? computePlayerStats(player.id, matches, courts, matchDurationMinutes) : null,
+    [player?.id, matches, courts, matchDurationMinutes]
+  );
+
+  if (checkingSession || !hydrated || !rosterSynced) return <LoadingScreen />;
+  if (selectedPlayerId && !player) {
+    return (
+      <div className="mx-auto max-w-lg px-4 py-16 text-center text-ivory">
+        <LoadingScreen />
+        <p className="mt-4 text-sm text-linen/70">Loading your player profile…</p>
+      </div>
+    );
+  }
 
   const startEditing = () => {
     if (!player) return;
@@ -3943,19 +4139,21 @@ function PlayerView() {
             {assignedMatch
               ? `🎾 It's your turn! Head to ${assignedCourt?.name ?? "the court"} now.`
               : player.checkedIn
-              ? `📍 ${status.label} — ${status.stackDetail}`
+              ? `📍 ${status.showCountdown && status.estimatedAt ? formatEstimatedPlayTime(status.estimatedAt, now) : `${status.label}${status.summary ? ` · ${status.summary}` : ""}`}`
               : "You are not checked in yet. Check in at the desk."}
           </span>
         </motion.div>
       )}
       
       {!checkingSession && !sessionMember && (
-        <AuthModal onSuccess={(member) => {
+        <AuthModal onSuccess={async (member) => {
           setSessionMember(member);
           if (member?.playerId) {
             localStorage.setItem("haff-player-account-id", member.playerId);
             setSelectedPlayerId(member.playerId);
           }
+          setRosterSynced(false);
+          await syncPlayerRoster();
         }} />
       )}
 
@@ -4163,10 +4361,10 @@ function PlayerView() {
                     </span>
                   </div>
                   <p className="text-xs text-linen/82 mt-1 font-semibold">
-                    {player.checkedIn 
-                      ? status.label.includes("Court") 
-                        ? "On Court" 
-                        : "Waiting in Rotation Queue"
+                    {player.checkedIn
+                      ? status.label === "Playing now"
+                        ? status.summary
+                        : "In tonight's rotation"
                       : "Inactive · Not in queue"}
                   </p>
                 </div>
@@ -4203,24 +4401,22 @@ function PlayerView() {
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-1.5 text-clay">
                       <Clock size={18} />
-                      <span className="text-[10px] font-bold uppercase tracking-[0.2em]">Approx. Countdown</span>
+                      <span className="text-[10px] font-bold uppercase tracking-[0.2em]">
+                        {status?.showCountdown ? "Estimated play time" : "Queue status"}
+                      </span>
                     </div>
                     <span className="rounded-full bg-forest px-3 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-ivory">
-                      {status.label}
+                      {status?.label}
                     </span>
                   </div>
-                  <PlayerWaitCountdown
-                    playerId={player.id}
-                    players={players}
-                    courts={courts}
-                    matches={matches}
-                    stackOrder={stackOrder}
-                    matchDurationMinutes={matchDurationMinutes}
-                  />
-                  <div className="mt-3 rounded-2xl bg-linen p-3 ring-1 ring-forest/10">
-                    <p className="text-sm font-black leading-tight text-ink">{status.stackDetail}</p>
-                    <p className="mt-1 text-xs leading-relaxed text-ink/75">{status.reason}</p>
-                  </div>
+                  {status?.showCountdown && status.estimatedAt ? (
+                    <p className="mt-3 text-center font-display text-4xl font-black tracking-tight text-forest sm:text-5xl">
+                      {formatEstimatedPlayTime(status.estimatedAt, now)}
+                    </p>
+                  ) : null}
+                  {status?.summary ? (
+                    <p className="mt-3 text-center text-xs font-semibold text-ink/70">{status.summary}</p>
+                  ) : null}
                 </div>
               )}
 
@@ -4367,25 +4563,44 @@ function PlayerView() {
 
             {/* 3. Statistics Card */}
             <div className="mt-4 rounded-xl bg-[#124a39] p-4">
-              <div className="mb-3 flex items-center gap-1.5 border-b border-[#2f7b61] pb-2.5 text-brass">
-                <Activity size={16} />
-                <span className="text-[10px] font-bold uppercase tracking-[0.20em]">Player Statistics</span>
+              <div className="mb-3 flex items-center justify-between border-b border-[#2f7b61] pb-2.5">
+                <div className="flex items-center gap-1.5 text-brass">
+                  <Activity size={16} />
+                  <span className="text-[10px] font-bold uppercase tracking-[0.20em]">Player Statistics</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowStoryModal(true)}
+                  className="flex items-center gap-1 rounded-lg bg-[#2ee882]/10 border border-[#2ee882]/25 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-[#2ee882] hover:bg-[#2ee882]/20 transition"
+                >
+                  <Share2 size={12} />
+                  Share Story
+                </button>
               </div>
-              <div className="grid grid-cols-3 gap-2 text-center">
+
+              <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
                 <div className="rounded-2xl bg-[#073427] p-2.5">
                   <p className="text-2xl font-black text-ivory">{player.totalGamesPlayed}</p>
                   <p className="text-[9px] uppercase tracking-wider text-linen/50 mt-1">Games</p>
                 </div>
                 <div className="rounded-2xl bg-[#073427] p-2.5">
-                  <p className="text-2xl font-black text-ivory">{(player.totalGamesPlayed * 12).toFixed(0)}</p>
-                  <p className="text-[9px] uppercase tracking-wider text-linen/50 mt-1">Minutes</p>
+                  <p className="text-xl font-black text-[#2ee882] leading-tight">
+                    {playerLiveStats ? formatMinutesPlayed(playerLiveStats.minutesPlayed) : "0m"}
+                  </p>
+                  <p className="text-[9px] uppercase tracking-wider text-linen/50 mt-1">Court Time</p>
                 </div>
                 <div className="rounded-2xl bg-[#073427] p-2.5">
                   <p className="text-2xl font-black text-ivory">{player.totalDaysPlayed}</p>
                   <p className="text-[9px] uppercase tracking-wider text-linen/50 mt-1">Visits</p>
                 </div>
+                <div className="rounded-2xl bg-[#073427] p-2.5">
+                  <p className="text-xs font-black text-ivory leading-tight mt-1">
+                    {playerLiveStats?.favCourt?.name ?? "—"}
+                  </p>
+                  <p className="text-[9px] uppercase tracking-wider text-linen/50 mt-1">Fav Court</p>
+                </div>
               </div>
-              
+
               <div className="mt-3 text-center">
                 <p className="text-[10px] text-linen/55">
                   Last visit: <span className="text-ivory font-mono">{formatDate(player.lastPlayedDate)}</span>
@@ -4393,68 +4608,7 @@ function PlayerView() {
               </div>
             </div>
 
-            {/* Kudos & Recommendations Card */}
-            {player && (() => {
-              const received = kudosForPlayer(playerKudos, player.id);
-              const pillTallies = tallyKudosPills(received);
-              const recentNotes = received
-                .filter((entry) => entry.note || entry.pills.length > 0)
-                .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-                .slice(0, 5);
-              const hasEndorsements = pillTallies.length > 0 || recentNotes.length > 0;
-
-              return (
-                <div className="mt-4 rounded-xl bg-[#124a39] p-4 text-ivory" key={endorsementTrigger}>
-                  <div className="mb-3 flex items-center gap-1.5 border-b border-[#2f7b61] pb-2.5 text-brass">
-                    <Sparkles size={16} />
-                    <span className="text-[10px] font-bold uppercase tracking-[0.20em]">Your Kudos</span>
-                  </div>
-
-                  {!hasEndorsements ? (
-                    <p className="text-xs text-linen/50 italic text-center py-4">No kudos yet. Finish a match and teammates can shout out your best shots.</p>
-                  ) : (
-                    <div className="space-y-4">
-                      {pillTallies.length > 0 && (
-                        <div>
-                          <p className="text-[9px] uppercase tracking-wider text-brass font-bold mb-1.5">Top skills recognized</p>
-                          <div className="flex flex-wrap gap-1.5">
-                            {pillTallies.map(([skill, count]) => (
-                              <span key={skill} className="text-[10px] bg-forest border border-white/10 rounded-full px-2.5 py-1 flex items-center gap-1.5 font-bold">
-                                <span>{skill}</span>
-                                <span className="bg-brass text-forest rounded-full h-4 w-4 flex items-center justify-center font-black text-[9px]">{count}</span>
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {recentNotes.length > 0 && (
-                        <div>
-                          <p className="text-[9px] uppercase tracking-wider text-brass font-bold mb-1.5">From your partners</p>
-                          <div className="space-y-2 max-h-40 overflow-y-auto pr-1 scrollbar-none">
-                            {recentNotes.map((entry) => (
-                              <div key={entry.id} className="bg-forest/40 border border-white/5 p-2 rounded-xl text-xs">
-                                <p className="text-brass font-bold">{entry.fromPlayerName}</p>
-                                {entry.pills.length > 0 && (
-                                  <div className="mt-1 flex flex-wrap gap-1">
-                                    {entry.pills.map((pill) => (
-                                      <span key={pill} className="rounded-full bg-brass/15 px-2 py-0.5 text-[9px] font-bold text-brass">{pill}</span>
-                                    ))}
-                                  </div>
-                                )}
-                                {entry.note && <p className="text-linen/90 mt-1 font-medium">“{entry.note}”</p>}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-
-            {/* Recent Games & Feedback Card */}
+            {/* Recent Games */}
             {player && (() => {
               const completedGames = matches
                 .filter((m) => m.status === "Completed" && [...m.teamAPlayerIds, ...m.teamBPlayerIds].includes(player.id))
@@ -4465,190 +4619,40 @@ function PlayerView() {
                 <div className="mt-4 rounded-xl bg-[#124a39] p-4 text-ivory">
                   <div className="mb-3 flex items-center gap-1.5 border-b border-[#2f7b61] pb-2.5 text-brass">
                     <Activity size={16} />
-                    <span className="text-[10px] font-bold uppercase tracking-[0.20em]">Play History & Feedback</span>
+                    <span className="text-[10px] font-bold uppercase tracking-[0.20em]">Play History</span>
                   </div>
 
                   {completedGames.length === 0 ? (
-                    <p className="text-xs text-linen/50 italic text-center py-4">No completed matches yet. Your game history and kudos will show up here.</p>
+                    <p className="text-xs text-linen/50 italic text-center py-4">No completed matches yet.</p>
                   ) : (
                     <div className="space-y-3">
                       {completedGames.map((m) => {
-                        const isReviewed = matchReviews.some((review) => review.matchId === m.id && review.reviewerId === player.id);
                         const court = courts.find((c) => c.id === m.courtId);
                         const teammates = getMatchOpponentIds(m, player.id)
                           .map((id) => players.find((p) => p.id === id))
                           .filter((p): p is NonNullable<typeof p> => Boolean(p && !p.isVacant));
-                        const receivedForMatch = kudosForMatch(playerKudos, m.id).filter((entry) => entry.toPlayerId === player.id);
                         const onTeamA = m.teamAPlayerIds.includes(player.id);
+                        const myScore = onTeamA ? m.scoreA : m.scoreB;
+                        const oppScore = onTeamA ? m.scoreB : m.scoreA;
 
                         return (
                           <div key={m.id} className="rounded-2xl bg-[#073427] p-3 border border-white/5">
-                            <div className="flex justify-between items-start gap-2">
-                              <div>
-                                <p className="text-[10px] font-bold uppercase tracking-wider text-brass">{court?.name ?? "Court"}</p>
-                                <p className="text-xs font-bold text-ivory mt-0.5">
-                                  Final score: <span className="font-mono text-brass">{onTeamA ? m.scoreA : m.scoreB}–{onTeamA ? m.scoreB : m.scoreA}</span>
+                            <div className="min-w-0">
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-brass">{court?.name ?? "Court"}</p>
+                              <p className="text-xs font-bold text-ivory mt-0.5">
+                                <span className="font-mono">{myScore}–{oppScore}</span>
+                              </p>
+                              {teammates.length > 0 && (
+                                <p className="text-[10px] text-linen/65 mt-1 truncate">
+                                  With {teammates.map((p) => p.displayName).join(", ")}
                                 </p>
-                                {teammates.length > 0 && (
-                                  <p className="text-[10px] text-linen/65 mt-1">
-                                    Played with {teammates.map((p) => p.displayName).join(", ")}
-                                  </p>
-                                )}
-                                {receivedForMatch.length > 0 && (
-                                  <div className="mt-2 flex flex-wrap gap-1">
-                                    {receivedForMatch.flatMap((entry) => entry.pills).map((pill) => (
-                                      <span key={`${m.id}-${pill}`} className="rounded-full bg-brass/15 px-2 py-0.5 text-[9px] font-bold text-brass">{pill}</span>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                              <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase shrink-0 ${
-                                isReviewed ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/20" : "bg-amber-500/20 text-amber-300 border border-amber-500/20"
-                              }`}>
-                                {isReviewed ? "Reviewed" : "Leave kudos"}
-                              </span>
+                              )}
+                              {m.endedAt && (
+                                <p className="text-[10px] text-linen/50 mt-0.5">
+                                  {new Date(m.endedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                </p>
+                              )}
                             </div>
-
-                            {reviewingMatch?.id === m.id ? (
-                              <div className="mt-4 border-t border-white/5 pt-3 space-y-4">
-                                <p className="text-xs font-bold text-brass uppercase tracking-wider">Give kudos to your partners</p>
-                                
-                                <div className="grid grid-cols-2 gap-3 bg-forest/20 p-2.5 rounded-xl border border-white/5">
-                                  <div>
-                                    <label className="block text-[10px] uppercase text-linen/60 mb-1">Team A Score</label>
-                                    <input
-                                      type="number"
-                                      min={0}
-                                      value={feedbackScores.scoreA}
-                                      onChange={(e) => setFeedbackScores({ ...feedbackScores, scoreA: Number(e.target.value) })}
-                                      className="w-full bg-[#073427] border-none text-ivory font-mono font-bold text-center rounded px-2 py-1.5"
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="block text-[10px] uppercase text-linen/60 mb-1">Team B Score</label>
-                                    <input
-                                      type="number"
-                                      min={0}
-                                      value={feedbackScores.scoreB}
-                                      onChange={(e) => setFeedbackScores({ ...feedbackScores, scoreB: Number(e.target.value) })}
-                                      className="w-full bg-[#073427] border-none text-ivory font-mono font-bold text-center rounded px-2 py-1.5"
-                                    />
-                                  </div>
-                                </div>
-
-                                <div className="space-y-4">
-                                  {getMatchOpponentIds(m, player.id).map((targetId) => {
-                                    const targetPlayer = players.find((p) => p.id === targetId);
-                                    if (!targetPlayer || targetPlayer.isVacant) return null;
-                                    const rec = feedbackRecs[targetId] || { note: "", pills: [] };
-
-                                    return (
-                                      <div key={targetId} className="bg-forest/15 border border-white/5 p-3 rounded-xl space-y-3">
-                                        <div className="flex items-center gap-2">
-                                          <div className="h-6 w-6 rounded-full overflow-hidden shrink-0 border border-white/10">
-                                            <img src={getPlayerAvatar(targetPlayer)} alt="" className="h-full w-full object-cover" />
-                                          </div>
-                                          <span className="text-xs font-bold text-ivory">{targetPlayer.displayName}</span>
-                                        </div>
-
-                                        <p className="text-[9px] uppercase tracking-wider text-linen/50">Tap compliments (optional note below)</p>
-                                        <div className="flex flex-wrap gap-1">
-                                          {PLAY_KUDOS_PILLS.map((pill) => {
-                                            const isSelected = rec.pills.includes(pill);
-                                            return (
-                                              <button
-                                                key={pill}
-                                                type="button"
-                                                onClick={() => {
-                                                  const nextPills = isSelected
-                                                    ? rec.pills.filter((item) => item !== pill)
-                                                    : [...rec.pills, pill];
-                                                  setFeedbackRecs({
-                                                    ...feedbackRecs,
-                                                    [targetId]: { ...rec, pills: nextPills },
-                                                  });
-                                                }}
-                                                className={`text-[9px] font-semibold px-2 py-1 rounded-full border transition ${
-                                                  isSelected
-                                                    ? "bg-brass text-forest border-brass"
-                                                    : "bg-[#073427]/50 text-linen/70 border-white/10 hover:border-white/20"
-                                                }`}
-                                              >
-                                                {pill}
-                                              </button>
-                                            );
-                                          })}
-                                        </div>
-
-                                        <input
-                                          type="text"
-                                          placeholder={`Short note for ${targetPlayer.displayName.split(" ")[0]} (optional)`}
-                                          value={rec.note}
-                                          onChange={(e) => {
-                                            setFeedbackRecs({
-                                              ...feedbackRecs,
-                                              [targetId]: { ...rec, note: e.target.value },
-                                            });
-                                          }}
-                                          className="w-full bg-[#073427] border-none text-xs text-ivory placeholder:text-ivory/30 rounded px-2.5 py-1.5 focus:ring-1 focus:ring-brass"
-                                        />
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-
-                                <div className="flex gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      if (!player) return;
-                                      await submitMatchFeedback(
-                                        m.id,
-                                        player.id,
-                                        player.displayName,
-                                        feedbackScores.scoreA,
-                                        feedbackScores.scoreB,
-                                        feedbackRecs
-                                      );
-                                      playSound("complete");
-                                      setReviewingMatch(null);
-                                    }}
-                                    className="flex-1 rounded-xl bg-brass px-3 py-2 font-black text-forest text-xs hover:bg-ivory transition"
-                                  >
-                                    Submit Kudos
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setReviewingMatch(null)}
-                                    className="rounded-xl bg-forest/20 px-3 py-2 font-bold text-xs hover:bg-forest/30 transition text-ivory"
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setReviewingMatch(m);
-                                  setFeedbackScores({ scoreA: m.scoreA, scoreB: m.scoreB });
-                                  const initialRecs: Record<string, { note: string; pills: string[] }> = {};
-                                  for (const id of getMatchOpponentIds(m, player.id)) {
-                                    const existing = playerKudos.find(
-                                      (entry) => entry.matchId === m.id && entry.fromPlayerId === player.id && entry.toPlayerId === id
-                                    );
-                                    initialRecs[id] = {
-                                      note: existing?.note ?? "",
-                                      pills: existing?.pills ?? [],
-                                    };
-                                  }
-                                  setFeedbackRecs(initialRecs);
-                                }}
-                                className="mt-3 w-full rounded-xl bg-forest/40 hover:bg-forest/60 border border-white/10 px-3 py-2 text-xs font-bold transition flex items-center justify-center gap-1.5"
-                              >
-                                <span>{isReviewed ? "Edit kudos & score" : "Leave kudos for partners"}</span>
-                              </button>
-                            )}
                           </div>
                         );
                       })}
@@ -4659,6 +4663,18 @@ function PlayerView() {
             })()}
           </Card>
         </div>
+      )}
+
+      {showStoryModal && player && playerLiveStats && (
+        <StoryShareModal
+          playerName={player.displayName}
+          skillLevel={player.skillLevel}
+          avatarUrl={getPlayerAvatar(player)}
+          totalDaysPlayed={player.totalDaysPlayed}
+          lastPlayedDate={player.lastPlayedDate}
+          stats={playerLiveStats}
+          onClose={() => setShowStoryModal(false)}
+        />
       )}
     </motion.section>
   );
@@ -4676,7 +4692,7 @@ function MiniStat({ label, value }: { label: string; value: number }) {
 function PlayerTvPreview() {
   const { courts, matches, players, stackOrder } = useClubStore();
   const queueGroups = getStackDisplayGroups(stackOrder, players, matches, courts, 2);
-  const visibleCourts = sortCourts(courts).slice(0, 4);
+  const visibleCourts = sortCourts(courts);
 
   return (
     <div className="mt-4 overflow-hidden rounded-xl bg-[#124a39]">
@@ -4697,8 +4713,10 @@ function PlayerTvPreview() {
             <span className="rounded-full bg-brass px-2 py-1 text-[9px] font-black uppercase text-forest">Open Play</span>
           </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            {visibleCourts.map((court) => {
+          <div className="mt-3 grid grid-cols-1 gap-2 min-[420px]:grid-cols-2">
+            {visibleCourts.length === 0 ? (
+              <p className="col-span-full py-6 text-center text-xs font-semibold text-linen/50">Courts loading…</p>
+            ) : visibleCourts.map((court) => {
               const match = getActiveCourtMatch(court, matches);
               const names = match
                 ? [...match.teamAPlayerIds, ...match.teamBPlayerIds]
@@ -4869,18 +4887,42 @@ function isFreshTvBroadcast(broadcast: TvBroadcast) {
 }
 
 function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void }) {
-  const { courts, matches, players, stackOrder, clubStatus, refreshSharedState, goBackFromTv, tvBroadcast, online, syncDegraded } = useClubStore();
+  // Narrow selectors prevent the entire TV view from re-rendering on unrelated
+  // store changes (e.g. toasts, player edits that don't affect courts/matches).
+  const courts = useClubStore((s) => s.courts);
+  const matches = useClubStore((s) => s.matches);
+  const players = useClubStore((s) => s.players);
+  const stackOrder = useClubStore((s) => s.stackOrder);
+  const clubStatus = useClubStore((s) => s.clubStatus);
+  const tvBroadcast = useClubStore((s) => s.tvBroadcast);
+  const online = useClubStore((s) => s.online);
+  const syncDegraded = useClubStore((s) => s.syncDegraded);
+  const refreshSharedState = useClubStore((s) => s.refreshSharedState);
+  const goBackFromTv = useClubStore((s) => s.goBackFromTv);
   const now = useNow();
 
   React.useEffect(() => {
     void refreshSharedState({ force: true, context: "tv" });
-    const unsubscribeTvRealtime = subscribeToClubState(
-      () => {
+    // 60 s fallback interval when Realtime is degraded. The app-level Realtime
+    // subscriber (in the root useEffect) already handles TV context and fires a
+    // debounced refresh on every Session change, so we don't need a second
+    // subscribeToClubState here. That avoids a duplicate full-fetch per event.
+    const interval = window.setInterval(() => {
+      if (!document.hidden && !isClubPushHealthy()) {
         void refreshSharedState({ allowUnchanged: true, context: "tv" });
-      },
-      { tv: true }
-    );
-    return () => unsubscribeTvRealtime();
+      }
+    }, 60_000);
+    const onTvRefresh = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type === "haff-tv-refresh") {
+        void refreshSharedState({ force: true, context: "tv" });
+      }
+    };
+    window.addEventListener("message", onTvRefresh);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("message", onTvRefresh);
+    };
   }, [refreshSharedState]);
 
   const matchDurationMinutes = useClubStore((state) => state.matchDurationMinutes);
@@ -5153,11 +5195,28 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
           letter-spacing: -0.02em;
         }
         .tv-court-name {
-          font-size: clamp(1.75rem, 4.5vw, 3.5rem);
+          font-size: clamp(1.25rem, 2.8vw, 2.75rem);
           line-height: 0.95;
+        }
+        @media (max-width: 767px) {
+          .tv-court-name {
+            font-size: clamp(1.5rem, 6vw, 2rem);
+          }
+        }
+        .tv-ready-title {
+          font-size: clamp(1.1rem, 2.2vw, 2rem);
+          line-height: 1.05;
         }
         .tv-player-name {
           font-size: clamp(0.875rem, 1.75vw, 1.35rem);
+        }
+        @media (max-width: 767px) {
+          .tv-player-name-mobile {
+            font-size: clamp(0.95rem, 3.8vw, 1.15rem);
+          }
+          .tv-timer-digits-mobile {
+            font-size: clamp(1.75rem, 7vw, 2.25rem);
+          }
         }
         .tv-timer-digits {
           font-size: clamp(1.35rem, 2.8vw, 2.5rem);
@@ -5263,10 +5322,11 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
       </AnimatePresence>
 
       {/* ── Back button ── */}
-      <div className="fixed left-4 top-4 z-50">
+      <div className="fixed left-2 top-2 z-50 md:left-4 md:top-4">
         <button onClick={() => goBackFromTv()}
-          className="rounded-full border border-ivory/30 bg-ivory/10 px-3 py-1.5 text-xs font-black uppercase tracking-wider text-ivory backdrop-blur hover:bg-ivory hover:text-forest transition flex items-center gap-1.5 shadow-lg">
-          <ArrowLeft className="h-3.5 w-3.5" /> Back
+          className="rounded-full border border-ivory/20 bg-ivory/5 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-ivory/70 backdrop-blur hover:bg-ivory hover:text-forest transition flex items-center gap-1 shadow-md md:border-ivory/30 md:bg-ivory/10 md:px-3 md:py-1.5 md:text-xs md:text-ivory md:shadow-lg md:gap-1.5">
+          <ArrowLeft className="h-3 w-3 md:h-3.5 md:w-3.5" />
+          <span className="sr-only sm:not-sr-only sm:inline">Back</span>
         </button>
       </div>
 
@@ -5285,13 +5345,13 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
         )}
 
       {/* ── Main layout ── */}
-      <div className="mx-auto flex min-h-0 w-full max-w-[1920px] flex-1 flex-col gap-2 overflow-hidden px-3 pb-2 pt-12 sm:px-4 md:gap-3 md:px-6 md:pb-3 md:pt-4">
+      <div className="mx-auto flex min-h-0 w-full max-w-[1920px] flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden px-3 pb-2 pt-9 sm:px-4 md:gap-3 md:overflow-hidden md:px-6 md:pb-3 md:pt-4">
 
         {/* ── Header ── */}
-        <header className="shrink-0 flex flex-col items-center gap-2 text-center md:flex-row md:items-end md:justify-between md:text-left">
+        <header className="order-1 shrink-0 flex flex-col items-center gap-1 text-center md:order-none md:gap-2 md:flex-row md:items-end md:justify-between md:text-left">
           <div>
-            <p className="text-[10px] sm:text-[11px] font-black uppercase tracking-[0.22em] text-ivory/60 leading-none">HAFF LEISURE CLUB</p>
-            <h1 className="font-display text-[clamp(1.75rem,4vw,3.5rem)] font-black leading-none tracking-tighter uppercase text-ivory mt-1">NOW PLAYING</h1>
+            <p className="text-[9px] sm:text-[10px] md:text-[11px] font-black uppercase tracking-[0.22em] text-ivory/60 leading-none">HAFF LEISURE CLUB</p>
+            <h1 className="font-display text-xl sm:text-2xl md:text-[clamp(1.75rem,4vw,3.5rem)] font-black leading-none tracking-tighter uppercase text-ivory mt-0.5 md:mt-1">NOW PLAYING</h1>
           </div>
           <div className="flex items-center justify-center gap-2 md:gap-3 flex-wrap">
             {clubStatus && (
@@ -5312,30 +5372,30 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
           </div>
         </header>
 
-        {/* ── Stack Queue — Mobile ── */}
-        <div className="md:hidden shrink-0 rounded-2xl border border-[#1e4f3a] bg-[#0d2e22] px-3 py-2.5">
-          <p className="text-center text-[10px] font-black uppercase tracking-[0.22em] text-ivory/40 mb-2">Stack queue</p>
-          <div className="grid grid-cols-2 gap-2">
+        {/* ── Stack Queue — Mobile (below courts) ── */}
+        <div className="order-3 md:hidden shrink-0 rounded-xl border border-[#1e4f3a] bg-[#0d2e22] px-2.5 py-2">
+          <p className="text-center text-[9px] font-black uppercase tracking-[0.2em] text-ivory/40 mb-1.5">Stack queue</p>
+          <div className="flex gap-2 overflow-x-auto pb-0.5 snap-x snap-mandatory [-webkit-overflow-scrolling:touch]">
             {displayQueueGroups.slice(0, 4).map((group, index) => {
               const realCount = group.filter((p) => !p.isVacant).length;
               const isStackNext = index === 0;
               return (
-                <div key={index} className="rounded-xl overflow-hidden border border-[#1e4f3a]">
-                  <div className={`flex items-center justify-between px-2.5 py-2 ${isStackNext ? "bg-brass" : "bg-[#173d2c]"}`}>
-                    <span className={`truncate text-[11px] font-black uppercase tracking-wide ${isStackNext ? "text-forest" : "text-ivory/70"}`}>
+                <div key={index} className="min-w-[72%] shrink-0 snap-start rounded-lg overflow-hidden border border-[#1e4f3a]">
+                  <div className={`flex items-center justify-between px-2 py-1.5 ${isStackNext ? "bg-brass" : "bg-[#173d2c]"}`}>
+                    <span className={`truncate text-[10px] font-black uppercase tracking-wide ${isStackNext ? "text-forest" : "text-ivory/70"}`}>
                       {getStackLabel(index)}
                     </span>
-                    <span className={`ml-1.5 shrink-0 text-[11px] font-black tabular-nums ${isStackNext ? "text-forest" : "text-ivory/50"}`}>{realCount}/4</span>
+                    <span className={`ml-1 shrink-0 text-[10px] font-black tabular-nums ${isStackNext ? "text-forest" : "text-ivory/50"}`}>{realCount}/4</span>
                   </div>
-                  <div className="divide-y divide-[#1a3f2e]">
+                  <div className="grid grid-cols-2 gap-px bg-[#1a3f2e]">
                     {group.map((player) => (
-                      <div key={player.id} className="flex items-center gap-2.5 bg-[#0d2e22] px-2.5 py-2.5 min-h-[44px]">
+                      <div key={player.id} className="flex items-center gap-1.5 bg-[#0d2e22] px-2 py-1.5 min-h-[36px]">
                         <img
                           src={getPlayerAvatar(player)}
                           alt=""
-                          className={`h-8 w-8 shrink-0 rounded-full object-cover border ${player.isVacant ? "border-white/10 opacity-20" : "border-brass/30"} bg-[#173d2c]`}
+                          className={`h-6 w-6 shrink-0 rounded-full object-cover border ${player.isVacant ? "border-white/10 opacity-20" : "border-brass/30"} bg-[#173d2c]`}
                         />
-                        <p className={`break-words text-xs font-bold leading-tight ${player.isVacant ? "text-ivory/25 italic" : "text-ivory"}`}>
+                        <p className={`min-w-0 break-words text-[10px] font-bold leading-tight line-clamp-2 ${player.isVacant ? "text-ivory/25 italic" : "text-ivory"}`}>
                           {getPlayerDisplayLabel(player)}
                         </p>
                       </div>
@@ -5348,7 +5408,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
         </div>
 
         {/* ── Stack Queue — Desktop ── */}
-        <div className="hidden md:block shrink-0 rounded-2xl border border-[#1e4f3a] bg-[#0d2e22] px-4 py-2.5">
+        <div className="order-2 hidden md:block shrink-0 rounded-2xl border border-[#1e4f3a] bg-[#0d2e22] px-4 py-2.5">
           <p className="text-center text-[11px] font-black uppercase tracking-[0.22em] text-ivory/40 mb-2">Stack queue</p>
           <div className="grid grid-cols-2 gap-2 lg:grid-cols-4 lg:gap-3">
             {displayQueueGroups.slice(0, 4).map((group, index) => {
@@ -5389,15 +5449,15 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
           </div>
         </div>
 
-        {/* ── Courts ── */}
-        <div className={`mx-auto grid min-h-0 w-full flex-1 gap-2 overflow-hidden sm:gap-3 ${
+        {/* ── Courts — pickleball court diagram scoreboards ── */}
+        <div className={`order-2 md:order-3 mx-auto grid w-full min-w-0 shrink-0 gap-2 md:min-h-0 md:flex-1 md:overflow-hidden md:gap-2 ${
           sortedCourts.length <= 1
             ? "grid-cols-1 max-w-3xl"
             : sortedCourts.length === 2
-              ? "grid-cols-1 sm:grid-cols-2 max-w-6xl"
+              ? "grid-cols-1 md:grid-cols-2 max-w-6xl"
               : sortedCourts.length === 3
-                ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
-                : "grid-cols-1 sm:grid-cols-2"
+                ? "grid-cols-1 md:grid-cols-3"
+                : "grid-cols-1 md:grid-cols-2"
         }`}>
           {sortedCourts.map((court) => {
             const match = getActiveCourtMatch(court, matches);
@@ -5409,172 +5469,31 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
               .map((id) => resolvePlayerById(id, players))
               .filter((player) => !player.isVacant);
             return (
-              <div key={court.id} className={`flex h-full min-h-[min(38vh,360px)] sm:min-h-[min(42vh,400px)] flex-col overflow-hidden rounded-2xl border bg-[#0d2e22] ${
-                isReserved ? "border-amber-400/45 shadow-[0_0_24px_rgba(251,191,36,0.12)]" : "border-[#1e4f3a]"
-              }`}>
-                {/* Court header */}
-                <div className={`flex shrink-0 flex-col items-center border-b border-[#1e4f3a] text-center ${
-                  isPlaying ? "px-2 py-2 sm:px-3" : "px-3 py-3 sm:px-4 sm:py-4"
-                }`}>
-                  <h2 className="font-display tv-court-name font-black uppercase tracking-tight text-ivory">{court.name.toUpperCase()}</h2>
-                  <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
-                  <span className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[10px] sm:text-xs font-black uppercase tracking-wider ${
-                    isPlaying ? "bg-emerald-400/20 text-emerald-300 border border-emerald-400/30" :
-                    court.status === "Maintenance" ? "bg-red-400/20 text-red-300 border border-red-400/30" :
-                    court.status === "Paused" ? "bg-ivory/20 text-ivory/70 border border-white/20" :
-                    isReserved ? "bg-amber-400/20 text-amber-300 border border-amber-400/30" :
-                    "bg-brass/20 text-brass border border-brass/30"
-                  }`}>
-                    <span className={`h-2 w-2 rounded-full ${isPlaying ? "bg-emerald-400 animate-pulse" : "bg-current"}`} />
-                    <span>{isPlaying ? "PLAYING" : court.status === "Maintenance" ? "MAINTENANCE" : court.status === "Paused" ? "PAUSED" : isReserved ? "RESERVED" : "AVAILABLE"}</span>
-                  </span>
-                    {isPlaying && match && (
-                      <button
-                        type="button"
-                        onClick={() => broadcastCourtAnnouncement(court.id, court.name, [...match.teamAPlayerIds, ...match.teamBPlayerIds], "active")}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-brass/35 bg-brass/10 px-3 py-1.5 text-[10px] sm:text-xs font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest min-h-[36px]"
-                        title="Replay court call announcement"
-                      >
-                        <RotateCcw className="h-3.5 w-3.5" />
-                        <span>Announce</span>
-                      </button>
-                    )}
-                    {isReserved && !isPlaying && (
-                      <button
-                        type="button"
-                        onClick={() => broadcastCourtAnnouncement(
-                          court.id,
-                          court.name,
-                          court.reservedPlayerIds ?? [],
-                          "reserved"
-                        )}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-brass/35 bg-brass/10 px-3 py-1.5 text-[10px] sm:text-xs font-black uppercase tracking-wider text-brass transition hover:bg-brass hover:text-forest min-h-[36px]"
-                        title="Replay court call announcement"
-                      >
-                        <Megaphone className="h-3.5 w-3.5" />
-                        <span>Announce</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Court body */}
-                {isPlaying ? (
-                  <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch gap-x-1.5 overflow-hidden px-2 py-2 sm:gap-x-2 sm:px-3 sm:py-2.5">
-                    <div className="flex min-h-0 flex-col justify-center gap-1 sm:gap-1.5">
-                      {teamA.length > 0 ? teamA.map((p) => p && (
-                        <TvPlayerCard key={p.id} player={p} playerNote={playerNote(p)} noteIcon={noteIcon(playerNote(p))} getPlayerAvatar={getPlayerAvatar} tvCourt />
-                      )) : (
-                        <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-[#1e4f3a]/80 bg-[#05241c]/40 py-3">
-                          <span className="text-ivory/25 text-xs font-bold">—</span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex shrink-0 items-center justify-center px-0.5">
-                      {match && <TvElapsedTimer matchId={match.id} variant="compact" />}
-                    </div>
-
-                    <div className="flex min-h-0 flex-col justify-center gap-1 sm:gap-1.5">
-                      {teamB.length > 0 ? teamB.map((p) => p && (
-                        <TvPlayerCard key={p.id} player={p} playerNote={playerNote(p)} noteIcon={noteIcon(playerNote(p))} getPlayerAvatar={getPlayerAvatar} tvCourt />
-                      )) : (
-                        <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-[#1e4f3a]/80 bg-[#05241c]/40 py-3">
-                          <span className="text-ivory/25 text-xs font-bold">—</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : isReserved ? (
-                  <div className="flex flex-1 flex-col items-center justify-center gap-3 p-4 sm:p-5 bg-gradient-to-b from-amber-500/[0.14] to-transparent text-center">
-                    <div className="flex items-center gap-2 rounded-full border border-amber-400/35 bg-amber-400/10 px-4 py-2">
-                      <Lock className="h-5 w-5 text-amber-300" />
-                      <span className="text-base sm:text-xl font-black uppercase tracking-[0.18em] text-amber-200">Court Reserved</span>
-                    </div>
-                    {court.reservedFor && (
-                      <p className="text-center text-sm sm:text-lg font-bold text-amber-100/90 break-words max-w-full px-2">
-                        {court.reservedFor}
-                      </p>
-                    )}
-                    {reservedPlayers.length > 0 ? (
-                      <div className="grid w-full max-w-md grid-cols-2 gap-1.5 sm:gap-2">
-                        {reservedPlayers.map((player) => (
-                          <TvPlayerCard
-                            key={player.id}
-                            player={player}
-                            playerNote={playerNote(player)}
-                            noteIcon={noteIcon(playerNote(player))}
-                            getPlayerAvatar={getPlayerAvatar}
-                            variant="reserved"
-                            tvCourt
-                          />
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-xs sm:text-sm font-bold uppercase tracking-[0.2em] text-amber-200/70">Held for upcoming play</p>
-                    )}
-                    <p className="text-[10px] sm:text-xs font-bold uppercase tracking-widest text-ivory/35">Not open for walk-ups</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-1 flex-col items-center justify-center gap-3 sm:gap-4 p-4 sm:p-6 text-center">
-                    {court.status === "Maintenance" ? (
-                      <>
-                        <div className="rounded-full bg-red-500/10 p-4 sm:p-6 border border-red-400/20">
-                          <svg className="h-12 w-12 sm:h-16 sm:w-16 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                          </svg>
-                        </div>
-                        <p className="text-xl sm:text-3xl font-black uppercase text-red-400 tracking-wider">Under Maintenance</p>
-                        <p className="text-xs sm:text-sm font-bold text-red-300/50 uppercase tracking-wide">Temporarily out of service</p>
-                      </>
-                    ) : court.status === "Paused" ? (
-                      <>
-                        <div className="rounded-full bg-amber-500/10 p-4 sm:p-6 border border-amber-400/20">
-                          <svg className="h-12 w-12 sm:h-16 sm:w-16 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                        </div>
-                        <p className="text-xl sm:text-3xl font-black uppercase text-amber-400 tracking-wider">Paused</p>
-                        <p className="text-xs sm:text-sm font-bold text-amber-300/50 uppercase tracking-wide">Play will resume shortly</p>
-                      </>
-                    ) : (
-                      <>
-                        <div className="relative">
-                          <div className="absolute inset-0 bg-brass/20 blur-2xl rounded-full animate-pulse" />
-                          <div className="relative rounded-full bg-gradient-to-br from-brass/20 to-emerald-500/10 p-5 sm:p-7 border-2 border-brass/30 shadow-[0_0_30px_rgba(201,168,76,0.15)]">
-                            <svg className="h-14 w-14 sm:h-20 sm:w-20 text-brass" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                            </svg>
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          <span className="block text-2xl sm:text-[clamp(2.5rem,5vw,4rem)] font-black uppercase text-brass tracking-wider drop-shadow-[0_2px_8px_rgba(201,168,76,0.3)]">
-                            Ready to Play
-                          </span>
-                          <div className="flex flex-col gap-1">
-                            <p className="text-sm sm:text-lg font-bold text-emerald-300/90 uppercase tracking-wide">
-                              Court is open
-                            </p>
-                            <p className="text-xs sm:text-sm font-medium text-ivory/40 tracking-wide">
-                              Join the queue or start a match
-                            </p>
-                          </div>
-                        </div>
-                        <div className="mt-2 flex items-center gap-2 rounded-full bg-brass/5 border border-brass/20 px-4 py-2">
-                          <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
-                          <span className="text-[10px] sm:text-xs font-black uppercase tracking-widest text-brass/80">Available Now</span>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
+              <TvPickleballCourt
+                key={court.id}
+                court={court}
+                match={match ?? undefined}
+                teamA={teamA}
+                teamB={teamB}
+                reservedPlayers={reservedPlayers}
+                getPlayerAvatar={getPlayerAvatar}
+                onAnnounce={
+                  isPlaying && match
+                    ? () => broadcastCourtAnnouncement(court.id, court.name, [...match.teamAPlayerIds, ...match.teamBPlayerIds], "active")
+                    : isReserved
+                      ? () => broadcastCourtAnnouncement(court.id, court.name, court.reservedPlayerIds ?? [], "reserved")
+                      : undefined
+                }
+                timerSlot={
+                  match ? <TvElapsedTimer matchId={match.id} variant="court-baseline" /> : undefined
+                }
+              />
             );
           })}
         </div>
 
         {/* ── Footer note ── */}
-        <p className="shrink-0 text-center text-[10px] font-bold text-ivory/25 tracking-wide pb-2">
+        <p className="order-4 shrink-0 text-center text-[10px] font-bold text-ivory/25 tracking-wide pb-2 md:order-none">
           ⓘ Open Play is self-officiated. Please rotate in and out of play. Have fun and be respectful!
         </p>
       </div>
@@ -5591,6 +5510,8 @@ function TvPlayerCard({
   compact = false,
   tv = false,
   tvCourt = false,
+  tvCourtMobile = false,
+  tvCourtRow = false,
 }: {
   player: { id: string; displayName: string; rating: number; avatarUrl?: string; skillLevel: string };
   playerNote: string;
@@ -5600,23 +5521,66 @@ function TvPlayerCard({
   compact?: boolean;
   tv?: boolean;
   tvCourt?: boolean;
+  tvCourtMobile?: boolean;
+  tvCourtRow?: boolean;
 }) {
   const borderClass = variant === "reserved" ? "border-amber-400/30 bg-[#173d2c]/90" : "border-[#1e4f3a] bg-[#132e24] shadow-[inset_0_1px_0_rgba(201,168,76,0.06)]";
   const avatarBorderClass = variant === "reserved" ? "border-amber-300/40" : "border-brass/40";
 
-  if (tvCourt) {
+  /* ── Unified court row used for both mobile and desktop ── */
+  if (tvCourtRow) {
     return (
-      <div className={`flex min-h-0 min-w-0 items-center gap-2 rounded-lg border px-2 py-1.5 sm:px-2.5 sm:py-2 ${borderClass}`}>
+      <div className={`flex min-h-0 min-w-0 items-center gap-2 sm:gap-3 rounded-xl border px-2.5 py-2.5 sm:px-3 sm:py-3 ${borderClass}`}>
         <img
           src={getPlayerAvatar(player)}
           alt=""
-          className={`h-8 w-8 sm:h-9 sm:w-9 shrink-0 rounded-full border-2 object-cover bg-[#0d2e22] ${avatarBorderClass}`}
+          className={`h-10 w-10 sm:h-12 sm:w-12 shrink-0 rounded-full border-2 object-cover bg-[#0d2e22] shadow-md ${avatarBorderClass}`}
         />
-        <div className="min-w-0 flex-1 text-left">
-          <p className="tv-player-name truncate text-xs sm:text-sm font-black text-ivory leading-tight">
+        <div className="min-w-0 flex-1">
+          <p className="tv-player-name font-black text-ivory leading-tight line-clamp-2 break-words">
             {getPlayerDisplayLabel(player)}
           </p>
-          <p className="truncate text-[8px] sm:text-[9px] font-black uppercase tracking-wide text-ivory/55">
+          <p className="mt-0.5 truncate text-[9px] sm:text-[10px] font-black uppercase tracking-wide text-ivory/55">
+            {player.skillLevel}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (tvCourtMobile) {
+    return (
+      <div className={`flex min-h-0 min-w-0 flex-col items-center gap-2 rounded-xl border px-2.5 py-2.5 text-center ${borderClass}`}>
+        <img
+          src={getPlayerAvatar(player)}
+          alt=""
+          className={`h-12 w-12 shrink-0 rounded-full border-2 object-cover bg-[#0d2e22] shadow-lg ${avatarBorderClass}`}
+        />
+        <div className="min-w-0 w-full">
+          <p className="tv-player-name-mobile break-words font-black text-ivory leading-tight line-clamp-2">
+            {getPlayerDisplayLabel(player)}
+          </p>
+          <p className="mt-0.5 truncate text-[9px] font-black uppercase tracking-wide text-ivory/55">
+            {player.skillLevel}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (tvCourt) {
+    return (
+      <div className={`flex min-h-0 min-w-0 items-center gap-2.5 rounded-xl border px-3 py-2.5 md:gap-2 md:rounded-lg md:px-2 md:py-1.5 md:px-2.5 md:py-2 ${borderClass}`}>
+        <img
+          src={getPlayerAvatar(player)}
+          alt=""
+          className={`h-10 w-10 sm:h-11 sm:w-11 md:h-8 md:w-8 shrink-0 rounded-full border-2 object-cover bg-[#0d2e22] ${avatarBorderClass}`}
+        />
+        <div className="min-w-0 flex-1 text-left">
+          <p className="tv-player-name break-words text-sm sm:text-base md:truncate md:text-xs font-black text-ivory leading-tight line-clamp-2 md:line-clamp-1">
+            {getPlayerDisplayLabel(player)}
+          </p>
+          <p className="truncate text-[9px] sm:text-[10px] md:text-[8px] font-black uppercase tracking-wide text-ivory/55">
             {player.skillLevel}
           </p>
         </div>
@@ -5686,13 +5650,32 @@ function TvPlayerCard({
   );
 }
 
-function TvElapsedTimer({ matchId, compact = false, variant = "default" }: { matchId: string; compact?: boolean; variant?: "default" | "divider" | "compact" }) {
+function TvElapsedTimer({ matchId, compact = false, variant = "default" }: { matchId: string; compact?: boolean; variant?: "default" | "divider" | "compact" | "mobile" | "bar" | "court-baseline" }) {
   const match = useClubStore((state) => state.matches.find((m) => m.id === matchId));
   const durationMinutes = useClubStore((state) => state.matchDurationMinutes);
   const now = useSmoothNow(Boolean(match?.startedAt && !match?.timerPausedAt));
   if (!match?.startedAt || match.status === "Completed") return null;
   const remainingMs = getRemainingMilliseconds(match.startedAt, durationMinutes, now, match.timerPausedAt);
   const overtime = remainingMs < 0;
+
+  if (variant === "mobile") {
+    return (
+      <div className="flex shrink-0 w-full items-center gap-2 py-1" aria-label={overtime ? "Overtime" : "Time remaining"}>
+        <div className="h-px flex-1 bg-gradient-to-r from-transparent via-[#1e4f3a] to-brass/35" />
+        <div className={`flex flex-col items-center rounded-xl border px-5 py-2 tabular-nums ${
+          overtime ? "border-red-400/35 bg-red-500/10" : "border-brass/35 bg-[#05241c]/80"
+        }`}>
+          <span className={`tv-timer-digits-mobile font-black leading-none ${overtime ? "text-red-400 animate-pulse" : "text-brass"}`}>
+            <CountdownClock totalMs={Math.abs(remainingMs)} prefix={overtime ? "-" : ""} />
+          </span>
+          <span className="mt-0.5 text-[9px] font-black uppercase tracking-[0.18em] text-ivory/40">
+            {overtime ? "OVERTIME" : "TIME LEFT"}
+          </span>
+        </div>
+        <div className="h-px flex-1 bg-gradient-to-l from-transparent via-[#1e4f3a] to-brass/35" />
+      </div>
+    );
+  }
 
   if (variant === "divider") {
     return (
@@ -5724,6 +5707,30 @@ function TvElapsedTimer({ matchId, compact = false, variant = "default" }: { mat
         <span className="text-[7px] sm:text-[8px] font-black uppercase tracking-wider text-ivory/40">
           {overtime ? "OT" : "LEFT"}
         </span>
+      </div>
+    );
+  }
+
+  if (variant === "bar") {
+    return (
+      <div className="flex items-center justify-center gap-2.5 tabular-nums" aria-label={overtime ? "Overtime" : "Time remaining"}>
+        <span className={`tv-timer-digits-mobile font-black leading-none ${overtime ? "text-red-400 animate-pulse" : "text-brass"}`}>
+          <CountdownClock totalMs={Math.abs(remainingMs)} prefix={overtime ? "-" : ""} />
+        </span>
+        <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] text-ivory/40">
+          {overtime ? "OVERTIME" : "TIME LEFT"}
+        </span>
+      </div>
+    );
+  }
+
+  if (variant === "court-baseline") {
+    return (
+      <div className="tv-court-timer" aria-label={overtime ? "Overtime" : "Time remaining"}>
+        <span className={`tv-court-timer__digits ${overtime ? "tv-court-timer__digits--overtime" : ""}`}>
+          <CountdownClock totalMs={Math.abs(remainingMs)} prefix={overtime ? "-" : ""} />
+        </span>
+        <span className="tv-court-timer__label">{overtime ? "OVERTIME" : "MATCH CLOCK"}</span>
       </div>
     );
   }
@@ -5800,12 +5807,6 @@ function getRemainingSeconds(startedAt: string, durationMinutes: number, now: nu
   return Math.ceil(remainingMs / 1000);
 }
 
-function getRemainingMilliseconds(startedAt: string, durationMinutes: number, now: number, timerPausedAt?: string) {
-  const effectiveNow = timerPausedAt ? new Date(timerPausedAt).getTime() : now;
-  const elapsedMs = effectiveNow - new Date(startedAt).getTime();
-  return durationMinutes * 60_000 - elapsedMs;
-}
-
 function formatClockSeconds(totalSeconds: number) {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -5865,35 +5866,6 @@ function CountdownClock({ totalMs, className = "", prefix = "" }: { totalMs: num
   );
 }
 
-function PlayerWaitCountdown({
-  playerId,
-  players,
-  courts,
-  matches,
-  stackOrder,
-  matchDurationMinutes,
-}: {
-  playerId: string;
-  players: ReturnType<typeof useClubStore.getState>["players"];
-  courts: ReturnType<typeof useClubStore.getState>["courts"];
-  matches: ReturnType<typeof useClubStore.getState>["matches"];
-  stackOrder: string[];
-  matchDurationMinutes: number;
-}) {
-  const now = useSmoothNow(true);
-  const { estimatedMs } = getPlayerWaitStatus(playerId, players, courts, matches, stackOrder, matchDurationMinutes, now);
-  return (
-    <div className="mt-3 grid grid-cols-3 gap-2.5">
-      {formatDurationParts(estimatedMs).map((part) => (
-        <div key={part.label} className="rounded-[1rem] bg-[#06241B] px-2 py-3.5 text-center text-ivory shadow-[0_14px_30px_rgba(6,36,27,0.24)] ring-1 ring-forest/20">
-          <p className={`text-4xl font-black leading-none tracking-normal tabular-nums sm:text-5xl ${part.label === "seconds" ? "countdown-digits" : ""}`}>{part.value}</p>
-          <p className="mt-2 text-[9px] font-black uppercase tracking-[0.16em] text-linen/75">{part.label}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function rankKey(skillLevel: ReturnType<typeof useClubStore.getState>["players"][number]["skillLevel"]) {
   return skillLevel.toLowerCase().replace(/\s+/g, "-");
 }
@@ -5939,83 +5911,44 @@ function getWaitingGroups(
   return getStackDisplayGroups(stackOrder, players, matches, courts);
 }
 
-function getPlayerWaitStatus(
-  playerId: string,
-  players: ReturnType<typeof useClubStore.getState>["players"],
-  courts: ReturnType<typeof useClubStore.getState>["courts"],
-  matches: ReturnType<typeof useClubStore.getState>["matches"],
-  stackOrder: string[],
-  matchDurationMinutes: number,
-  now: number
-) {
-  const player = players.find((item) => item.id === playerId);
-  if (!player?.checkedIn) {
-    return {
-      label: "Check in first",
-      reason: "Once checked in, the system can place you in the waiting order.",
-      stackDetail: "You are not in the rotation yet.",
-      estimatedMs: 0
-    };
-  }
-  const activeMatch = matches.find((match) => match.status === "InProgress" && [...match.teamAPlayerIds, ...match.teamBPlayerIds].includes(playerId));
-  if (activeMatch) {
-    const court = courts.find((item) => item.id === activeMatch.courtId);
-    return {
-      label: "Playing now",
-      reason: `You are currently assigned to ${court?.name ?? "a court"}.`,
-      stackDetail: `${court?.name ?? "Court"} is active now.`,
-      estimatedMs: 0
-    };
-  }
-  const waiting = getWaitingPlayers(players, matches, courts, stackOrder);
-  const position = waiting.findIndex((item) => item.id === playerId);
-  if (position < 0) {
-    return {
-      label: "Joining queue",
-      reason: "Your check-in is active. The shared queue is updating now.",
-      stackDetail: "You will appear in the next open stack slot.",
-      estimatedMs: 0
-    };
-  }
-  const rotationCourts = Math.max(1, courts.filter((court) => court.status !== "Maintenance" && court.status !== "Paused").length);
-  const playersPerWave = rotationCourts * 4;
-  const wave = Math.floor(Math.max(0, position) / playersPerWave);
-  const stackNumber = Math.floor(Math.max(0, position) / 4) + 1;
-  const stackSlot = (Math.max(0, position) % 4) + 1;
-  const activeRemainingMs = matches
-    .filter((match) => match.status === "InProgress" && match.startedAt)
-    .map((match) => Math.max(0, getRemainingMilliseconds(match.startedAt!, matchDurationMinutes, now, match.timerPausedAt)));
-  const nextCourtMs = activeRemainingMs.length ? Math.min(...activeRemainingMs) : Math.max(120_000, Math.ceil((matchDurationMinutes * 60_000) / 3));
-  const estimatedMs = Math.max(0, nextCourtMs + wave * matchDurationMinutes * 60_000);
-  return {
-    label: position < 4 ? "Next stack" : `Stack wave ${wave + 1}`,
-    reason: `You are #${position + 1} in the waiting order. Estimate uses ${matchDurationMinutes} minutes per game and ${rotationCourts} active court${rotationCourts === 1 ? "" : "s"}.`,
-    stackDetail: `Stack ${stackNumber}, slot ${stackSlot}. Estimated from the current court timer and the open play rotation.`,
-    estimatedMs
-  };
-}
-
-function formatDurationParts(totalMs: number) {
-  const safeMs = Math.max(0, Math.floor(totalMs));
-  const hours = Math.floor(safeMs / 3_600_000);
-  const minutes = Math.floor((safeMs % 3_600_000) / 60_000);
-  const seconds = Math.floor((safeMs % 60_000) / 1000);
-  const centiseconds = Math.floor((safeMs % 1000) / 10);
-  return [
-    { label: "hours", value: String(hours).padStart(2, "0") },
-    { label: "minutes", value: String(minutes).padStart(2, "0") },
-    { label: "seconds", value: `${String(seconds).padStart(2, "0")}.${String(centiseconds).padStart(2, "0")}` }
-  ];
-}
-
 function Metric({ label, value }: { label: string; value: number }) {
   return <div className="rounded-2xl bg-ivory/12 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"><p className="font-display text-4xl leading-none">{value}</p><p className="text-[10px] uppercase tracking-[0.2em] text-linen/70 mt-1.5">{label}</p></div>;
 }
 
 function MatchLine({ matchId }: { matchId: string }) {
   const match = useClubStore((state) => state.matches.find((item) => item.id === matchId));
+  const players = useClubStore((state) => state.players);
   if (!match) return null;
-  return <div className="mt-6"><PlayerNames ids={match.teamAPlayerIds} className="font-display text-2xl text-forest" showRanks /><p className="my-1 text-xs uppercase tracking-[0.2em] text-clay">vs</p><PlayerNames ids={match.teamBPlayerIds} className="font-display text-2xl text-forest" showRanks /><CourtTimer matchId={match.id} size="small" /><p className="mt-4 text-xs font-bold uppercase tracking-[0.22em] text-forest/75">Tap Finish when this court is done</p></div>;
+
+  const renderTeam = (ids: string[]) => (
+    <div className="flex flex-col gap-1.5">
+      {ids.map((id) => {
+        const p = players.find((pl) => pl.id === id);
+        if (!p || p.isVacant) return null;
+        return (
+          <div key={id} className="flex items-center gap-2 rounded-lg bg-white/5 px-2.5 py-1.5 cursor-grab active:cursor-grabbing" draggable onDragStart={(e) => e.dataTransfer.setData("text/player-id", id)}>
+            <img src={getPlayerAvatar(p)} alt="" className="h-7 w-7 shrink-0 rounded-full border border-brass/30 object-cover bg-forest/20" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-black text-ivory leading-tight">{p.displayName.split(" ")[0]}</p>
+              <p className="truncate text-[8px] uppercase tracking-wide text-linen/50">{p.skillLevel}</p>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  return (
+    <div className="mt-3">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-x-2">
+        {renderTeam(match.teamAPlayerIds)}
+        <span className="text-[9px] font-black uppercase tracking-widest text-clay/70">vs</span>
+        {renderTeam(match.teamBPlayerIds)}
+      </div>
+      <CourtTimer matchId={match.id} size="small" />
+      <p className="mt-3 text-[9px] font-bold uppercase tracking-[0.18em] text-ivory/40">Tap Finish when done · drag players to swap</p>
+    </div>
+  );
 }
 
 function PlayerNames({
@@ -6197,9 +6130,10 @@ function StackBuilder({
   const addEmptyStack = useClubStore((state) => state.addEmptyStack);
   const removeStackAtIndex = useClubStore((state) => state.removeStackAtIndex);
   const setStackSlotKind = useClubStore((state) => state.setStackSlotKind);
-  const waitingGroups = getStackDisplayGroups(stackOrder, players, matches, courts, 24);
+  const waitingGroups = getStackDisplayGroups(stackOrder, players, matches, courts, MAX_STACKS);
   const waiting = getWaitingPlayers(players, matches, courts, stackOrder);
   const stackSlotCount = stackOrder.length;
+  const atStackLimit = waitingGroups.length >= MAX_STACKS;
   const [draggingPlayerId, setDraggingPlayerId] = React.useState<string | null>(null);
   const [draggingStackIndex, setDraggingStackIndex] = React.useState<number | null>(null);
   const [dragOverStackIndex, setDragOverStackIndex] = React.useState<number | null>(null);
@@ -6262,14 +6196,14 @@ function StackBuilder({
     <Card className="overflow-hidden bg-white/5 backdrop-blur-xl border border-white/10 text-ivory">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <p className="text-xs font-bold uppercase tracking-[0.24em] text-brass">Queue manager</p>
+          <p className="text-xs font-bold uppercase tracking-[0.24em] text-brass">Play order</p>
           <h2 className="font-display text-2xl leading-tight sm:text-3xl">
-            <span className="lg:hidden">Set the play order</span>
-            <span className="hidden lg:inline">Drag stacks or players to reorder</span>
+            <span className="lg:hidden">Queue stacks</span>
+            <span className="hidden lg:inline">Queue stacks — who plays next</span>
           </h2>
         </div>
         <p className="max-w-xs text-xs leading-5 text-linen/65 sm:text-right">
-          Drag stacks to reorder, use the position menu, or delete empty stacks. Tap + on open slots to add players.
+          Groups of 4 in play order. Drag from the checked-in stack above, reorder stacks, then Assign Courts.
         </p>
       </div>
       {searchSlotIndex !== null && (
@@ -6372,7 +6306,7 @@ function StackBuilder({
                   onClick={() => {
                     if (filledCount > 0) {
                       const ok = window.confirm(
-                        `Delete ${getStackLabel(groupIndex)}? ${filledCount} player(s) will move back into rotation.`
+                        `Delete ${getStackLabel(groupIndex)}? ${filledCount} player(s) will move to the end of the queue.`
                       );
                       if (!ok) return;
                     }
@@ -6546,11 +6480,20 @@ function StackBuilder({
         <button
           type="button"
           onClick={() => void addEmptyStack()}
-          className="flex min-h-28 w-full flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-brass/35 bg-[#0d2e22] p-3 text-brass transition hover:border-brass/60 hover:bg-[#132e24]"
+          disabled={atStackLimit}
+          className={`flex min-h-28 w-full flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed p-3 transition ${
+            atStackLimit
+              ? "cursor-not-allowed border-ivory/15 bg-[#0d2e22]/60 text-ivory/35"
+              : "border-brass/35 bg-[#0d2e22] text-brass hover:border-brass/60 hover:bg-[#132e24]"
+          }`}
         >
           <Plus size={24} strokeWidth={2.5} />
-          <span className="text-xs font-black uppercase tracking-wider">Add stack</span>
-          <span className="text-[10px] font-semibold text-linen/55">4 empty slots</span>
+          <span className="text-xs font-black uppercase tracking-wider">
+            {atStackLimit ? "Max stacks reached" : "Add stack"}
+          </span>
+          <span className="text-[10px] font-semibold text-linen/55">
+            {atStackLimit ? `${MAX_STACKS} of ${MAX_STACKS} stacks` : "4 empty slots"}
+          </span>
         </button>
         {waitingGroups.length === 0 && (
           <div className="col-span-full rounded-xl border border-dashed border-[#1e4f3a] bg-[#0d2e22] py-8 text-center">
