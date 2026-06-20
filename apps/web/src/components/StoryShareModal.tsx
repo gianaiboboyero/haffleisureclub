@@ -1,358 +1,29 @@
 import React from "react";
 import { X, Download, Copy, CheckCheck, Share2, HelpCircle } from "lucide-react";
-import type { PlayerGameStats } from "../lib/playerStats";
-import { formatMinutesPlayed } from "../lib/playerStats";
-import { copyElementAsImageToClipboard, downloadElementAsImage } from "../lib/storyShare";
+import { copyElementAsImageToClipboard, downloadElementAsImage, type StoryCopyResult } from "../lib/storyShare";
+import {
+  LAYOUT_OPTIONS,
+  STORY_H,
+  STORY_W,
+  StoryStatsCard,
+  type StoryCardProps,
+  type StoryShareLayout
+} from "../lib/storyShareLayouts";
 
-export type StoryShareLayout = "overlay-hero" | "overlay-stats";
-
-const STORY_W = 1080;
-const STORY_H = 1920;
-
-const LAYOUT_OPTIONS: Array<{ id: StoryShareLayout; label: string; hint: string }> = [
-  { id: "overlay-hero", label: "Hero", hint: "Transparent 9:16 — big court time, drop-shadow text" },
-  { id: "overlay-stats", label: "Stats", hint: "Transparent 9:16 — full stat stack, drop-shadow text" },
-];
-
-const TEXT_SHADOW =
-  "0 2px 6px rgba(0,0,0,0.92), 0 4px 18px rgba(0,0,0,0.78), 0 1px 0 rgba(0,0,0,1)";
-const TEXT_SHADOW_HEAVY =
-  "0 3px 10px rgba(0,0,0,0.95), 0 6px 28px rgba(0,0,0,0.82), 0 1px 2px rgba(0,0,0,1)";
-const LABEL_SHADOW = "0 1px 4px rgba(0,0,0,0.88), 0 2px 12px rgba(0,0,0,0.65)";
-
-const IVORY = "#f4f1e8";
-const ACCENT = "#2ee882";
-const BRASS = "#d4a843";
-
-interface StoryCardProps {
-  playerName: string;
-  skillLevel: string;
-  avatarUrl?: string;
-  totalDaysPlayed: number;
-  lastPlayedDate?: string;
-  totalGamesPlayed: number;
-  stats: PlayerGameStats;
-  layout?: StoryShareLayout;
-  cardRef?: React.Ref<HTMLDivElement>;
-}
+export type { StoryShareLayout };
 
 interface StoryShareModalProps extends StoryCardProps {
   onClose: () => void;
 }
 
-function storyCanvasStyle(): React.CSSProperties {
-  return {
-    width: STORY_W,
-    height: STORY_H,
-    background: "transparent",
-    fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
-    display: "flex",
-    flexDirection: "column",
-    position: "relative",
-    overflow: "hidden",
-    color: IVORY,
-    boxSizing: "border-box",
-  };
-}
-
-export const StoryStatsCard = React.forwardRef<HTMLDivElement, StoryCardProps>(
-  function StoryStatsCard(
-    {
-      playerName,
-      skillLevel,
-      totalDaysPlayed,
-      totalGamesPlayed,
-      lastPlayedDate,
-      stats,
-      layout = "overlay-hero",
-    },
-    ref
-  ) {
-    const lastPlay = lastPlayedDate
-      ? new Date(lastPlayedDate).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })
-      : "—";
-    const minutesLabel = formatMinutesPlayed(stats.minutesPlayed);
-    const favCourtLabel = stats.favCourt?.name ?? "—";
-
-    if (layout === "overlay-stats") {
-      const statLines = [
-        { label: "Games", value: String(totalGamesPlayed) },
-        { label: "Court Time", value: minutesLabel },
-        { label: "Visits", value: String(totalDaysPlayed) },
-        { label: "Favorite Court", value: favCourtLabel },
-      ];
-
-      return (
-        <div ref={ref} style={storyCanvasStyle()}>
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              flexDirection: "column",
-              justifyContent: "center",
-              alignItems: "center",
-              padding: "220px 72px 280px",
-              textAlign: "center",
-            }}
-          >
-            <p
-              style={{
-                margin: 0,
-                fontSize: 22,
-                fontWeight: 800,
-                letterSpacing: "0.2em",
-                textTransform: "uppercase",
-                color: ACCENT,
-                textShadow: LABEL_SHADOW,
-              }}
-            >
-              HAFF PicklePulse
-            </p>
-
-            <h1
-              style={{
-                margin: "28px 0 0",
-                fontSize: 88,
-                fontWeight: 900,
-                lineHeight: 1.05,
-                letterSpacing: "-0.03em",
-                textShadow: TEXT_SHADOW_HEAVY,
-                maxWidth: "100%",
-                wordBreak: "break-word",
-              }}
-            >
-              {playerName}
-            </h1>
-
-            <p
-              style={{
-                margin: "16px 0 0",
-                fontSize: 26,
-                fontWeight: 800,
-                letterSpacing: "0.12em",
-                textTransform: "uppercase",
-                color: BRASS,
-                textShadow: TEXT_SHADOW,
-              }}
-            >
-              {skillLevel}
-            </p>
-
-            <div style={{ marginTop: 72, width: "100%", display: "flex", flexDirection: "column", gap: 36 }}>
-              {statLines.map(({ label, value }) => (
-                <div key={label}>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: 22,
-                      fontWeight: 800,
-                      letterSpacing: "0.16em",
-                      textTransform: "uppercase",
-                      color: "rgba(244,241,232,0.82)",
-                      textShadow: LABEL_SHADOW,
-                    }}
-                  >
-                    {label}
-                  </p>
-                  <p
-                    style={{
-                      margin: "10px 0 0",
-                      fontSize: label === "Favorite Court" ? 56 : 96,
-                      fontWeight: 900,
-                      lineHeight: 1,
-                      letterSpacing: "-0.02em",
-                      textShadow: TEXT_SHADOW_HEAVY,
-                      wordBreak: "break-word",
-                    }}
-                  >
-                    {value}
-                  </p>
-                </div>
-              ))}
-            </div>
-
-            <p
-              style={{
-                marginTop: 64,
-                fontSize: 22,
-                fontWeight: 700,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                color: "rgba(244,241,232,0.7)",
-                textShadow: LABEL_SHADOW,
-              }}
-            >
-              Last visit · {lastPlay}
-            </p>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div ref={ref} style={storyCanvasStyle()}>
-        <div
-          style={{
-            flex: 1,
-            display: "flex",
-            flexDirection: "column",
-            justifyContent: "space-between",
-            padding: "200px 64px 260px",
-          }}
-        >
-          <div style={{ textAlign: "center" }}>
-            <p
-              style={{
-                margin: 0,
-                fontSize: 22,
-                fontWeight: 800,
-                letterSpacing: "0.2em",
-                textTransform: "uppercase",
-                color: ACCENT,
-                textShadow: LABEL_SHADOW,
-              }}
-            >
-              HAFF PicklePulse
-            </p>
-            <p
-              style={{
-                margin: "10px 0 0",
-                fontSize: 18,
-                fontWeight: 700,
-                letterSpacing: "0.14em",
-                textTransform: "uppercase",
-                color: "rgba(244,241,232,0.65)",
-                textShadow: LABEL_SHADOW,
-              }}
-            >
-              Open Play Session
-            </p>
-          </div>
-
-          <div style={{ textAlign: "center" }}>
-            <p
-              style={{
-                margin: 0,
-                fontSize: 28,
-                fontWeight: 800,
-                letterSpacing: "0.14em",
-                textTransform: "uppercase",
-                color: "rgba(244,241,232,0.85)",
-                textShadow: LABEL_SHADOW,
-              }}
-            >
-              Court Time
-            </p>
-            <p
-              style={{
-                margin: "12px 0 0",
-                fontSize: 168,
-                fontWeight: 900,
-                lineHeight: 0.9,
-                letterSpacing: "-0.04em",
-                textShadow: TEXT_SHADOW_HEAVY,
-              }}
-            >
-              {minutesLabel}
-            </p>
-
-            <h1
-              style={{
-                margin: "48px 0 0",
-                fontSize: 72,
-                fontWeight: 900,
-                lineHeight: 1.05,
-                letterSpacing: "-0.02em",
-                textShadow: TEXT_SHADOW_HEAVY,
-                wordBreak: "break-word",
-              }}
-            >
-              {playerName}
-            </h1>
-            <p
-              style={{
-                margin: "14px 0 0",
-                fontSize: 24,
-                fontWeight: 800,
-                letterSpacing: "0.12em",
-                textTransform: "uppercase",
-                color: BRASS,
-                textShadow: TEXT_SHADOW,
-              }}
-            >
-              {skillLevel}
-            </p>
-          </div>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(3, 1fr)",
-              gap: 24,
-              textAlign: "center",
-            }}
-          >
-            {[
-              { label: "Games", value: String(totalGamesPlayed) },
-              { label: "Visits", value: String(totalDaysPlayed) },
-              { label: "Fav Court", value: favCourtLabel },
-            ].map(({ label, value }) => (
-              <div key={label}>
-                <p
-                  style={{
-                    margin: 0,
-                    fontSize: 18,
-                    fontWeight: 800,
-                    letterSpacing: "0.14em",
-                    textTransform: "uppercase",
-                    color: "rgba(244,241,232,0.75)",
-                    textShadow: LABEL_SHADOW,
-                  }}
-                >
-                  {label}
-                </p>
-                <p
-                  style={{
-                    margin: "8px 0 0",
-                    fontSize: label === "Fav Court" ? 36 : 64,
-                    fontWeight: 900,
-                    lineHeight: 1.05,
-                    letterSpacing: "-0.02em",
-                    textShadow: TEXT_SHADOW_HEAVY,
-                    wordBreak: "break-word",
-                  }}
-                >
-                  {value}
-                </p>
-              </div>
-            ))}
-          </div>
-
-          <p
-            style={{
-              margin: 0,
-              textAlign: "center",
-              fontSize: 20,
-              fontWeight: 700,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              color: "rgba(244,241,232,0.65)",
-              textShadow: LABEL_SHADOW,
-            }}
-          >
-            Last visit · {lastPlay}
-          </p>
-        </div>
-      </div>
-    );
-  }
-);
+export { StoryStatsCard };
 
 export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero", ...cardProps }: StoryShareModalProps) {
   const [layout, setLayout] = React.useState<StoryShareLayout>(initialLayout);
   const [isCopying, setIsCopying] = React.useState(false);
   const [isDownloading, setIsDownloading] = React.useState(false);
-  const [copyResult, setCopyResult] = React.useState<"copied" | "downloaded" | null>(null);
+  const [copyResult, setCopyResult] = React.useState<StoryCopyResult | null>(null);
+  const [copyError, setCopyError] = React.useState<string | null>(null);
   const [showHelp, setShowHelp] = React.useState(false);
   const captureRef = React.useRef<HTMLDivElement>(null);
   const [viewportH, setViewportH] = React.useState(() => (typeof window !== "undefined" ? window.innerHeight : 800));
@@ -365,7 +36,7 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
 
   const dockClearance = 112;
   const modalMaxH = Math.max(360, viewportH - dockClearance - 24);
-  const previewBudget = Math.min(300, modalMaxH * 0.38);
+  const previewBudget = Math.min(280, modalMaxH * 0.34);
   const scale = Math.min(1, previewBudget / STORY_H);
 
   const activeLayout = LAYOUT_OPTIONS.find((option) => option.id === layout);
@@ -375,11 +46,18 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
     if (!captureRef.current) return;
     setIsCopying(true);
     setCopyResult(null);
+    setCopyError(null);
     try {
       const result = await copyElementAsImageToClipboard(captureRef.current, filename, 2, {
-        backgroundColor: null,
+        backgroundColor: null
       });
       setCopyResult(result);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        setCopyError("Share cancelled.");
+      } else {
+        setCopyError("Could not copy — try Download instead.");
+      }
     } finally {
       setIsCopying(false);
     }
@@ -394,6 +72,15 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
       setIsDownloading(false);
     }
   };
+
+  const copyMessage =
+    copyResult === "copied"
+      ? "Transparent story copied! Open Instagram Stories, add your photo, then paste as a sticker."
+      : copyResult === "shared"
+        ? "Share sheet opened — tap Save Image, then add it as a sticker in Instagram Stories."
+        : copyResult === "downloaded"
+          ? "Transparent PNG saved! Add it as a sticker over your story photo in Instagram."
+          : null;
 
   return (
     <>
@@ -427,13 +114,13 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
             </div>
           </div>
 
-          <div className="mb-4 grid grid-cols-2 gap-2 rounded-xl bg-white/5 p-1">
+          <div className="mb-4 grid grid-cols-2 sm:grid-cols-5 gap-1.5 rounded-xl bg-white/5 p-1.5 max-h-32 overflow-y-auto">
             {LAYOUT_OPTIONS.map((option) => (
               <button
                 key={option.id}
                 type="button"
                 onClick={() => setLayout(option.id)}
-                className={`rounded-lg py-3 text-[11px] font-black uppercase tracking-wider transition ${
+                className={`rounded-lg py-2.5 px-1 text-[10px] font-black uppercase tracking-wide transition ${
                   layout === option.id ? "bg-[#2ee882] text-[#020f0a]" : "text-ivory/60 hover:text-ivory"
                 }`}
               >
@@ -446,7 +133,7 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
             className="flex justify-center mb-4 min-h-0 shrink rounded-xl overflow-hidden"
             style={{
               height: Math.max(160, STORY_H * scale),
-              background: "repeating-conic-gradient(#1a1a1a 0% 25%, #2a2a2a 0% 50%) 50% / 16px 16px",
+              background: "repeating-conic-gradient(#1a1a1a 0% 25%, #2a2a2a 0% 50%) 50% / 16px 16px"
             }}
           >
             <div
@@ -454,7 +141,7 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
                 width: STORY_W,
                 transform: `scale(${scale})`,
                 transformOrigin: "top center",
-                flexShrink: 0,
+                flexShrink: 0
               }}
             >
               <StoryStatsCard layout={layout} {...cardProps} />
@@ -465,17 +152,21 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
             <StoryStatsCard ref={captureRef} layout={layout} {...cardProps} />
           </div>
 
-          {copyResult && (
+          {copyMessage && (
             <div
               className={`mb-3 rounded-xl px-4 py-2.5 text-xs font-semibold text-center ${
-                copyResult === "copied"
-                  ? "bg-[#2ee882]/15 text-[#2ee882] border border-[#2ee882]/25"
-                  : "bg-amber-400/15 text-amber-300 border border-amber-400/25"
+                copyResult === "downloaded"
+                  ? "bg-amber-400/15 text-amber-300 border border-amber-400/25"
+                  : "bg-[#2ee882]/15 text-[#2ee882] border border-[#2ee882]/25"
               }`}
             >
-              {copyResult === "copied"
-                ? "Transparent story copied! Open Instagram Stories, add your photo, then paste as a sticker."
-                : "Transparent PNG saved! Add it as a sticker over your story photo in Instagram."}
+              {copyMessage}
+            </div>
+          )}
+
+          {copyError && (
+            <div className="mb-3 rounded-xl px-4 py-2.5 text-xs font-semibold text-center bg-red-500/15 text-red-300 border border-red-500/25">
+              {copyError}
             </div>
           )}
 
@@ -486,7 +177,7 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
               onClick={handleCopy}
               className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-[#2ee882] py-3.5 text-sm font-black text-[#020f0a] hover:bg-[#4dea96] disabled:opacity-50 transition"
             >
-              {copyResult === "copied" ? <CheckCheck size={18} /> : <Copy size={18} />}
+              {copyResult === "copied" || copyResult === "shared" ? <CheckCheck size={18} /> : <Copy size={18} />}
               {isCopying ? "Generating…" : "Copy Image"}
             </button>
             <button
@@ -512,7 +203,7 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
           onClick={() => setShowHelp(false)}
         >
           <div
-            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#060f0a] p-6 shadow-2xl"
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#060f0a] p-6 shadow-2xl max-h-[85vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
@@ -533,10 +224,10 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <div className="flex items-center justify-center w-6 h-6 rounded-full bg-[#2ee882] text-black text-xs font-black">1</div>
-                  <h3 className="font-bold text-ivory">Pick Hero or Stats</h3>
+                  <h3 className="font-bold text-ivory">Pick a layout</h3>
                 </div>
                 <p className="ml-8 text-xs leading-relaxed">
-                  Both layouts are <strong>1080×1920</strong> transparent overlays sized for Instagram Stories. Text uses drop shadows so it reads on any photo.
+                  Choose from <strong>10 transparent 1080×1920</strong> overlays. Text uses drop shadows so it reads on any photo.
                 </p>
               </div>
 
@@ -546,7 +237,7 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
                   <h3 className="font-bold text-ivory">Copy or Download</h3>
                 </div>
                 <p className="ml-8 text-xs leading-relaxed">
-                  Tap <strong>Copy Image</strong> or <strong>Download</strong> to export a transparent PNG with your real stats — games, court time, visits, and favorite court.
+                  On iPhone, <strong>Copy Image</strong> may open the share sheet — tap <strong>Save Image</strong>, then add it as a sticker in Instagram Stories.
                 </p>
               </div>
 
@@ -556,7 +247,7 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
                   <h3 className="font-bold text-ivory">Post on Instagram Stories</h3>
                 </div>
                 <p className="ml-8 text-xs leading-relaxed">
-                  Open Instagram Stories, pick or take a photo, then add the PNG as a sticker (paste from clipboard or upload from your gallery). Position and resize as you like.
+                  Open Instagram Stories, pick or take a photo, then add the PNG as a sticker. Position and resize as you like.
                 </p>
               </div>
             </div>
