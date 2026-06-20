@@ -1,10 +1,23 @@
 import React from "react";
-import { X, Download, Copy, CheckCheck, Share2, HelpCircle, Instagram, Twitter, Linkedin, MessageCircle } from "lucide-react";
+import { X, Download, Copy, CheckCheck, Share2, HelpCircle, Twitter, Linkedin, MessageCircle } from "lucide-react";
 import type { PlayerGameStats } from "../lib/playerStats";
 import { formatMinutesPlayed } from "../lib/playerStats";
 import { copyElementAsImageToClipboard, downloadElementAsImage } from "../lib/storyShare";
 
-export type StoryShareLayout = "minimal" | "gradient" | "bold" | "classic";
+export type StoryShareLayout = "minimal" | "strava" | "gradient" | "bold" | "sticker" | "classic";
+
+const LAYOUT_OPTIONS: Array<{ id: StoryShareLayout; label: string; hint: string }> = [
+  { id: "minimal", label: "Minimal", hint: "Clean white square — Instagram feed" },
+  { id: "strava", label: "Activity", hint: "Strava-style story with hero stat" },
+  { id: "gradient", label: "Gradient", hint: "Colorful 9:16 story" },
+  { id: "bold", label: "Bold", hint: "Dark high-contrast story" },
+  { id: "sticker", label: "Sticker", hint: "Transparent overlay for photos" },
+  { id: "classic", label: "Classic", hint: "HAFF branded story" },
+];
+
+function isSquareLayout(layout: StoryShareLayout) {
+  return layout === "minimal" || layout === "sticker";
+}
 
 interface StoryCardProps {
   playerName: string;
@@ -151,6 +164,106 @@ export const StoryStatsCard = React.forwardRef<HTMLDivElement, StoryCardProps>(
           <div style={{ padding: "32px 40px", borderTop: "1px solid #e5e5e5" }}>
             <p style={{ fontSize: 13, color: "#999", margin: 0, textAlign: "center" }}>
               Last visit: {lastPlay}
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // Activity (Strava-inspired story)
+    if (layout === "strava") {
+      return (
+        <div
+          ref={ref}
+          style={{
+            width: 1080,
+            height: 1920,
+            background: "#f7f7f5",
+            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
+            display: "flex",
+            flexDirection: "column",
+            position: "relative",
+            overflow: "hidden",
+            color: "#1a1a1a",
+          }}
+        >
+          <div style={{ padding: "56px 64px 0" }}>
+            <p style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: ACCENT_GREEN, margin: 0 }}>
+              HAFF PicklePulse
+            </p>
+            <p style={{ fontSize: 12, color: "#888", margin: "6px 0 0" }}>Open Play Session</p>
+          </div>
+
+          <div style={{ padding: "72px 64px 48px", flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+            <p style={{ fontSize: 18, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#666", margin: 0 }}>
+              Court Time
+            </p>
+            <p style={{ fontSize: 140, fontWeight: 900, margin: "8px 0 0", letterSpacing: "-0.04em", lineHeight: 0.9, color: "#111" }}>
+              {minutesLabel}
+            </p>
+
+            <div style={{ marginTop: 48, display: "flex", alignItems: "center", gap: 24 }}>
+              <div
+                style={{
+                  width: 96,
+                  height: 96,
+                  borderRadius: "50%",
+                  overflow: "hidden",
+                  border: "3px solid #e8e8e8",
+                  background: "#fff",
+                  flexShrink: 0,
+                }}
+              >
+                {avatarUrl ? (
+                  <img src={avatarUrl} alt={playerName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                ) : (
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", fontSize: 36, fontWeight: 900, color: ACCENT_GREEN }}>
+                    {playerName.charAt(0).toUpperCase()}
+                  </div>
+                )}
+              </div>
+              <div>
+                <p style={{ fontSize: 36, fontWeight: 800, margin: 0, letterSpacing: "-0.02em", lineHeight: 1.1 }}>{playerName}</p>
+                <p style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "#888", margin: "8px 0 0" }}>
+                  {skillLevel}
+                </p>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 56, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+              {statTiles.map(({ value, label }) => (
+                <div
+                  key={label}
+                  style={{
+                    background: "#fff",
+                    borderRadius: 16,
+                    padding: "24px 16px",
+                    textAlign: "center",
+                    border: "1px solid #ebebeb",
+                    boxShadow: "0 2px 12px rgba(0,0,0,0.04)",
+                  }}
+                >
+                  <p style={{ fontSize: label === "Court Time" ? 22 : 36, fontWeight: 900, margin: 0, lineHeight: 1.1 }}>{value}</p>
+                  <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#999", margin: "10px 0 0" }}>
+                    {label}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {stats.favCourt && (
+              <div style={{ marginTop: 20, background: "#fff", borderRadius: 16, padding: "20px 24px", border: "1px solid #ebebeb" }}>
+                <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#999", margin: 0 }}>
+                  Favorite Court
+                </p>
+                <p style={{ fontSize: 24, fontWeight: 800, margin: "6px 0 0" }}>{stats.favCourt.name}</p>
+              </div>
+            )}
+          </div>
+
+          <div style={{ padding: "40px 64px 56px", borderTop: "1px solid #e5e5e5" }}>
+            <p style={{ fontSize: 13, color: "#999", margin: 0, textAlign: "center" }}>
+              HAFF Leisure Club · Last visit {lastPlay}
             </p>
           </div>
         </div>
@@ -397,6 +510,102 @@ export const StoryStatsCard = React.forwardRef<HTMLDivElement, StoryCardProps>(
       );
     }
 
+    // Sticker (transparent overlay)
+    if (layout === "sticker") {
+      return (
+        <div
+          ref={ref}
+          style={{
+            width: 1080,
+            height: 1080,
+            background: "transparent",
+            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            position: "relative",
+            overflow: "visible",
+            color: IVORY,
+            padding: 48,
+            boxSizing: "border-box",
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              background: "rgba(7, 26, 18, 0.92)",
+              border: "1px solid rgba(46,232,130,0.28)",
+              borderRadius: 32,
+              padding: "40px 36px",
+              boxShadow: "0 24px 64px rgba(0,0,0,0.55), 0 8px 24px rgba(0,0,0,0.35)",
+              backdropFilter: "blur(12px)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 28 }}>
+              <div
+                style={{
+                  width: 88,
+                  height: 88,
+                  borderRadius: "50%",
+                  overflow: "hidden",
+                  border: `3px solid ${ACCENT_GREEN}`,
+                  flexShrink: 0,
+                  background: "#0f2e24",
+                }}
+              >
+                {avatarUrl ? (
+                  <img src={avatarUrl} alt={playerName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                ) : (
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", fontSize: 32, fontWeight: 900, color: ACCENT_GREEN }}>
+                    {playerName.charAt(0).toUpperCase()}
+                  </div>
+                )}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <p style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase", color: ACCENT_GREEN, margin: 0 }}>
+                  HAFF PicklePulse
+                </p>
+                <p style={{ fontSize: 32, fontWeight: 900, margin: "6px 0 0", lineHeight: 1.1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {playerName}
+                </p>
+                <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: DIM, margin: "6px 0 0" }}>
+                  {skillLevel}
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+              {statTiles.map(({ value, label }) => (
+                <div
+                  key={label}
+                  style={{
+                    background: "rgba(46,232,130,0.08)",
+                    border: "1px solid rgba(46,232,130,0.18)",
+                    borderRadius: 18,
+                    padding: "18px 10px",
+                    textAlign: "center",
+                  }}
+                >
+                  <p style={{ fontSize: label === "Court Time" ? 18 : 28, fontWeight: 900, margin: 0, lineHeight: 1.1 }}>{value}</p>
+                  <p style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: DIM, margin: "8px 0 0" }}>
+                    {label}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {stats.favCourt && (
+              <div style={{ marginTop: 14, padding: "14px 16px", borderRadius: 14, background: "rgba(244,241,232,0.05)", border: "1px solid rgba(244,241,232,0.08)" }}>
+                <p style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: DIM, margin: 0 }}>
+                  Favorite Court · {stats.favCourt.name}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     // Classic
     return (
       <div
@@ -567,14 +776,24 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const CARD_W = layout === "minimal" ? 1080 : 1080;
-  const CARD_H = layout === "minimal" ? 1080 : 1920;
+  const CARD_W = 1080;
+  const CARD_H = isSquareLayout(layout) ? 1080 : 1920;
   const dockClearance = 112;
   const modalMaxH = Math.max(360, viewportH - dockClearance - 24);
-  const previewBudget = Math.min(layout === "minimal" ? 240 : 280, modalMaxH * 0.35);
+  const previewBudget = Math.min(isSquareLayout(layout) ? 240 : 280, modalMaxH * 0.35);
   const scale = Math.min(1, previewBudget / CARD_H);
 
-  const exportOptions = { backgroundColor: layout === "minimal" ? undefined : undefined };
+  const exportOptions = {
+    backgroundColor:
+      layout === "sticker"
+        ? null
+        : layout === "minimal"
+          ? "#ffffff"
+          : layout === "strava"
+            ? "#f7f7f5"
+            : undefined,
+  };
+  const activeLayout = LAYOUT_OPTIONS.find((option) => option.id === layout);
   const filename = `haff-picklepulse-${cardProps.playerName.toLowerCase().replace(/\s+/g, "-")}.png`;
 
   const handleCopy = async () => {
@@ -649,44 +868,20 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
             </div>
           </div>
 
-          {/* Layout selector */}
-          <div className="mb-4 grid grid-cols-2 gap-2 rounded-xl bg-white/5 p-1">
-            <button
-              type="button"
-              onClick={() => setLayout("minimal")}
-              className={`rounded-lg py-2.5 text-xs font-black uppercase tracking-wider transition ${
-                layout === "minimal" ? "bg-[#2ee882] text-[#020f0a]" : "text-ivory/60 hover:text-ivory"
-              }`}
-            >
-              Minimal
-            </button>
-            <button
-              type="button"
-              onClick={() => setLayout("gradient")}
-              className={`rounded-lg py-2.5 text-xs font-black uppercase tracking-wider transition ${
-                layout === "gradient" ? "bg-[#2ee882] text-[#020f0a]" : "text-ivory/60 hover:text-ivory"
-              }`}
-            >
-              Gradient
-            </button>
-            <button
-              type="button"
-              onClick={() => setLayout("bold")}
-              className={`rounded-lg py-2.5 text-xs font-black uppercase tracking-wider transition ${
-                layout === "bold" ? "bg-[#2ee882] text-[#020f0a]" : "text-ivory/60 hover:text-ivory"
-              }`}
-            >
-              Bold
-            </button>
-            <button
-              type="button"
-              onClick={() => setLayout("classic")}
-              className={`rounded-lg py-2.5 text-xs font-black uppercase tracking-wider transition ${
-                layout === "classic" ? "bg-[#2ee882] text-[#020f0a]" : "text-ivory/60 hover:text-ivory"
-              }`}
-            >
-              Classic
-            </button>
+          {/* Layout selector — 6 unique designs */}
+          <div className="mb-4 grid grid-cols-3 gap-2 rounded-xl bg-white/5 p-1">
+            {LAYOUT_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => setLayout(option.id)}
+                className={`rounded-lg py-2.5 text-[10px] font-black uppercase tracking-wider transition ${
+                  layout === option.id ? "bg-[#2ee882] text-[#020f0a]" : "text-ivory/60 hover:text-ivory"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
 
           {/* Preview */}
@@ -778,7 +973,7 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
           </div>
 
           <p className="mt-3 text-center text-[10px] leading-relaxed text-ivory/45">
-            {layout === "minimal" ? "Square format perfect for Instagram feed posts" : "Story format (9:16) optimized for Instagram Stories"}
+            {activeLayout?.hint ?? "Choose a layout, then copy or download to share."}
           </p>
         </div>
       </div>
@@ -814,7 +1009,7 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
                   <h3 className="font-bold text-ivory">Choose Your Style</h3>
                 </div>
                 <p className="ml-8 text-xs leading-relaxed">
-                  Pick <strong>Minimal</strong> for Instagram posts (1:1), or <strong>Gradient/Bold/Classic</strong> for Stories (9:16).
+                  Pick from <strong>6 designs</strong>: <strong>Minimal</strong> or <strong>Sticker</strong> for feed/overlays (1:1), <strong>Activity</strong> for Strava-style stories, or <strong>Gradient / Bold / Classic</strong> for full 9:16 stories.
                 </p>
               </div>
 
