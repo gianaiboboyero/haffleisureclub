@@ -25,11 +25,15 @@
     "db:rls-tight": "prisma db execute --file scripts/supabase-rls-tight.sql --schema prisma/schema.prisma",
     "db:rls-remaining": "prisma db execute --file scripts/supabase-rls-remaining.sql --schema prisma/schema.prisma",
     "db:rls-hardening": "prisma db execute --file scripts/supabase-rls-hardening.sql --schema prisma/schema.prisma",
+    "db:rls-profile-lockdown": "prisma db execute --file scripts/supabase-rls-profile-lockdown.sql --schema prisma/schema.prisma",
     "db:storage": "prisma db execute --file scripts/supabase-storage.sql --schema prisma/schema.prisma",
     "db:seed-courts": "node scripts/seed-courts.mjs",
     "db:backup-players": "node scripts/backup-supabase-players.mjs",
     "db:import-players": "node scripts/import-players-from-json.mjs",
+    "db:merge-production-roster": "node scripts/merge-production-roster.mjs",
+    "db:restore-club-state": "node scripts/restore-club-state.mjs data/production-players.json --prune-orphans --clear-sessions",
     "db:seed-accounts": "node scripts/seed-accounts.mjs",
+    "db:rotate-passwords": "node scripts/rotate-admin-passwords.mjs",
     "db:reset-club": "node scripts/reset-club-state.mjs"
   },
   "dependencies": {

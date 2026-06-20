@@ -14,14 +14,12 @@ import { markRosterSynced, rosterSyncFresh } from "../lib/syncPolicy";
 import { useSupabaseData } from "../lib/dataSource";
 import { CALENDAR_PAGE_ENABLED } from "../lib/featureFlags";
 import {
-  broadcastTvState,
   fetchClubState,
-  pingClubState,
-  publishClubState
+  pingClubState
 } from "../lib/supabase/clubState";
 import { fetchCourts as fetchSupabaseCourts, seedCourtsIfEmpty } from "../lib/supabase/courts";
 import { fetchPlayersCompact } from "../lib/supabase/players";
-import { updatePlayerOnSupabase, updatePlayerStatsOnSupabase, fetchMissingPlayers } from "../lib/supabase/playerUpdate";
+import { updatePlayerViaApi, updatePlayerStatsViaApi, fetchMissingPlayers } from "../lib/supabase/playerUpdate";
 import { fetchPlayerStatsByIds } from "../lib/supabase/players";
 import {
   applyMatchCompletionToPlayers,
@@ -240,7 +238,7 @@ function mergePlayersFromServer(
   return merged;
 }
 
-const ROSTER_EPOCH = "2026-06-18-authoritative-v1";
+const ROSTER_EPOCH = "2026-06-20-production-roster-v1";
 const COURT_EPOCH = "2026-06-18-authoritative-v1";
 
 async function purgeLocalPlayersNotOnServer(serverIds: Set<string>) {
@@ -610,6 +608,16 @@ function mapStoredTransactions(rawTransactions: Transaction[]) {
 
 /** Supabase mode: load roster from server, then Session — no IndexedDB for live ops. */
 async function hydrateFromServer(set: ClubStoreSet, get: ClubStoreGet) {
+  // Repeat hydrate calls (e.g. roster subscription refresh) must not wipe the
+  // in-memory roster or flip hydrated back to false — that blanks the UI and
+  // drops the signed-in player who may not be checked in yet.
+  if (get().hydrated) {
+    if (navigator.onLine) {
+      await get().refreshSharedState({ force: true });
+    }
+    return;
+  }
+
   await migrateServerLiveStateEpoch();
   try {
     if (localStorage.getItem("haff-roster-epoch") !== ROSTER_EPOCH) {
@@ -1148,6 +1156,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
         // ignore storage errors
       }
     }
+    players = await enrichPlayersFromRoster(players, statsTargetIds);
     players = await mergeServerPlayerStats(players, get().players, statsTargetIds);
     // Do NOT call stripUnauthorizedCheckIns here: resolvePlayersFromSession
     // already honoured adminCheckedInIds (via resolveAuthorizedCheckInIds) and
@@ -1319,21 +1328,6 @@ export const useClubStore = create<ClubState>((set, get) => ({
     });
 
     try {
-      if (useSupabaseData()) {
-        const body = await publishClubState({
-          sessionId: state.currentSessionId ?? "default-active-session",
-          checkedInPlayerIds: state.players.filter((player) => player.checkedIn).map((player) => player.id),
-          adminCheckedInIds: state.players
-            .filter((player) => player.checkedIn && player.tags?.includes("AdminCheckedIn"))
-            .map((player) => player.id),
-          stackOrder: state.stackOrder,
-          courts: state.courts,
-          matches: publishMatches,
-          reservations: [],
-          playerProfiles: []
-        }, { slim: true });
-        if (body) markSyncHealthy(set, body.updatedAt);
-      } else {
       const response = await apiFetch("/api/club-state", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1346,14 +1340,17 @@ export const useClubStore = create<ClubState>((set, get) => ({
           stackOrder: state.stackOrder,
           courts: state.courts,
           matches: publishMatches,
-          reservations: state.reservations,
+          reservations: useSupabaseData() ? [] : state.reservations,
           playerProfiles: syncedProfiles
         })
       });
+      if (response.status === 401) {
+        if (get().online) set({ online: false });
+        return;
+      }
       if (response.ok && response.headers.get("content-type")?.includes("application/json")) {
         const body = await parseResponseJson(response);
         markSyncHealthy(set, typeof body.updatedAt === "string" ? body.updatedAt : null);
-      }
       }
       clubStateBroadcast?.postMessage({
         type: "state-published",
@@ -1379,11 +1376,6 @@ export const useClubStore = create<ClubState>((set, get) => ({
       return;
     }
     try {
-      if (useSupabaseData()) {
-        const body = await broadcastTvState(sessionId, payload);
-        if (!body) throw new Error("broadcast failed");
-        markSyncHealthy(set, body.updatedAt);
-      } else {
       const response = await apiFetch("/api/club-state", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1393,11 +1385,14 @@ export const useClubStore = create<ClubState>((set, get) => ({
           tvBroadcast: payload
         })
       });
+      if (response.status === 401) {
+        if (get().online) set({ online: false });
+        throw new Error("broadcast failed");
+      }
       if (!response.ok) throw new Error("broadcast failed");
       if (response.headers.get("content-type")?.includes("application/json")) {
         const body = await parseResponseJson(response);
         markSyncHealthy(set, typeof body.updatedAt === "string" ? body.updatedAt : null);
-      }
       }
     } catch {
       pushToast(set, "Broadcast failed", "Could not reach the TV display sync server.", "system");
@@ -1841,6 +1836,9 @@ export const useClubStore = create<ClubState>((set, get) => ({
     };
     await liveDb.playersPut(newPlayer);
     await queue("CREATE_PLAYER", "Player", newPlayer.id, newPlayer);
+    if (useSupabaseData()) {
+      await get().processSyncQueue();
+    }
     const players = [...get().players, newPlayer];
     set({ players });
     pushToast(set, "Player added", `${newPlayer.displayName} has been added.`, "system");
@@ -1849,10 +1847,9 @@ export const useClubStore = create<ClubState>((set, get) => ({
   updatePlayer: async (player, options) => {
     let next = player;
     if (useSupabaseData()) {
-      next = await updatePlayerOnSupabase(player, options);
-    }
-    await liveDb.playersPut(next);
-    if (!useSupabaseData()) {
+      next = await updatePlayerViaApi(player, options);
+    } else {
+      await liveDb.playersPut(next);
       await queue("UPDATE_PLAYER", "Player", next.id, next);
     }
     const players = get().players.map((p) => p.id === next.id ? next : p);
@@ -1867,8 +1864,12 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const player = get().players.find((p) => p.id === playerId);
     if (!player) return;
     const updatedPlayer = { ...player, isActive: false, checkedIn: false };
-    await liveDb.playersPut(updatedPlayer);
-    await queue("UPDATE_PLAYER", "Player", playerId, updatedPlayer);
+    if (useSupabaseData()) {
+      await updatePlayerViaApi(updatedPlayer);
+    } else {
+      await liveDb.playersPut(updatedPlayer);
+      await queue("UPDATE_PLAYER", "Player", playerId, updatedPlayer);
+    }
     const players = get().players.map((p) => p.id === playerId ? updatedPlayer : p);
     const stackOrder = reconcileStackOrder(get().stackOrder, players, get().matches, get().courts);
     saveStackOrder(stackOrder);
@@ -2961,12 +2962,37 @@ function balanceTeams(players: Player[]) {
 async function syncParticipantStats(participants: Player[]) {
   if (participants.length === 0) return;
   if (useSupabaseData()) {
-    await Promise.all(participants.map((player) => updatePlayerStatsOnSupabase(player)));
+    await Promise.all(participants.map((player) => updatePlayerStatsViaApi(player)));
     return;
   }
   for (const player of participants) {
     await queue("UPDATE_PLAYER", "Player", player.id, player);
   }
+}
+
+/** Pull skill level, avatar, and names from the roster for session players (light TV/player views omit profiles). */
+async function enrichPlayersFromRoster(players: Player[], ids: string[]): Promise<Player[]> {
+  if (!useSupabaseData() || ids.length === 0) return players;
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const fetched = await fetchMissingPlayers(uniqueIds);
+  if (fetched.length === 0) return players;
+
+  const byId = new Map(fetched.map((player) => [player.id, player]));
+  return players.map((player) => {
+    const server = byId.get(player.id);
+    if (!server) return player;
+    return {
+      ...player,
+      displayName:
+        player.displayName === "Queued" || !player.displayName.trim()
+          ? server.displayName
+          : player.displayName,
+      skillLevel: normalizeSkillLevel(server.skillLevel || player.skillLevel),
+      avatarUrl: server.avatarUrl ?? player.avatarUrl,
+      statusNote: player.statusNote ?? server.statusNote,
+      rating: server.rating ?? player.rating,
+    };
+  });
 }
 
 async function mergeServerPlayerStats(
@@ -3024,8 +3050,10 @@ function normalizeSkillLevel(skillLevel: string): Player["skillLevel"] {
   return "Beginner";
 }
 
+const SERVER_AUTH_QUEUE_ACTIONS = new Set(["CREATE_PLAYER", "UPDATE_PLAYER", "DELETE_PLAYER"]);
+
 async function queue(actionType: string, entityType: string, entityId: string, payload: unknown) {
-  if (serverAuthoritativeLiveState()) return;
+  if (serverAuthoritativeLiveState() && !SERVER_AUTH_QUEUE_ACTIONS.has(actionType)) return;
   // Finance ledger is device-local; never sync to server (saves Vercel + Postgres on every payment).
   if (entityType === "Transaction") return;
   const id = generateId();

@@ -9,16 +9,31 @@
 
 When `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` are set at build time, the app uses **direct Supabase access** (`VITE_USE_SUPABASE_DATA` defaults to on).
 
+### Single database (important)
+
+Use **one** Supabase project everywhere — local `.env`, Vercel Production, and `supabase/config.toml` must share the same project ref (`hmhhgmuuusknmucjlkth`).
+
+To restore the live roster from a production export:
+
+```bash
+curl -sS https://haffleisureclub.vercel.app/api/players -o data/production-players.json
+npm run db:merge-production-roster -- data/production-players.json --prune-orphans
+```
+
+This upserts all players (with avatars and stats), repoints user accounts, and removes orphan duplicate rows.
+
 ### What still uses Vercel `/api` (minimal)
 
 | Route | Why |
 |-------|-----|
 | `/api/auth` | HttpOnly session cookies |
+| `/api/player-profile` | Auth + ownership check for name, photo, stats |
+| `/api/club-state` POST | Auth + role checks for stack, courts, matches, TV broadcast |
 | `/api/community` POST/PATCH/DELETE | Auth + moderation |
 | `/api/sync`, `/api/operations/events` | Server-validated player sync queue |
 | `/api/feedback`, `/api/testimonials` | Admin moderation |
 
-Everything else — **players, courts, live session, chat reads, realtime** — goes **direct to Supabase**.
+Everything else — **players (read), courts (read), live session (read), chat reads, realtime** — goes **direct to Supabase** with RLS blocking browser writes.
 
 ---
 
@@ -54,6 +69,8 @@ Copy from Supabase dashboard → **Project Settings → Database**:
 | `FEEDBACK_HASH_SECRET` | Random string |
 | `NEXT_PUBLIC_SUPABASE_URL` | `https://YOUR_REF.supabase.co` |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only — avatar uploads via `/api/player-profile` |
+| `SUPABASE_URL` | Same as `NEXT_PUBLIC_SUPABASE_URL` (server avatar uploads) |
 | `VITE_REALTIME_CLUB` | `true` — Supabase Realtime for live stack |
 | `VITE_REALTIME_CHAT` | `true` — Supabase Realtime for chat reads |
 
@@ -82,11 +99,33 @@ Apply RLS after schema push:
 
 ```bash
 npm run db:rls
+npm run db:rls-profile-lockdown
 npm run db:seed-courts
 npm run db:backup-players
+npm run db:rotate-passwords
 ```
 
-Import players safely (upsert by id):
+After an incident, rotate passwords with `npm run db:rotate-passwords` (prints a one-time password for all seeded admin/member accounts).
+
+---
+
+## Security checklist
+
+| Item | Status |
+|------|--------|
+| GitHub repo private | Yes (`gianaiboboyero/haffleisureclub`) |
+| `.env` files in git | No (gitignored) |
+| Secret scanning on GitHub | **Enable** in repo Settings → Code security |
+| Supabase RLS blocks anon Player/Session writes | Run `npm run db:rls-profile-lockdown` |
+| Profile/avatar edits | `/api/player-profile` only (login required) |
+| Stack/courts/matches writes | `/api/club-state` POST only (login required) |
+| `SUPABASE_SERVICE_ROLE_KEY` on Vercel | Required for server avatar uploads — **add from Supabase dashboard** |
+| Rotate Supabase anon + service keys | Supabase → Project Settings → API → **Regenerate** keys, then update Vercel env |
+| Admin passwords | Never use committed defaults; run `npm run db:rotate-passwords` |
+
+Optional: set `TURNSTILE_SECRET_KEY` + site key on Vercel to require captcha on registration.
+
+---
 
 ```bash
 npm run db:import-players data/players-backup.json

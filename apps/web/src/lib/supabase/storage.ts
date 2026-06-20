@@ -1,6 +1,4 @@
-import { dataUrlToWebpBlob } from "../profilePhoto";
 import { supabaseUrl } from "../dataSource";
-import { getSupabase } from "./client";
 
 const BUCKET = "avatars";
 
@@ -11,32 +9,11 @@ export function publicAvatarUrl(playerId: string, version: number) {
 }
 
 export async function uploadPlayerAvatar(
-  playerId: string,
-  source: string | Blob,
-  nextVersion?: number
+  _playerId: string,
+  _source: string | Blob,
+  _nextVersion?: number
 ): Promise<{ avatarUrl: string; avatarVersion: number }> {
-  const supabase = getSupabase();
-  if (!supabase) throw new Error("Supabase is not configured.");
-
-  const version = nextVersion ?? Date.now();
-  const blob =
-    typeof source === "string"
-      ? source.startsWith("data:")
-        ? await dataUrlToWebpBlob(source)
-        : await fetch(source).then((r) => r.blob())
-      : source;
-
-  const path = `${playerId}/v${version}.webp`;
-  const { error } = await supabase.storage.from(BUCKET).upload(path, blob, {
-    contentType: "image/webp",
-    cacheControl: "31536000",
-    upsert: true
-  });
-  if (error) throw new Error(error.message);
-
-  const avatarUrl = publicAvatarUrl(playerId, version);
-  if (!avatarUrl) throw new Error("Could not build avatar URL.");
-  return { avatarUrl, avatarVersion: version };
+  throw new Error("Direct avatar uploads are disabled. Save your profile while signed in.");
 }
 
 export async function removeLegacyInlineAvatar(_playerId: string) {

@@ -57,11 +57,10 @@ import { Button, Card, Badge } from "./components/ui";
 import { Chip } from "./components/ui/heroui-chip";
 import { AiLoader } from "./components/ui/ai-loader";
 import { ProfilePhotoCropper } from "./components/ProfilePhotoCropper";
-import { readProfileImageFile, isInlineAvatarData } from "./lib/profilePhoto";
+import { readProfileImageFile } from "./lib/profilePhoto";
 import { useSupabaseData } from "./lib/dataSource";
 import { serverAuthoritativeLiveState, saveStackOrder, liveDb } from "./lib/liveStateCache";
 import { notifyTvDisplayRefresh, openTvDisplayWindow, shouldManageTvDisplayWindow, closeManagedTvDisplayWindow } from "./lib/tvDisplayWindow";
-import { uploadPlayerAvatar } from "./lib/supabase/storage";
 import { COURT_HOURLY_FEE, CHECK_IN_FEE, formatPeso } from "./lib/pricing";
 import {
   countPendingTransactions,
@@ -489,8 +488,12 @@ function App() {
               <LandingView key="landing" setView={setView} signedIn={sessionReady && Boolean(sessionMember)} />
             </React.Suspense>
           )}
-          {view === "admin" && <AdminView key="admin" />}
-          {view === "player" && <PlayerView key="player" />}
+          {view === "admin" && (
+            <AdminView key="admin" sessionMember={sessionMember} sessionReady={sessionReady} refreshSession={refreshSession} />
+          )}
+          {view === "player" && (
+            <PlayerView key="player" sessionMember={sessionMember} sessionReady={sessionReady} />
+          )}
           {view === "tv" && <DisplayView key="tv" setView={setView} />}
           {view === "calendar" && CALENDAR_PAGE_ENABLED && (
             <React.Suspense fallback={<LoadingScreen />}>
@@ -889,7 +892,15 @@ function PlayerProfileSheet({
 
 type AdminTab = "control" | "players" | "reservations" | "history" | "settings";
 
-function AdminView() {
+function AdminView({
+  sessionMember,
+  sessionReady,
+  refreshSession
+}: {
+  sessionMember: SessionMember | null;
+  sessionReady: boolean;
+  refreshSession: () => Promise<void>;
+}) {
   const { sessions, currentSessionId, reservations } = useClubStore();
   const [activeTab, setActiveTab] = React.useState<AdminTab>("control");
   const [isQrOpen, setIsQrOpen] = React.useState(false);
@@ -907,44 +918,48 @@ function AdminView() {
     return () => window.removeEventListener("haff-admin-tab", openAdminTab);
   }, []);
 
-  // Admin Portal Authentication — use localStorage (set on login, cleared on sign-out)
-  const [isAuthenticated, setIsAuthenticated] = React.useState(
-    () => SKIP_ADMIN_LOGIN || localStorage.getItem("haff_admin_authenticated") === "true"
-  );
+  const isAdmin = SKIP_ADMIN_LOGIN || sessionMember?.role === "ADMIN";
 
   React.useEffect(() => {
-    if (!isAuthenticated || !shouldManageTvDisplayWindow()) return;
+    if (!isAdmin || !shouldManageTvDisplayWindow()) return;
     openTvDisplayWindow();
-  }, [isAuthenticated]);
+  }, [isAdmin]);
 
   const [email, setEmail] = React.useState("gianaibo.dev@gmail.com");
   const [password, setPassword] = React.useState("");
   const [authError, setAuthError] = React.useState("");
+  const [loggingIn, setLoggingIn] = React.useState(false);
 
   const activeSession = sessions.find((s) => s.id === currentSessionId);
   const pendingReservations = reservations.filter((r) => r.status === "Requested").length;
 
-  if (!isAuthenticated) {
+  if (!sessionReady || loggingIn) return <LoadingScreen />;
+
+  if (!isAdmin) {
     const handleLogin = async (e: React.FormEvent) => {
       e.preventDefault();
       setAuthError("");
-      const response = await apiFetch("/api/auth?action=login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password })
-      });
-      const data = await parseResponseJson<{ user?: { role?: string }; error?: string }>(response);
-      if (response.ok && data.user?.role === "ADMIN") {
-        localStorage.setItem("haff_admin_authenticated", "true");
-        setIsAuthenticated(true);
-        window.dispatchEvent(new Event("haff-auth-change"));
-        if (shouldManageTvDisplayWindow()) {
-          openTvDisplayWindow();
+      setLoggingIn(true);
+      try {
+        const response = await apiFetch("/api/auth?action=login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password })
+        });
+        const data = await parseResponseJson<{ user?: { role?: string }; error?: string }>(response);
+        if (response.ok && data.user?.role === "ADMIN") {
+          await refreshSession();
+          window.dispatchEvent(new Event("haff-auth-change"));
+          if (shouldManageTvDisplayWindow()) {
+            openTvDisplayWindow();
+          }
+          playSound("checkin");
+          return;
         }
-        playSound("checkin");
-      } else {
-        setAuthError(data.user ? "This account is not an administrator." : (data.error ?? "Invalid administrator credentials"));
+        setAuthError(data.user ? "This account is not an administrator." : (data.error ?? "Invalid email or password"));
         playSound("complete");
+      } finally {
+        setLoggingIn(false);
       }
     };
 
@@ -968,7 +983,22 @@ function AdminView() {
             <p className="text-xs font-bold uppercase tracking-[0.24em] text-clay mt-2">Admin Portal</p>
           </div>
 
-          <form onSubmit={handleLogin} className="mt-8 space-y-4">
+          {sessionMember && sessionMember.role !== "ADMIN" ? (
+            <div className="mt-8 space-y-4">
+              <div className="rounded-2xl bg-amber-500/10 border border-amber-500/25 px-4 py-3 text-sm font-semibold text-amber-900 text-center">
+                You&apos;re signed in as <span className="font-black">{sessionMember.displayName}</span>, which is not an administrator account.
+              </div>
+              <p className="text-center text-xs text-forest/60">
+                Sign in below with an admin account, or use the player page with your current account.
+              </p>
+            </div>
+          ) : (
+            <p className="mt-6 text-center text-xs text-forest/60 leading-relaxed px-2">
+              One login for player and admin — if you&apos;re already signed in on the player page, you&apos;ll go straight through.
+            </p>
+          )}
+
+          <form onSubmit={handleLogin} className="mt-6 space-y-4">
             {authError && (
               <div className="p-3.5 bg-red-500/10 border border-red-500/20 text-red-300 rounded-2xl text-xs font-semibold text-center">
                 {authError}
@@ -1053,10 +1083,11 @@ function AdminView() {
             <QrCode size={14} /> Player QR
           </Button>
           <Button
-            onClick={() => {
+            onClick={async () => {
               closeManagedTvDisplayWindow();
-              localStorage.removeItem("haff_admin_authenticated");
-              setIsAuthenticated(SKIP_ADMIN_LOGIN);
+              await apiFetch("/api/auth?action=logout", { method: "POST" });
+              await refreshSession();
+              window.dispatchEvent(new Event("haff-auth-change"));
               playSound("complete");
             }}
             className="min-h-10 gap-2 bg-ivory/15 px-4 text-xs font-bold text-ivory hover:bg-ivory/25"
@@ -2129,14 +2160,14 @@ function PlayersCrudTab() {
           setPhotoCropSource(null);
         }}
         onCompleteBlob={async (blob) => {
-          if (!useSupabaseData() || !editingPlayer) {
-            setFormError("Save the player first, then upload a photo.");
-            setPhotoCropSource(null);
-            return;
-          }
           try {
-            const { avatarUrl: uploaded } = await uploadPlayerAvatar(editingPlayer.id, blob);
-            setAvatarUrl(uploaded);
+            const dataUrl = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(String(reader.result));
+              reader.onerror = () => reject(new Error("Could not read photo."));
+              reader.readAsDataURL(blob);
+            });
+            setAvatarUrl(dataUrl);
             setFormError("");
           } catch (error) {
             setFormError(error instanceof Error ? error.message : "Photo upload failed.");
@@ -3697,15 +3728,76 @@ function SettingsTab() {
 // ----------------------------------------------------
 // INLINE AUTH MODAL (replaces community redirect)
 // ----------------------------------------------------
-type AuthMember = { playerId?: string; displayName: string; role: string };
+type AuthMember = {
+  email?: string;
+  playerId?: string | null;
+  displayName: string;
+  role: string;
+  avatarUrl?: string | null;
+  skillLevel?: string | null;
+};
 
-function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void }) {
-  const [mode, setMode] = React.useState<"login" | "register">("login");
+function normalizeAuthSkillLevel(skillLevel?: string | null): Player["skillLevel"] {
+  if (
+    skillLevel === "Newbie" ||
+    skillLevel === "Beginner" ||
+    skillLevel === "Novice" ||
+    skillLevel === "Low Intermediate" ||
+    skillLevel === "Intermediate" ||
+    skillLevel === "Pro"
+  ) {
+    return skillLevel;
+  }
+  return "Beginner";
+}
+
+async function seedAuthenticatedPlayer(member: AuthMember | null | undefined) {
+  if (!member?.playerId) return;
+  const players = useClubStore.getState().players;
+  const existing = players.find((item) => item.id === member.playerId);
+  const player: Player = {
+    id: member.playerId,
+    displayName: member.displayName || existing?.displayName || member.email?.split("@")[0] || "Player",
+    fullName: existing?.fullName ?? member.displayName,
+    skillLevel: normalizeAuthSkillLevel(member.skillLevel ?? existing?.skillLevel),
+    rating: existing?.rating ?? 2,
+    tags: existing?.tags ?? ["Member"],
+    checkedIn: existing?.checkedIn ?? false,
+    totalGamesPlayed: existing?.totalGamesPlayed ?? 0,
+    totalDaysPlayed: existing?.totalDaysPlayed ?? 0,
+    lastPlayedDate: existing?.lastPlayedDate,
+    isActive: existing?.isActive ?? true,
+    avatarUrl: member.avatarUrl ?? existing?.avatarUrl,
+    statusNote: existing?.statusNote,
+    version: existing?.version,
+  };
+  const nextPlayers = existing
+    ? players.map((item) => (item.id === player.id ? player : item))
+    : [...players, player];
+  await liveDb.playersPut(player);
+  useClubStore.setState({ players: nextPlayers });
+}
+
+function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void | Promise<void> }) {
+  const [mode, setMode] = React.useState<"login" | "register">(() => {
+    if (typeof window === "undefined") return "login";
+    return sessionStorage.getItem("haff-auth-mode") === "register" ? "register" : "login";
+  });
   const [form, setForm] = React.useState({ displayName: "", email: "", password: "", skillLevel: "Beginner" });
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [showPassword, setShowPassword] = React.useState(false);
   const [successMsg, setSuccessMsg] = React.useState("");
+
+  React.useEffect(() => {
+    sessionStorage.removeItem("haff-auth-mode");
+  }, []);
+
+  const switchMode = (next: "login" | "register") => {
+    setMode(next);
+    setError("");
+    setSuccessMsg("");
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -3725,7 +3817,7 @@ function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void }) {
         setSuccessMsg("Welcome to HAFF Leisure Club! Your account has been created.");
       }
       window.dispatchEvent(new Event("haff-auth-change"));
-      onSuccess(data.user);
+      await onSuccess(data.user);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to continue");
     } finally {
@@ -3743,14 +3835,16 @@ function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void }) {
         {/* Header */}
         <div className="flex border-b border-ivory/10">
           <button
-            onClick={() => setMode("login")}
-            className={`flex flex-1 items-center justify-center gap-2 py-4 text-sm font-black transition ${mode === "login" ? "bg-brass text-forest" : "text-ivory/60 hover:text-ivory"}`}
+            type="button"
+            onClick={() => switchMode("login")}
+            className={`flex flex-1 items-center justify-center gap-2 py-4 text-sm font-black transition ${mode === "login" ? "bg-brass text-forest" : "text-ivory/60 hover:bg-ivory/5 hover:text-ivory"}`}
           >
             <LogIn size={16} /> Sign In
           </button>
           <button
-            onClick={() => setMode("register")}
-            className={`flex flex-1 items-center justify-center gap-2 py-4 text-sm font-black transition ${mode === "register" ? "bg-brass text-forest" : "text-ivory/60 hover:text-ivory"}`}
+            type="button"
+            onClick={() => switchMode("register")}
+            className={`flex flex-1 items-center justify-center gap-2 py-4 text-sm font-black transition ${mode === "register" ? "bg-brass text-forest" : "text-ivory/60 hover:bg-ivory/5 hover:text-ivory"}`}
           >
             <UserPlus size={16} /> Register
           </button>
@@ -3787,15 +3881,21 @@ function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void }) {
                   value={form.displayName}
                   onChange={(e) => setForm({ ...form, displayName: e.target.value })}
                 />
-                <select
-                  className="w-full rounded-2xl border-none bg-white/10 px-4 py-3 text-sm text-ivory focus:outline-none focus:ring-2 focus:ring-brass appearance-none"
-                  value={form.skillLevel}
-                  onChange={(e) => setForm({ ...form, skillLevel: e.target.value })}
-                >
-                  {["Newbie", "Beginner", "Novice", "Low Intermediate", "Intermediate", "Pro"].map((lvl) => (
-                    <option key={lvl} value={lvl} className="bg-[#0b3a2c]">{lvl}</option>
-                  ))}
-                </select>
+                <div>
+                  <label htmlFor="auth-skill-level" className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-ivory/50">
+                    Skill level
+                  </label>
+                  <select
+                    id="auth-skill-level"
+                    className="w-full rounded-2xl border border-ivory/10 bg-white/10 px-4 py-3 text-sm text-ivory focus:outline-none focus:ring-2 focus:ring-brass appearance-none"
+                    value={form.skillLevel}
+                    onChange={(e) => setForm({ ...form, skillLevel: e.target.value })}
+                  >
+                    {["Newbie", "Beginner", "Novice", "Low Intermediate", "Intermediate", "Pro"].map((lvl) => (
+                      <option key={lvl} value={lvl} className="bg-[#0b3a2c]">{lvl}</option>
+                    ))}
+                  </select>
+                </div>
               </>
             )}
             <input
@@ -3829,11 +3929,37 @@ function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void }) {
             <button
               type="submit"
               disabled={loading}
-              className="mt-1 w-full min-h-12 rounded-2xl bg-brass px-6 font-black text-forest transition hover:bg-linen active:scale-95 disabled:opacity-60"
+              className="mt-1 w-full min-h-12 rounded-2xl bg-brass px-6 font-black text-forest shadow-lg shadow-brass/20 transition hover:bg-linen active:scale-95 disabled:opacity-60"
             >
               {loading ? "Please wait…" : mode === "register" ? "Create Account" : "Sign In"}
             </button>
           </form>
+
+          <p className="mt-5 border-t border-ivory/10 pt-5 text-center text-sm text-ivory/65">
+            {mode === "login" ? (
+              <>
+                Don&apos;t have an account?{" "}
+                <button
+                  type="button"
+                  onClick={() => switchMode("register")}
+                  className="font-black text-brass underline underline-offset-2 transition hover:text-linen"
+                >
+                  Register here
+                </button>
+              </>
+            ) : (
+              <>
+                Already have an account?{" "}
+                <button
+                  type="button"
+                  onClick={() => switchMode("login")}
+                  className="font-black text-brass underline underline-offset-2 transition hover:text-linen"
+                >
+                  Sign in
+                </button>
+              </>
+            )}
+          </p>
         </div>
       </div>
     </motion.div>
@@ -3843,7 +3969,13 @@ function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void }) {
 // ----------------------------------------------------
 // PLAYER VIEW SCREEN (QR/PHONE LOGIN INCLUDED)
 // ----------------------------------------------------
-function PlayerView() {
+function PlayerView({
+  sessionMember,
+  sessionReady
+}: {
+  sessionMember: SessionMember | null;
+  sessionReady: boolean;
+}) {
   // Narrow selectors so this view only re-renders when court/match/player data
   // actually changes, not on every unrelated store mutation (toasts, admin UI, etc.).
   const players = useClubStore((s) => s.players);
@@ -3854,16 +3986,12 @@ function PlayerView() {
   const updatePlayer = useClubStore((s) => s.updatePlayer);
   const setView = useClubStore((s) => s.setView);
   const hydrated = useClubStore((s) => s.hydrated);
-  const hydrate = useClubStore((s) => s.hydrate);
   const refreshSharedState = useClubStore((s) => s.refreshSharedState);
   const [selectedPlayerId, setSelectedPlayerId] = React.useState<string | null>(() => localStorage.getItem("haff-player-account-id"));
-  const [sessionMember, setSessionMember] = React.useState<{ playerId?: string; displayName: string } | null>(null);
-  const [checkingSession, setCheckingSession] = React.useState(true);
-  const [rosterSynced, setRosterSynced] = React.useState(false);
+  const [recoveringProfile, setRecoveringProfile] = React.useState(false);
   const now = useNow();
 
-  const activePlayers = players.filter((p) => p.isActive !== false);
-  const player = activePlayers.find((item) => item.id === selectedPlayerId);
+  const player = selectedPlayerId ? players.find((item) => item.id === selectedPlayerId) : undefined;
   // Coarsen the clock dependency to per-minute: queue position and estimated play
   // times change at most once per minute, so recomputing every second is wasteful
   // across 100 player tabs. The 1 Hz `now` is still used for display elsewhere.
@@ -3902,37 +4030,33 @@ function PlayerView() {
   const [showStoryModal, setShowStoryModal] = React.useState(false);
 
   React.useEffect(() => {
-    // hydrate() in the root App effect already called refreshSharedState on startup.
-    // If the store is already hydrated when PlayerView mounts, skip the duplicate
-    // full-fetch — just unblock the loading screen. Only fetch if we somehow arrive
-    // here before hydration completes (edge case: fast navigation before first load).
-    if (useClubStore.getState().hydrated) {
-      setRosterSynced(true);
-    } else {
-      void refreshSharedState({ force: true, context: "player" }).finally(() => setRosterSynced(true));
-    }
+    void refreshSharedState({ force: true, context: "player" });
   }, [refreshSharedState]);
 
-  const syncPlayerRoster = React.useCallback(async () => {
-    await hydrate();
-    await refreshSharedState({ force: true, context: "player" });
-    setRosterSynced(true);
-  }, [hydrate, refreshSharedState]);
+  React.useEffect(() => {
+    if (!sessionReady || !sessionMember?.playerId) return;
+    localStorage.setItem("haff-player-account-id", sessionMember.playerId);
+    setSelectedPlayerId(sessionMember.playerId);
+    void seedAuthenticatedPlayer(sessionMember);
+  }, [sessionReady, sessionMember?.playerId, sessionMember?.displayName, sessionMember?.avatarUrl, sessionMember?.skillLevel]);
 
   React.useEffect(() => {
-    apiFetch("/api/auth?action=me")
-      .then((response) => parseResponseJson<{ user?: { playerId?: string | null; displayName: string } | null }>(response))
-      .then((data) => {
-        const member = data.user ?? null;
-        setSessionMember(member ? { displayName: member.displayName, playerId: member.playerId ?? undefined } : null);
-        if (member?.playerId) {
-          localStorage.setItem("haff-player-account-id", member.playerId);
-          setSelectedPlayerId(member.playerId);
-        }
-      })
-      .catch(() => setSessionMember(null))
-      .finally(() => setCheckingSession(false));
-  }, []);
+    if (!sessionReady || !hydrated || !selectedPlayerId || player) {
+      setRecoveringProfile(false);
+      return;
+    }
+    setRecoveringProfile(true);
+    const timer = window.setTimeout(() => {
+      if (sessionMember?.playerId === selectedPlayerId) {
+        void seedAuthenticatedPlayer(sessionMember).finally(() => setRecoveringProfile(false));
+        return;
+      }
+      localStorage.removeItem("haff-player-account-id");
+      setSelectedPlayerId(null);
+      setRecoveringProfile(false);
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [sessionReady, hydrated, selectedPlayerId, player, sessionMember]);
 
   React.useEffect(() => {
     if (!player) return;
@@ -3945,11 +4069,7 @@ function PlayerView() {
     if ("vibrate" in navigator) navigator.vibrate([300, 150, 300, 150, 600]);
   }, [assignedMatch?.id, dismissedTurnMatchId]);
 
-  React.useEffect(() => {
-    if (!rosterSynced || !hydrated || !selectedPlayerId) return;
-    if (player) return;
-    void syncPlayerRoster();
-  }, [player, selectedPlayerId, rosterSynced, hydrated, syncPlayerRoster]);
+  const activePlayers = players.filter((p) => p.isActive !== false);
 
   // Must be called unconditionally before any early returns (Rules of Hooks).
   const playerLiveStats = React.useMemo(
@@ -3957,8 +4077,8 @@ function PlayerView() {
     [player?.id, matches, courts, matchDurationMinutes, nowMinute]
   );
 
-  if (checkingSession || !hydrated || !rosterSynced) return <LoadingScreen />;
-  if (selectedPlayerId && !player) {
+  if (!sessionReady || !hydrated) return <LoadingScreen />;
+  if (selectedPlayerId && !player && recoveringProfile) {
     return (
       <div className="mx-auto max-w-lg px-4 py-16 text-center text-ivory">
         <LoadingScreen />
@@ -3978,26 +4098,20 @@ function PlayerView() {
 
   const handleSaveProfile = async () => {
     if (!player) return;
-    let avatarUrl = editAvatarUrl.trim() || undefined;
-    if (useSupabaseData() && isInlineAvatarData(avatarUrl)) {
-      try {
-        const uploaded = await uploadPlayerAvatar(player.id, avatarUrl!);
-        avatarUrl = uploaded.avatarUrl;
-      } catch (error) {
-        setProfilePhotoError(error instanceof Error ? error.message : "Photo upload failed.");
-        return;
-      }
-    }
     const updated = {
       ...player,
       displayName: editDisplayName.trim() || player.displayName,
       skillLevel: editSkillLevel as typeof player.skillLevel,
-      avatarUrl,
+      avatarUrl: editAvatarUrl.trim() || undefined,
       statusNote: editStatusNote.trim() || undefined,
     };
-    await updatePlayer(updated);
-    setStatusNoteDraft(editStatusNote.trim());
-    setIsEditingProfile(false);
+    try {
+      await updatePlayer(updated);
+      setStatusNoteDraft(editStatusNote.trim());
+      setIsEditingProfile(false);
+    } catch (error) {
+      setProfilePhotoError(error instanceof Error ? error.message : "Profile save failed.");
+    }
   };
 
   const handleSaveStatusNote = async () => {
@@ -4103,8 +4217,13 @@ function PlayerView() {
             if (!player) return;
             setProfilePhotoError("");
             try {
-              const { avatarUrl: uploaded } = await uploadPlayerAvatar(player.id, blob);
-              setEditAvatarUrl(uploaded);
+              const dataUrl = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result));
+                reader.onerror = () => reject(new Error("Could not read photo."));
+                reader.readAsDataURL(blob);
+              });
+              setEditAvatarUrl(dataUrl);
             } catch (error) {
               setProfilePhotoError(error instanceof Error ? error.message : "Photo upload failed.");
             } finally {
@@ -4170,15 +4289,15 @@ function PlayerView() {
         </motion.div>
       )}
       
-      {!checkingSession && !sessionMember && (
+      {!sessionMember && (
         <AuthModal onSuccess={async (member) => {
-          setSessionMember(member);
+          await seedAuthenticatedPlayer(member);
           if (member?.playerId) {
             localStorage.setItem("haff-player-account-id", member.playerId);
             setSelectedPlayerId(member.playerId);
           }
-          setRosterSynced(false);
-          await syncPlayerRoster();
+          window.dispatchEvent(new Event("haff-auth-change"));
+          void refreshSharedState({ force: true, context: "player" });
         }} />
       )}
 
@@ -5162,7 +5281,8 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
       }
     });
   }, [reservationAnnouncementKey, courts, players]);
-  const sortedCourts = sortCourts(courts);
+  const sortedCourts = React.useMemo(() => sortCourts(courts).slice(0, 3), [courts]);
+  const courtCount = sortedCourts.length;
 
   const playerNote = (p: (typeof players)[number] | undefined) => (p ? getPlayerStatusNote(p) : "");
 
@@ -5345,7 +5465,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
         )}
 
       {/* ── Main layout — grid on TV so courts fill remaining 1080p height ── */}
-      <div className="tv-display-shell mx-auto flex min-h-0 w-full max-w-[1920px] flex-1 flex-col overflow-hidden px-[clamp(0.75rem,1.5vw,1.75rem)] pb-[clamp(0.35rem,0.8vh,0.65rem)] pt-[clamp(2.25rem,3.5vh,2.75rem)]">
+      <div className={`tv-display-shell mx-auto min-h-0 w-full max-w-[1920px] flex-1 overflow-hidden px-[clamp(0.75rem,1.5vw,1.75rem)] pb-[clamp(0.25rem,0.5vh,0.5rem)] pt-[clamp(2rem,3vh,2.5rem)]${courtCount >= 3 ? " tv-display-shell--courts-primary" : ""}`}>
 
         {/* ── Header ── */}
         <header className="tv-display-header order-1 shrink-0 flex flex-col items-center gap-0.5 text-center md:flex-row md:items-end md:justify-between md:gap-2 md:text-left">
@@ -5396,13 +5516,11 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
 
         {/* ── Courts — pickleball court diagram scoreboards ── */}
         <div className={`tv-display-courts order-2 md:order-3 mx-auto grid w-full min-h-0 min-w-0 flex-1 gap-[clamp(0.35rem,0.6vw,0.65rem)] overflow-hidden ${
-          sortedCourts.length <= 1
-            ? "grid-cols-1 max-w-3xl"
-            : sortedCourts.length === 2
-              ? "grid-cols-1 md:grid-cols-2 max-w-6xl"
-              : sortedCourts.length === 3
-                ? "grid-cols-1 md:grid-cols-3"
-                : "grid-cols-1 md:grid-cols-2"
+          courtCount <= 1
+            ? "tv-display-courts--single grid-cols-1"
+            : courtCount === 2
+              ? "tv-display-courts--pair grid-cols-1 md:grid-cols-2"
+              : "tv-display-courts--triple grid-cols-1 md:grid-cols-3"
         }`}>
           {sortedCourts.map((court) => {
             const match = getActiveCourtMatch(court, matches);

@@ -40,6 +40,7 @@ for (const row of rows) {
     email: typeof row.email === "string" ? row.email : null,
     tags: Array.isArray(row.tags) ? row.tags.map(String) : [],
     status: row.isActive === false || row.status === "Inactive" ? "Inactive" : String(row.status ?? "Active"),
+    statusNote: typeof row.statusNote === "string" && row.statusNote.trim() ? row.statusNote.trim() : null,
     totalGamesPlayed: typeof row.totalGamesPlayed === "number" ? row.totalGamesPlayed : 0,
     totalPointsScored: typeof row.totalPointsScored === "number" ? row.totalPointsScored : 0,
     totalPointsAgainst: typeof row.totalPointsAgainst === "number" ? row.totalPointsAgainst : 0,

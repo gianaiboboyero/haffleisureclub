@@ -78,6 +78,9 @@ async function applyEvent(
     }
 
     if (playerProfileActions.has(event.actionType)) {
+      if (!isAdmin) {
+        throw new Error("Profile changes must use /api/player-profile.");
+      }
       const updated = await db.player.update({
         where: { id: event.entityId },
         data: { ...buildPlayerData(event.payload), version: { increment: 1 } }

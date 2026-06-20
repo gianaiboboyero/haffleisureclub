@@ -8,7 +8,12 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-const PASSWORD = "user123";
+const PASSWORD = process.env.SEED_ACCOUNT_PASSWORD?.trim();
+if (!PASSWORD || PASSWORD.length < 12) {
+  console.error("Set SEED_ACCOUNT_PASSWORD (min 12 chars) before seeding accounts.");
+  console.error("Example: SEED_ACCOUNT_PASSWORD='...' node scripts/seed-accounts.mjs");
+  process.exit(1);
+}
 
 const ADMINS = [
   { email: "kayenegoza@gmail.com", displayName: "yiekay" },
@@ -121,7 +126,7 @@ for (const member of MEMBERS) {
 }
 await stripKudosFromSession();
 
-console.log("Seeded accounts (password: user123):");
+console.log("Seeded accounts:");
 for (const row of results) {
   console.log(`  ${row.action.padEnd(7)} ${row.role.padEnd(6)} ${row.email}`);
 }
