@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from "@nestjs/common";
+import { Body, Controller, Headers, Post, UnauthorizedException } from "@nestjs/common";
 import { PrismaService } from "./prisma.service";
 import { SocketService } from "./socket.service";
 
@@ -10,7 +10,11 @@ export class SyncController {
   ) {}
 
   @Post()
-  async sync(@Body() events: any[]) {
+  async sync(@Body() events: any[], @Headers("x-sync-api-key") syncApiKey?: string) {
+    const expected = process.env.SYNC_API_KEY?.trim();
+    if (!expected || syncApiKey !== expected) {
+      throw new UnauthorizedException("Sync API key required.");
+    }
     if (!Array.isArray(events)) {
       return { success: false, error: "Events payload must be an array" };
     }

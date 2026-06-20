@@ -68,13 +68,14 @@ const CircularBadge = ({ onClick }: { onClick: () => void }) => (
 interface LandingViewProps {
   setView: (view: "landing" | "admin" | "player" | "tv" | "calendar" | "finance") => void;
   signedIn: boolean;
+  isAdmin?: boolean;
 }
 
 const MANILA_TZ = "Asia/Manila";
 const scheduleDateKey = (date: Date) =>
   new Intl.DateTimeFormat("en-CA", { timeZone: MANILA_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 
-export function LandingView({ setView, signedIn }: LandingViewProps) {
+export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false }: LandingViewProps) {
   const { 
     players, courts, matches, stackOrder, clubStatus, reservations,
     testimonials, announcements, achievements,
@@ -87,7 +88,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
   const [feedback, setFeedback] = React.useState({ category: "App", message: "", contact: "" });
   const [feedbackNotice, setFeedbackNotice] = React.useState("");
 
-  const isAdmin = SKIP_ADMIN_LOGIN || localStorage.getItem("haff_admin_authenticated") === "true";
+  const isAdmin = SKIP_ADMIN_LOGIN || isServerAdmin;
 
   // Modal display states for Admin
   const [showAddAnnouncement, setShowAddAnnouncement] = React.useState(false);
@@ -251,7 +252,11 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
               )}
               <button 
                 onClick={() => setView("player")} 
-                className={`flex items-center gap-2 rounded-full border border-ivory/20 bg-ivory/6 px-5 py-3.5 text-sm font-bold text-ivory backdrop-blur-sm transition hover:bg-ivory/12 ${CALENDAR_PAGE_ENABLED ? "" : "bg-brass text-ink border-brass/30 shadow-lg shadow-brass/15"}`}
+                className={
+                  CALENDAR_PAGE_ENABLED
+                    ? "flex items-center gap-2 rounded-full border border-ivory/20 bg-ivory/6 px-5 py-3.5 text-sm font-bold text-ivory backdrop-blur-sm transition hover:bg-ivory/12"
+                    : "flex items-center gap-2 rounded-full border border-brass/30 bg-brass px-5 py-3.5 text-sm font-black text-forest shadow-lg shadow-brass/15 transition hover:scale-[1.02] hover:bg-brass/90 active:scale-[0.98]"
+                }
               >
                 <Users className="h-4.5 w-4.5" />
                 <span>Go Open Play</span>
@@ -281,7 +286,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
               <div className="mx-auto mb-3 h-14 w-14 overflow-hidden rounded-full bg-brass p-1 shadow-inner md:h-18 md:w-18">
                 <img src={playerImage} alt="Player" className="h-full w-full object-cover rounded-full" />
               </div>
-              <h3 className="text-sm font-black md:text-base">{CALENDAR_PAGE_ENABLED ? "Rent a Court" : "Join Open Play"}</h3>
+              <h3 className="text-sm font-black text-forest md:text-base">{CALENDAR_PAGE_ENABLED ? "Rent a Court" : "Join Open Play"}</h3>
               <p className="mt-1 text-[10px] md:text-xs font-semibold text-ink/60">
                 {CALENDAR_PAGE_ENABLED ? "₱300 per hour" : "₱150 per player"}
               </p>
@@ -304,7 +309,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
               <div className="mx-auto mb-3 h-14 w-14 overflow-hidden rounded-full bg-brass p-1 shadow-inner md:h-18 md:w-18">
                 <img src={courtImage} alt="Court" className="h-full w-full object-cover rounded-full" />
               </div>
-              <h3 className="text-sm font-black md:text-base">Open Play</h3>
+              <h3 className="text-sm font-black text-forest md:text-base">Open Play</h3>
               <p className="mt-1 text-[10px] md:text-xs font-semibold text-ink/60">₱150 per player</p>
               <p className="text-[9px] md:text-[10px] font-bold text-ink/40 mt-1">3 PM ONWARDS</p>
             </motion.div>

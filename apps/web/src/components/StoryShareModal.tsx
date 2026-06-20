@@ -1,23 +1,28 @@
 import React from "react";
-import { X, Download, Copy, CheckCheck, Share2, HelpCircle, Twitter, Linkedin, MessageCircle } from "lucide-react";
+import { X, Download, Copy, CheckCheck, Share2, HelpCircle } from "lucide-react";
 import type { PlayerGameStats } from "../lib/playerStats";
 import { formatMinutesPlayed } from "../lib/playerStats";
 import { copyElementAsImageToClipboard, downloadElementAsImage } from "../lib/storyShare";
 
-export type StoryShareLayout = "minimal" | "strava" | "gradient" | "bold" | "sticker" | "classic";
+export type StoryShareLayout = "overlay-hero" | "overlay-stats";
+
+const STORY_W = 1080;
+const STORY_H = 1920;
 
 const LAYOUT_OPTIONS: Array<{ id: StoryShareLayout; label: string; hint: string }> = [
-  { id: "minimal", label: "Minimal", hint: "Clean white square — Instagram feed" },
-  { id: "strava", label: "Activity", hint: "Strava-style story with hero stat" },
-  { id: "gradient", label: "Gradient", hint: "Colorful 9:16 story" },
-  { id: "bold", label: "Bold", hint: "Dark high-contrast story" },
-  { id: "sticker", label: "Sticker", hint: "Transparent overlay for photos" },
-  { id: "classic", label: "Classic", hint: "HAFF branded story" },
+  { id: "overlay-hero", label: "Hero", hint: "Transparent 9:16 — big court time, drop-shadow text" },
+  { id: "overlay-stats", label: "Stats", hint: "Transparent 9:16 — full stat stack, drop-shadow text" },
 ];
 
-function isSquareLayout(layout: StoryShareLayout) {
-  return layout === "minimal" || layout === "sticker";
-}
+const TEXT_SHADOW =
+  "0 2px 6px rgba(0,0,0,0.92), 0 4px 18px rgba(0,0,0,0.78), 0 1px 0 rgba(0,0,0,1)";
+const TEXT_SHADOW_HEAVY =
+  "0 3px 10px rgba(0,0,0,0.95), 0 6px 28px rgba(0,0,0,0.82), 0 1px 2px rgba(0,0,0,1)";
+const LABEL_SHADOW = "0 1px 4px rgba(0,0,0,0.88), 0 2px 12px rgba(0,0,0,0.65)";
+
+const IVORY = "#f4f1e8";
+const ACCENT = "#2ee882";
+const BRASS = "#d4a843";
 
 interface StoryCardProps {
   playerName: string;
@@ -35,733 +40,315 @@ interface StoryShareModalProps extends StoryCardProps {
   onClose: () => void;
 }
 
-const ACCENT_GREEN = "#2ee882";
-const BRASS = "#d4a843";
-const IVORY = "#f4f1e8";
-const DIM = "rgba(244,241,232,0.45)";
+function storyCanvasStyle(): React.CSSProperties {
+  return {
+    width: STORY_W,
+    height: STORY_H,
+    background: "transparent",
+    fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
+    display: "flex",
+    flexDirection: "column",
+    position: "relative",
+    overflow: "hidden",
+    color: IVORY,
+    boxSizing: "border-box",
+  };
+}
 
 export const StoryStatsCard = React.forwardRef<HTMLDivElement, StoryCardProps>(
   function StoryStatsCard(
-    { playerName, skillLevel, avatarUrl, totalDaysPlayed, totalGamesPlayed, lastPlayedDate, stats, layout = "minimal" },
+    {
+      playerName,
+      skillLevel,
+      totalDaysPlayed,
+      totalGamesPlayed,
+      lastPlayedDate,
+      stats,
+      layout = "overlay-hero",
+    },
     ref
   ) {
     const lastPlay = lastPlayedDate
       ? new Date(lastPlayedDate).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })
       : "—";
     const minutesLabel = formatMinutesPlayed(stats.minutesPlayed);
+    const favCourtLabel = stats.favCourt?.name ?? "—";
 
-    const skillColor: Record<string, string> = {
-      Pro: "#2ee882",
-      Intermediate: "#4ade80",
-      "Low Intermediate": "#86efac",
-      Novice: BRASS,
-      Beginner: BRASS,
-      Newbie: "#d97706",
-    };
-    const badgeColor = skillColor[skillLevel] ?? BRASS;
+    if (layout === "overlay-stats") {
+      const statLines = [
+        { label: "Games", value: String(totalGamesPlayed) },
+        { label: "Court Time", value: minutesLabel },
+        { label: "Visits", value: String(totalDaysPlayed) },
+        { label: "Favorite Court", value: favCourtLabel },
+      ];
 
-    const statTiles = [
-      { value: totalGamesPlayed, label: "Games", unit: "" },
-      { value: minutesLabel, label: "Court Time", unit: "" },
-      { value: totalDaysPlayed, label: "Visits", unit: "" },
-    ];
-
-    // Minimal (Strava-inspired)
-    if (layout === "minimal") {
       return (
-        <div
-          ref={ref}
-          style={{
-            width: 1080,
-            height: 1080,
-            background: "#ffffff",
-            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
-            display: "flex",
-            flexDirection: "column",
-            position: "relative",
-            overflow: "hidden",
-            color: "#000000",
-          }}
-        >
-          {/* Subtle accent bar */}
-          <div style={{ width: "100%", height: 4, background: ACCENT_GREEN }} />
+        <div ref={ref} style={storyCanvasStyle()}>
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              alignItems: "center",
+              padding: "220px 72px 280px",
+              textAlign: "center",
+            }}
+          >
+            <p
+              style={{
+                margin: 0,
+                fontSize: 22,
+                fontWeight: 800,
+                letterSpacing: "0.2em",
+                textTransform: "uppercase",
+                color: ACCENT,
+                textShadow: LABEL_SHADOW,
+              }}
+            >
+              HAFF PicklePulse
+            </p>
 
-          {/* Header */}
-          <div style={{ padding: "32px 40px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <p style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.05em", color: "#999", margin: 0, textTransform: "uppercase" }}>
-                HAFF PicklePulse
-              </p>
-              <p style={{ fontSize: 11, color: "#bbb", margin: "4px 0 0", letterSpacing: "0.02em" }}>
-                HAFF Leisure Club
-              </p>
-            </div>
-            {avatarUrl && (
-              <div
-                style={{
-                  width: 64,
-                  height: 64,
-                  borderRadius: "50%",
-                  overflow: "hidden",
-                  border: "3px solid #f0f0f0",
-                }}
-              >
-                <img src={avatarUrl} alt={playerName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-              </div>
-            )}
-          </div>
-
-          {/* Player info */}
-          <div style={{ padding: "0 40px 32px" }}>
-            <h1 style={{ fontSize: 48, fontWeight: 800, margin: 0, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
+            <h1
+              style={{
+                margin: "28px 0 0",
+                fontSize: 88,
+                fontWeight: 900,
+                lineHeight: 1.05,
+                letterSpacing: "-0.03em",
+                textShadow: TEXT_SHADOW_HEAVY,
+                maxWidth: "100%",
+                wordBreak: "break-word",
+              }}
+            >
               {playerName}
             </h1>
-            <div style={{ marginTop: 12, display: "inline-block", padding: "6px 14px", borderRadius: 6, background: "#f5f5f5" }}>
-              <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: "#666", margin: 0 }}>
-                {skillLevel}
-              </p>
+
+            <p
+              style={{
+                margin: "16px 0 0",
+                fontSize: 26,
+                fontWeight: 800,
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                color: BRASS,
+                textShadow: TEXT_SHADOW,
+              }}
+            >
+              {skillLevel}
+            </p>
+
+            <div style={{ marginTop: 72, width: "100%", display: "flex", flexDirection: "column", gap: 36 }}>
+              {statLines.map(({ label, value }) => (
+                <div key={label}>
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: 22,
+                      fontWeight: 800,
+                      letterSpacing: "0.16em",
+                      textTransform: "uppercase",
+                      color: "rgba(244,241,232,0.82)",
+                      textShadow: LABEL_SHADOW,
+                    }}
+                  >
+                    {label}
+                  </p>
+                  <p
+                    style={{
+                      margin: "10px 0 0",
+                      fontSize: label === "Favorite Court" ? 56 : 96,
+                      fontWeight: 900,
+                      lineHeight: 1,
+                      letterSpacing: "-0.02em",
+                      textShadow: TEXT_SHADOW_HEAVY,
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {value}
+                  </p>
+                </div>
+              ))}
             </div>
-          </div>
 
-          {/* Stats grid */}
-          <div style={{ padding: "0 40px", flex: 1, display: "flex", flexDirection: "column", gap: 20 }}>
-            {statTiles.map(({ value, label }) => (
-              <div
-                key={label}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "baseline",
-                  padding: "24px 0",
-                  borderBottom: "1px solid #e5e5e5",
-                }}
-              >
-                <p style={{ fontSize: 16, fontWeight: 600, color: "#666", margin: 0, letterSpacing: "0.02em" }}>
-                  {label}
-                </p>
-                <p style={{ fontSize: 36, fontWeight: 800, margin: 0, letterSpacing: "-0.01em" }}>{value}</p>
-              </div>
-            ))}
-            {stats.favCourt && (
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "baseline",
-                  padding: "24px 0",
-                  borderBottom: "1px solid #e5e5e5",
-                }}
-              >
-                <p style={{ fontSize: 16, fontWeight: 600, color: "#666", margin: 0, letterSpacing: "0.02em" }}>
-                  Favorite Court
-                </p>
-                <p style={{ fontSize: 36, fontWeight: 800, margin: 0, letterSpacing: "-0.01em" }}>{stats.favCourt.name}</p>
-              </div>
-            )}
-          </div>
-
-          {/* Footer */}
-          <div style={{ padding: "32px 40px", borderTop: "1px solid #e5e5e5" }}>
-            <p style={{ fontSize: 13, color: "#999", margin: 0, textAlign: "center" }}>
-              Last visit: {lastPlay}
+            <p
+              style={{
+                marginTop: 64,
+                fontSize: 22,
+                fontWeight: 700,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                color: "rgba(244,241,232,0.7)",
+                textShadow: LABEL_SHADOW,
+              }}
+            >
+              Last visit · {lastPlay}
             </p>
           </div>
         </div>
       );
     }
 
-    // Activity (Strava-inspired story)
-    if (layout === "strava") {
-      return (
+    return (
+      <div ref={ref} style={storyCanvasStyle()}>
         <div
-          ref={ref}
           style={{
-            width: 1080,
-            height: 1920,
-            background: "#f7f7f5",
-            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
+            flex: 1,
             display: "flex",
             flexDirection: "column",
-            position: "relative",
-            overflow: "hidden",
-            color: "#1a1a1a",
+            justifyContent: "space-between",
+            padding: "200px 64px 260px",
           }}
         >
-          <div style={{ padding: "56px 64px 0" }}>
-            <p style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: ACCENT_GREEN, margin: 0 }}>
+          <div style={{ textAlign: "center" }}>
+            <p
+              style={{
+                margin: 0,
+                fontSize: 22,
+                fontWeight: 800,
+                letterSpacing: "0.2em",
+                textTransform: "uppercase",
+                color: ACCENT,
+                textShadow: LABEL_SHADOW,
+              }}
+            >
               HAFF PicklePulse
             </p>
-            <p style={{ fontSize: 12, color: "#888", margin: "6px 0 0" }}>Open Play Session</p>
+            <p
+              style={{
+                margin: "10px 0 0",
+                fontSize: 18,
+                fontWeight: 700,
+                letterSpacing: "0.14em",
+                textTransform: "uppercase",
+                color: "rgba(244,241,232,0.65)",
+                textShadow: LABEL_SHADOW,
+              }}
+            >
+              Open Play Session
+            </p>
           </div>
 
-          <div style={{ padding: "72px 64px 48px", flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-            <p style={{ fontSize: 18, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#666", margin: 0 }}>
+          <div style={{ textAlign: "center" }}>
+            <p
+              style={{
+                margin: 0,
+                fontSize: 28,
+                fontWeight: 800,
+                letterSpacing: "0.14em",
+                textTransform: "uppercase",
+                color: "rgba(244,241,232,0.85)",
+                textShadow: LABEL_SHADOW,
+              }}
+            >
               Court Time
             </p>
-            <p style={{ fontSize: 140, fontWeight: 900, margin: "8px 0 0", letterSpacing: "-0.04em", lineHeight: 0.9, color: "#111" }}>
+            <p
+              style={{
+                margin: "12px 0 0",
+                fontSize: 168,
+                fontWeight: 900,
+                lineHeight: 0.9,
+                letterSpacing: "-0.04em",
+                textShadow: TEXT_SHADOW_HEAVY,
+              }}
+            >
               {minutesLabel}
             </p>
 
-            <div style={{ marginTop: 48, display: "flex", alignItems: "center", gap: 24 }}>
-              <div
-                style={{
-                  width: 96,
-                  height: 96,
-                  borderRadius: "50%",
-                  overflow: "hidden",
-                  border: "3px solid #e8e8e8",
-                  background: "#fff",
-                  flexShrink: 0,
-                }}
-              >
-                {avatarUrl ? (
-                  <img src={avatarUrl} alt={playerName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                ) : (
-                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", fontSize: 36, fontWeight: 900, color: ACCENT_GREEN }}>
-                    {playerName.charAt(0).toUpperCase()}
-                  </div>
-                )}
-              </div>
-              <div>
-                <p style={{ fontSize: 36, fontWeight: 800, margin: 0, letterSpacing: "-0.02em", lineHeight: 1.1 }}>{playerName}</p>
-                <p style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "#888", margin: "8px 0 0" }}>
-                  {skillLevel}
-                </p>
-              </div>
-            </div>
-
-            <div style={{ marginTop: 56, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
-              {statTiles.map(({ value, label }) => (
-                <div
-                  key={label}
-                  style={{
-                    background: "#fff",
-                    borderRadius: 16,
-                    padding: "24px 16px",
-                    textAlign: "center",
-                    border: "1px solid #ebebeb",
-                    boxShadow: "0 2px 12px rgba(0,0,0,0.04)",
-                  }}
-                >
-                  <p style={{ fontSize: label === "Court Time" ? 22 : 36, fontWeight: 900, margin: 0, lineHeight: 1.1 }}>{value}</p>
-                  <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#999", margin: "10px 0 0" }}>
-                    {label}
-                  </p>
-                </div>
-              ))}
-            </div>
-
-            {stats.favCourt && (
-              <div style={{ marginTop: 20, background: "#fff", borderRadius: 16, padding: "20px 24px", border: "1px solid #ebebeb" }}>
-                <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#999", margin: 0 }}>
-                  Favorite Court
-                </p>
-                <p style={{ fontSize: 24, fontWeight: 800, margin: "6px 0 0" }}>{stats.favCourt.name}</p>
-              </div>
-            )}
-          </div>
-
-          <div style={{ padding: "40px 64px 56px", borderTop: "1px solid #e5e5e5" }}>
-            <p style={{ fontSize: 13, color: "#999", margin: 0, textAlign: "center" }}>
-              HAFF Leisure Club · Last visit {lastPlay}
-            </p>
-          </div>
-        </div>
-      );
-    }
-
-    // Gradient
-    if (layout === "gradient") {
-      return (
-        <div
-          ref={ref}
-          style={{
-            width: 1080,
-            height: 1920,
-            background: "linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%)",
-            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            position: "relative",
-            overflow: "hidden",
-            color: "#ffffff",
-            padding: "60px 80px",
-            boxSizing: "border-box",
-          }}
-        >
-          {/* Overlay pattern */}
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              background: "radial-gradient(circle at 30% 20%, rgba(255,255,255,0.1) 0%, transparent 50%), radial-gradient(circle at 70% 80%, rgba(0,0,0,0.1) 0%, transparent 50%)",
-              pointerEvents: "none",
-            }}
-          />
-
-          <div style={{ position: "relative", zIndex: 1, textAlign: "center", width: "100%" }}>
-            {/* Avatar */}
-            <div
+            <h1
               style={{
-                width: 180,
-                height: 180,
-                borderRadius: "50%",
-                overflow: "hidden",
-                border: "5px solid rgba(255,255,255,0.3)",
-                boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
-                margin: "0 auto",
-                background: "rgba(255,255,255,0.1)",
+                margin: "48px 0 0",
+                fontSize: 72,
+                fontWeight: 900,
+                lineHeight: 1.05,
+                letterSpacing: "-0.02em",
+                textShadow: TEXT_SHADOW_HEAVY,
+                wordBreak: "break-word",
               }}
             >
-              {avatarUrl ? (
-                <img src={avatarUrl} alt={playerName} style={{ width: "100%", height: "100%", objectFit: "cover" }} crossOrigin="anonymous" />
-              ) : (
-                <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", fontSize: 64, fontWeight: 900 }}>
-                  {playerName.charAt(0).toUpperCase()}
-                </div>
-              )}
-            </div>
-
-            <h1 style={{ fontSize: 64, fontWeight: 900, margin: "40px 0 16px", textShadow: "0 4px 20px rgba(0,0,0,0.2)" }}>
               {playerName}
             </h1>
-
-            <div style={{ display: "inline-block", padding: "10px 24px", borderRadius: 30, background: "rgba(255,255,255,0.2)", backdropFilter: "blur(10px)" }}>
-              <p style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", margin: 0 }}>
-                {skillLevel}
-              </p>
-            </div>
-
-            {/* Stats */}
-            <div style={{ marginTop: 60, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 24 }}>
-              {statTiles.map(({ value, label }) => (
-                <div
-                  key={label}
-                  style={{
-                    background: "rgba(255,255,255,0.15)",
-                    backdropFilter: "blur(10px)",
-                    borderRadius: 24,
-                    padding: "32px 20px",
-                    border: "1px solid rgba(255,255,255,0.2)",
-                  }}
-                >
-                  <p style={{ fontSize: 48, fontWeight: 900, margin: 0, lineHeight: 1, textShadow: "0 2px 10px rgba(0,0,0,0.1)" }}>{value}</p>
-                  <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", margin: "12px 0 0", opacity: 0.9 }}>
-                    {label}
-                  </p>
-                </div>
-              ))}
-            </div>
-
-            {stats.favCourt && (
-              <div
-                style={{
-                  marginTop: 24,
-                  background: "rgba(255,255,255,0.15)",
-                  backdropFilter: "blur(10px)",
-                  borderRadius: 24,
-                  padding: "24px",
-                  border: "1px solid rgba(255,255,255,0.2)",
-                }}
-              >
-                <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", margin: 0, opacity: 0.9 }}>
-                  Favorite Court
-                </p>
-                <p style={{ fontSize: 28, fontWeight: 900, margin: "8px 0 0" }}>{stats.favCourt.name}</p>
-              </div>
-            )}
-
-            <div style={{ marginTop: 60 }}>
-              <p style={{ fontSize: 14, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", margin: 0, opacity: 0.7 }}>
-                HAFF PicklePulse
-              </p>
-              <p style={{ fontSize: 12, margin: "8px 0 0", opacity: 0.6 }}>
-                Last visit: {lastPlay}
-              </p>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // Bold
-    if (layout === "bold") {
-      return (
-        <div
-          ref={ref}
-          style={{
-            width: 1080,
-            height: 1920,
-            background: "#000000",
-            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
-            display: "flex",
-            flexDirection: "column",
-            position: "relative",
-            overflow: "hidden",
-            color: "#ffffff",
-          }}
-        >
-          {/* Accent stripe */}
-          <div
-            style={{
-              width: "100%",
-              height: 12,
-              background: `linear-gradient(90deg, ${ACCENT_GREEN} 0%, ${BRASS} 100%)`,
-            }}
-          />
-
-          <div style={{ padding: "80px 80px 60px" }}>
-            <p style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.15em", color: ACCENT_GREEN, margin: 0, textTransform: "uppercase" }}>
-              HAFF PicklePulse
-            </p>
-            <p style={{ fontSize: 13, color: "#666", margin: "8px 0 0", letterSpacing: "0.05em", textTransform: "uppercase" }}>
-              HAFF Leisure Club
-            </p>
-          </div>
-
-          {/* Hero section */}
-          <div style={{ padding: "0 80px 80px", display: "flex", gap: 40, alignItems: "center" }}>
-            <div
+            <p
               style={{
-                width: 200,
-                height: 200,
-                borderRadius: 24,
-                overflow: "hidden",
-                border: `4px solid ${ACCENT_GREEN}`,
-                boxShadow: `0 0 60px ${ACCENT_GREEN}40`,
-                flexShrink: 0,
-                background: "#111",
+                margin: "14px 0 0",
+                fontSize: 24,
+                fontWeight: 800,
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                color: BRASS,
+                textShadow: TEXT_SHADOW,
               }}
             >
-              {avatarUrl ? (
-                <img src={avatarUrl} alt={playerName} style={{ width: "100%", height: "100%", objectFit: "cover" }} crossOrigin="anonymous" />
-              ) : (
-                <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", fontSize: 72, fontWeight: 900, color: ACCENT_GREEN }}>
-                  {playerName.charAt(0).toUpperCase()}
-                </div>
-              )}
-            </div>
-
-            <div style={{ flex: 1 }}>
-              <h1 style={{ fontSize: 72, fontWeight: 900, margin: 0, letterSpacing: "-0.02em", lineHeight: 0.9 }}>
-                {playerName}
-              </h1>
-              <div style={{ marginTop: 20, display: "inline-block", padding: "10px 20px", borderRadius: 8, background: ACCENT_GREEN }}>
-                <p style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: "#000", margin: 0 }}>
-                  {skillLevel}
-                </p>
-              </div>
-            </div>
+              {skillLevel}
+            </p>
           </div>
 
-          {/* Stats blocks */}
-          <div style={{ flex: 1, padding: "0 80px", display: "flex", flexDirection: "column", gap: 24 }}>
-            {statTiles.map(({ value, label }, i) => (
-              <div
-                key={label}
-                style={{
-                  background: "#111",
-                  border: `2px solid ${i === 0 ? ACCENT_GREEN : i === 1 ? BRASS : "#333"}`,
-                  borderRadius: 20,
-                  padding: "40px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-              >
-                <p style={{ fontSize: 24, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", margin: 0 }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, 1fr)",
+              gap: 24,
+              textAlign: "center",
+            }}
+          >
+            {[
+              { label: "Games", value: String(totalGamesPlayed) },
+              { label: "Visits", value: String(totalDaysPlayed) },
+              { label: "Fav Court", value: favCourtLabel },
+            ].map(({ label, value }) => (
+              <div key={label}>
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: 18,
+                    fontWeight: 800,
+                    letterSpacing: "0.14em",
+                    textTransform: "uppercase",
+                    color: "rgba(244,241,232,0.75)",
+                    textShadow: LABEL_SHADOW,
+                  }}
+                >
                   {label}
                 </p>
-                <p style={{ fontSize: 64, fontWeight: 900, margin: 0, letterSpacing: "-0.02em", color: i === 0 ? ACCENT_GREEN : i === 1 ? BRASS : "#fff" }}>
+                <p
+                  style={{
+                    margin: "8px 0 0",
+                    fontSize: label === "Fav Court" ? 36 : 64,
+                    fontWeight: 900,
+                    lineHeight: 1.05,
+                    letterSpacing: "-0.02em",
+                    textShadow: TEXT_SHADOW_HEAVY,
+                    wordBreak: "break-word",
+                  }}
+                >
                   {value}
                 </p>
               </div>
             ))}
-
-            {stats.favCourt && (
-              <div
-                style={{
-                  background: "#111",
-                  border: "2px solid #333",
-                  borderRadius: 20,
-                  padding: "40px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-              >
-                <p style={{ fontSize: 24, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", margin: 0 }}>
-                  Favorite Court
-                </p>
-                <p style={{ fontSize: 56, fontWeight: 900, margin: 0, letterSpacing: "-0.02em" }}>{stats.favCourt.name}</p>
-              </div>
-            )}
           </div>
 
-          {/* Footer */}
-          <div style={{ padding: "60px 80px", borderTop: "1px solid #222" }}>
-            <p style={{ fontSize: 14, color: "#666", margin: 0 }}>
-              Last visit: {lastPlay}
-            </p>
-          </div>
-        </div>
-      );
-    }
-
-    // Sticker (transparent overlay)
-    if (layout === "sticker") {
-      return (
-        <div
-          ref={ref}
-          style={{
-            width: 1080,
-            height: 1080,
-            background: "transparent",
-            fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            position: "relative",
-            overflow: "visible",
-            color: IVORY,
-            padding: 48,
-            boxSizing: "border-box",
-          }}
-        >
-          <div
-            style={{
-              width: "100%",
-              background: "rgba(7, 26, 18, 0.92)",
-              border: "1px solid rgba(46,232,130,0.28)",
-              borderRadius: 32,
-              padding: "40px 36px",
-              boxShadow: "0 24px 64px rgba(0,0,0,0.55), 0 8px 24px rgba(0,0,0,0.35)",
-              backdropFilter: "blur(12px)",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 28 }}>
-              <div
-                style={{
-                  width: 88,
-                  height: 88,
-                  borderRadius: "50%",
-                  overflow: "hidden",
-                  border: `3px solid ${ACCENT_GREEN}`,
-                  flexShrink: 0,
-                  background: "#0f2e24",
-                }}
-              >
-                {avatarUrl ? (
-                  <img src={avatarUrl} alt={playerName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                ) : (
-                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", fontSize: 32, fontWeight: 900, color: ACCENT_GREEN }}>
-                    {playerName.charAt(0).toUpperCase()}
-                  </div>
-                )}
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <p style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase", color: ACCENT_GREEN, margin: 0 }}>
-                  HAFF PicklePulse
-                </p>
-                <p style={{ fontSize: 32, fontWeight: 900, margin: "6px 0 0", lineHeight: 1.1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {playerName}
-                </p>
-                <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: DIM, margin: "6px 0 0" }}>
-                  {skillLevel}
-                </p>
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-              {statTiles.map(({ value, label }) => (
-                <div
-                  key={label}
-                  style={{
-                    background: "rgba(46,232,130,0.08)",
-                    border: "1px solid rgba(46,232,130,0.18)",
-                    borderRadius: 18,
-                    padding: "18px 10px",
-                    textAlign: "center",
-                  }}
-                >
-                  <p style={{ fontSize: label === "Court Time" ? 18 : 28, fontWeight: 900, margin: 0, lineHeight: 1.1 }}>{value}</p>
-                  <p style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: DIM, margin: "8px 0 0" }}>
-                    {label}
-                  </p>
-                </div>
-              ))}
-            </div>
-
-            {stats.favCourt && (
-              <div style={{ marginTop: 14, padding: "14px 16px", borderRadius: 14, background: "rgba(244,241,232,0.05)", border: "1px solid rgba(244,241,232,0.08)" }}>
-                <p style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: DIM, margin: 0 }}>
-                  Favorite Court · {stats.favCourt.name}
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-      );
-    }
-
-    // Classic
-    return (
-      <div
-        ref={ref}
-        style={{
-          width: 1080,
-          height: 1920,
-          background: "linear-gradient(165deg, #071a12 0%, #020f0a 55%, #040e09 100%)",
-          fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          position: "relative",
-          overflow: "hidden",
-          color: IVORY,
-          padding: "80px 80px 60px",
-          boxSizing: "border-box",
-        }}
-      >
-        <div
-          style={{
-            position: "absolute",
-            top: -200,
-            left: "50%",
-            transform: "translateX(-50%)",
-            width: 1200,
-            height: 1200,
-            background: "radial-gradient(ellipse at center, rgba(46,232,130,0.08) 0%, transparent 65%)",
-            pointerEvents: "none",
-          }}
-        />
-
-        <div style={{ width: "100%", height: 4, background: `linear-gradient(90deg, transparent, ${ACCENT_GREEN}, transparent)`, marginBottom: 60 }} />
-
-        <div style={{ textAlign: "center", position: "relative", zIndex: 1, width: "100%" }}>
           <p
             style={{
-              fontSize: 18,
-              fontWeight: 900,
-              letterSpacing: "0.2em",
-              textTransform: "uppercase",
-              color: ACCENT_GREEN,
               margin: 0,
-            }}
-          >
-            HAFF PicklePulse
-          </p>
-          <p style={{ fontSize: 14, color: DIM, margin: "8px 0 0", letterSpacing: "0.14em", textTransform: "uppercase" }}>
-            HAFF Leisure Club
-          </p>
-        </div>
-
-        <div
-          style={{
-            marginTop: 60,
-            width: 240,
-            height: 240,
-            borderRadius: "50%",
-            border: `5px solid ${ACCENT_GREEN}`,
-            boxShadow: `0 0 60px rgba(46,232,130,0.3), 0 0 0 10px rgba(46,232,130,0.05)`,
-            overflow: "hidden",
-            background: "#0f2e24",
-          }}
-        >
-          {avatarUrl ? (
-            <img src={avatarUrl} alt={playerName} style={{ width: "100%", height: "100%", objectFit: "cover" }} crossOrigin="anonymous" />
-          ) : (
-            <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", fontSize: 80, fontWeight: 900, color: ACCENT_GREEN }}>
-              {playerName.charAt(0).toUpperCase()}
-            </div>
-          )}
-        </div>
-
-        <h1 style={{ marginTop: 32, fontSize: 64, fontWeight: 900, textAlign: "center", lineHeight: 1.1 }}>
-          {playerName}
-        </h1>
-
-        <div
-          style={{
-            marginTop: 16,
-            padding: "8px 28px",
-            borderRadius: 999,
-            border: `2px solid ${badgeColor}`,
-            background: `rgba(${hexToRgb(badgeColor)}, 0.12)`,
-          }}
-        >
-          <p style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.15em", textTransform: "uppercase", color: badgeColor, margin: 0 }}>
-            {skillLevel}
-          </p>
-        </div>
-
-        <div
-          style={{
-            marginTop: 60,
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: 20,
-            width: "100%",
-          }}
-        >
-          {statTiles.map(({ value, label }) => (
-            <div
-              key={label}
-              style={{
-                background: "rgba(46,232,130,0.06)",
-                border: "1px solid rgba(46,232,130,0.15)",
-                borderRadius: 24,
-                padding: "32px 16px",
-                textAlign: "center",
-              }}
-            >
-              <p style={{ fontSize: label === "Court Time" ? 32 : 52, fontWeight: 900, margin: 0, lineHeight: 1.1 }}>{value}</p>
-              <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: DIM, margin: "12px 0 0" }}>
-                {label}
-              </p>
-            </div>
-          ))}
-        </div>
-
-        {stats.favCourt && (
-          <div
-            style={{
-              marginTop: 24,
-              width: "100%",
-              background: "rgba(244,241,232,0.04)",
-              border: "1px solid rgba(244,241,232,0.08)",
-              borderRadius: 24,
-              padding: "32px",
               textAlign: "center",
+              fontSize: 20,
+              fontWeight: 700,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              color: "rgba(244,241,232,0.65)",
+              textShadow: LABEL_SHADOW,
             }}
           >
-            <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: DIM, margin: 0 }}>
-              Favorite Court
-            </p>
-            <p style={{ fontSize: 36, fontWeight: 900, color: BRASS, margin: "8px 0 0" }}>{stats.favCourt.name}</p>
-            <p style={{ fontSize: 13, color: DIM, margin: "6px 0 0" }}>
-              {stats.favCourt.gamesOnCourt} game{stats.favCourt.gamesOnCourt !== 1 ? "s" : ""}
-            </p>
-          </div>
-        )}
-
-        <div style={{ flex: 1 }} />
-
-        <div style={{ marginTop: 60, width: "100%", padding: "40px 0", borderTop: "1px solid rgba(244,241,232,0.07)", textAlign: "center" }}>
-          <p style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.18em", textTransform: "uppercase", color: DIM, margin: 0 }}>
-            Last visit: {lastPlay}
+            Last visit · {lastPlay}
           </p>
         </div>
-
-        <div style={{ width: "100%", height: 4, background: `linear-gradient(90deg, transparent, ${ACCENT_GREEN}, transparent)` }} />
       </div>
     );
   }
 );
 
-export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ...cardProps }: StoryShareModalProps) {
+export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero", ...cardProps }: StoryShareModalProps) {
   const [layout, setLayout] = React.useState<StoryShareLayout>(initialLayout);
   const [isCopying, setIsCopying] = React.useState(false);
   const [isDownloading, setIsDownloading] = React.useState(false);
@@ -776,23 +363,11 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const CARD_W = 1080;
-  const CARD_H = isSquareLayout(layout) ? 1080 : 1920;
   const dockClearance = 112;
   const modalMaxH = Math.max(360, viewportH - dockClearance - 24);
-  const previewBudget = Math.min(isSquareLayout(layout) ? 240 : 280, modalMaxH * 0.35);
-  const scale = Math.min(1, previewBudget / CARD_H);
+  const previewBudget = Math.min(300, modalMaxH * 0.38);
+  const scale = Math.min(1, previewBudget / STORY_H);
 
-  const exportOptions = {
-    backgroundColor:
-      layout === "sticker"
-        ? null
-        : layout === "minimal"
-          ? "#ffffff"
-          : layout === "strava"
-            ? "#f7f7f5"
-            : undefined,
-  };
   const activeLayout = LAYOUT_OPTIONS.find((option) => option.id === layout);
   const filename = `haff-picklepulse-${cardProps.playerName.toLowerCase().replace(/\s+/g, "-")}.png`;
 
@@ -801,7 +376,9 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
     setIsCopying(true);
     setCopyResult(null);
     try {
-      const result = await copyElementAsImageToClipboard(captureRef.current, filename, 2, exportOptions);
+      const result = await copyElementAsImageToClipboard(captureRef.current, filename, 2, {
+        backgroundColor: null,
+      });
       setCopyResult(result);
     } finally {
       setIsCopying(false);
@@ -812,27 +389,9 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
     if (!captureRef.current) return;
     setIsDownloading(true);
     try {
-      await downloadElementAsImage(captureRef.current, filename, 2, exportOptions);
+      await downloadElementAsImage(captureRef.current, filename, 2, { backgroundColor: null });
     } finally {
       setIsDownloading(false);
-    }
-  };
-
-  const handleShareToSocial = async (platform: "twitter" | "whatsapp" | "linkedin") => {
-    if (!captureRef.current) return;
-    
-    // Download the image first
-    await handleDownload();
-    
-    // Open share dialog
-    const text = `Check out my PicklePulse stats from HAFF Leisure Club! 🎾\n\n${cardProps.totalGamesPlayed} games played • ${formatMinutesPlayed(cardProps.stats.minutesPlayed)} court time • ${cardProps.totalDaysPlayed} visits`;
-    
-    if (platform === "twitter") {
-      window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank");
-    } else if (platform === "whatsapp") {
-      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
-    } else if (platform === "linkedin") {
-      window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(window.location.origin)}`, "_blank");
     }
   };
 
@@ -868,14 +427,13 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
             </div>
           </div>
 
-          {/* Layout selector — 6 unique designs */}
-          <div className="mb-4 grid grid-cols-3 gap-2 rounded-xl bg-white/5 p-1">
+          <div className="mb-4 grid grid-cols-2 gap-2 rounded-xl bg-white/5 p-1">
             {LAYOUT_OPTIONS.map((option) => (
               <button
                 key={option.id}
                 type="button"
                 onClick={() => setLayout(option.id)}
-                className={`rounded-lg py-2.5 text-[10px] font-black uppercase tracking-wider transition ${
+                className={`rounded-lg py-3 text-[11px] font-black uppercase tracking-wider transition ${
                   layout === option.id ? "bg-[#2ee882] text-[#020f0a]" : "text-ivory/60 hover:text-ivory"
                 }`}
               >
@@ -884,17 +442,16 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
             ))}
           </div>
 
-          {/* Preview */}
           <div
             className="flex justify-center mb-4 min-h-0 shrink rounded-xl overflow-hidden"
             style={{
-              height: Math.max(140, CARD_H * scale),
+              height: Math.max(160, STORY_H * scale),
               background: "repeating-conic-gradient(#1a1a1a 0% 25%, #2a2a2a 0% 50%) 50% / 16px 16px",
             }}
           >
             <div
               style={{
-                width: CARD_W,
+                width: STORY_W,
                 transform: `scale(${scale})`,
                 transformOrigin: "top center",
                 flexShrink: 0,
@@ -917,13 +474,12 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
               }`}
             >
               {copyResult === "copied"
-                ? "Image copied! Open Instagram, tap your story camera, and hold to paste."
-                : "Image downloaded! Open it in your gallery and share to social media."}
+                ? "Transparent story copied! Open Instagram Stories, add your photo, then paste as a sticker."
+                : "Transparent PNG saved! Add it as a sticker over your story photo in Instagram."}
             </div>
           )}
 
-          {/* Primary actions */}
-          <div className="flex gap-3 mb-3">
+          <div className="flex gap-3">
             <button
               type="button"
               disabled={isCopying}
@@ -944,41 +500,12 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
             </button>
           </div>
 
-          {/* Social sharing */}
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={() => handleShareToSocial("twitter")}
-              className="flex items-center justify-center gap-2 rounded-lg bg-[#1DA1F2]/10 border border-[#1DA1F2]/20 py-2.5 text-xs font-bold text-[#1DA1F2] hover:bg-[#1DA1F2]/20 transition"
-            >
-              <Twitter size={16} />
-              Twitter
-            </button>
-            <button
-              type="button"
-              onClick={() => handleShareToSocial("whatsapp")}
-              className="flex items-center justify-center gap-2 rounded-lg bg-[#25D366]/10 border border-[#25D366]/20 py-2.5 text-xs font-bold text-[#25D366] hover:bg-[#25D366]/20 transition"
-            >
-              <MessageCircle size={16} />
-              WhatsApp
-            </button>
-            <button
-              type="button"
-              onClick={() => handleShareToSocial("linkedin")}
-              className="flex items-center justify-center gap-2 rounded-lg bg-[#0A66C2]/10 border border-[#0A66C2]/20 py-2.5 text-xs font-bold text-[#0A66C2] hover:bg-[#0A66C2]/20 transition"
-            >
-              <Linkedin size={16} />
-              LinkedIn
-            </button>
-          </div>
-
           <p className="mt-3 text-center text-[10px] leading-relaxed text-ivory/45">
-            {activeLayout?.hint ?? "Choose a layout, then copy or download to share."}
+            {activeLayout?.hint ?? "1080×1920 transparent overlay — uses your live player statistics."}
           </p>
         </div>
       </div>
 
-      {/* Help Modal */}
       {showHelp && (
         <div
           className="fixed inset-0 z-[260] flex items-center justify-center bg-black/90 px-4 backdrop-blur-sm"
@@ -1006,10 +533,10 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <div className="flex items-center justify-center w-6 h-6 rounded-full bg-[#2ee882] text-black text-xs font-black">1</div>
-                  <h3 className="font-bold text-ivory">Choose Your Style</h3>
+                  <h3 className="font-bold text-ivory">Pick Hero or Stats</h3>
                 </div>
                 <p className="ml-8 text-xs leading-relaxed">
-                  Pick from <strong>6 designs</strong>: <strong>Minimal</strong> or <strong>Sticker</strong> for feed/overlays (1:1), <strong>Activity</strong> for Strava-style stories, or <strong>Gradient / Bold / Classic</strong> for full 9:16 stories.
+                  Both layouts are <strong>1080×1920</strong> transparent overlays sized for Instagram Stories. Text uses drop shadows so it reads on any photo.
                 </p>
               </div>
 
@@ -1019,37 +546,24 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
                   <h3 className="font-bold text-ivory">Copy or Download</h3>
                 </div>
                 <p className="ml-8 text-xs leading-relaxed">
-                  Tap <strong>Copy Image</strong> to copy directly to your clipboard, or <strong>Download</strong> to save to your device.
+                  Tap <strong>Copy Image</strong> or <strong>Download</strong> to export a transparent PNG with your real stats — games, court time, visits, and favorite court.
                 </p>
               </div>
 
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <div className="flex items-center justify-center w-6 h-6 rounded-full bg-[#2ee882] text-black text-xs font-black">3</div>
-                  <h3 className="font-bold text-ivory">Share to Instagram</h3>
+                  <h3 className="font-bold text-ivory">Post on Instagram Stories</h3>
                 </div>
                 <p className="ml-8 text-xs leading-relaxed">
-                  <strong>For Stories:</strong> Open Instagram, tap the story camera, and long-press the screen to paste. Add your own text or stickers!
-                </p>
-                <p className="ml-8 text-xs leading-relaxed mt-1">
-                  <strong>For Feed:</strong> Tap the + icon, select the downloaded image from your gallery, and post!
-                </p>
-              </div>
-
-              <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="flex items-center justify-center w-6 h-6 rounded-full bg-[#2ee882] text-black text-xs font-black">4</div>
-                  <h3 className="font-bold text-ivory">Share to Other Platforms</h3>
-                </div>
-                <p className="ml-8 text-xs leading-relaxed">
-                  Use the <strong>Twitter</strong>, <strong>WhatsApp</strong>, or <strong>LinkedIn</strong> buttons to share with pre-written captions. The image will be downloaded automatically.
+                  Open Instagram Stories, pick or take a photo, then add the PNG as a sticker (paste from clipboard or upload from your gallery). Position and resize as you like.
                 </p>
               </div>
             </div>
 
             <div className="mt-6 p-3 rounded-lg bg-[#2ee882]/10 border border-[#2ee882]/20">
               <p className="text-xs text-[#2ee882] text-center font-semibold">
-                💡 Pro tip: Tag <strong>@haffleisureclub</strong> and use <strong>#PicklePulse</strong> when you share!
+                Tag <strong>@haffleisureclub</strong> and use <strong>#PicklePulse</strong> when you share!
               </p>
             </div>
 
@@ -1065,12 +579,4 @@ export function StoryShareModal({ onClose, layout: initialLayout = "minimal", ..
       )}
     </>
   );
-}
-
-function hexToRgb(hex: string): string {
-  const clean = hex.replace("#", "");
-  const r = parseInt(clean.slice(0, 2), 16);
-  const g = parseInt(clean.slice(2, 4), 16);
-  const b = parseInt(clean.slice(4, 6), 16);
-  return `${r},${g},${b}`;
 }

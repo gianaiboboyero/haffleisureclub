@@ -9,13 +9,20 @@ import {
   verifyPassword
 } from "./_auth.js";
 import { audit } from "./_audit.js";
-
-const validPassword = (password: string) => password.length > 0;
+import {
+  captchaRequired,
+  loginFailureBucket,
+  MAX_LOGIN_FAILURES,
+  LOGIN_FAILURE_WINDOW_MS,
+  passwordValidationMessage,
+  validPassword
+} from "./_security.js";
 
 async function verifyCaptcha(token: unknown, ip: string) {
-  const secret = process.env.TURNSTILE_SECRET_KEY;
-  if (!secret) return true;
+  if (!captchaRequired()) return true;
   if (typeof token !== "string" || !token) return false;
+  const secret = process.env.TURNSTILE_SECRET_KEY?.trim();
+  if (!secret) return false;
   const body = new URLSearchParams({ secret, response: token, remoteip: ip });
   const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
     method: "POST",
@@ -42,7 +49,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: "Please complete the verification challenge." });
     }
     if (!email.includes("@") || !validPassword(password) || displayName.length < 2) {
-      return res.status(400).json({ error: "Use a valid name, email, and password." });
+      return res.status(400).json({ error: `Use a valid name, email, and ${passwordValidationMessage().toLowerCase()}` });
     }
     if (await prisma.user.findUnique({ where: { email } })) {
       return res.status(409).json({ error: "An account already exists for this email." });
@@ -74,8 +81,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "POST" && action === "login") {
     const email = String(req.body?.email ?? "").trim().toLowerCase();
     const password = String(req.body?.password ?? "");
+    const ip = String(req.headers["x-forwarded-for"] ?? "").split(",")[0];
+    const bucket = loginFailureBucket(email, ip);
+    const recentFailures = await prisma.auditLog.count({
+      where: {
+        action: "AUTH_LOGIN_FAILED",
+        entityId: bucket,
+        createdAt: { gte: new Date(Date.now() - LOGIN_FAILURE_WINDOW_MS) }
+      }
+    });
+    if (recentFailures >= MAX_LOGIN_FAILURES) {
+      return res.status(429).json({ error: "Too many login attempts. Please try again later." });
+    }
     const user = await prisma.user.findUnique({ where: { email }, include: { player: true } });
     if (!user || !verifyPassword(password, user.passwordHash)) {
+      await audit(null, "AUTH_LOGIN_FAILED", "LoginAttempt", bucket);
       return res.status(401).json({ error: "Invalid email or password." });
     }
     if (user.status !== "ACTIVE") {
@@ -102,7 +122,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: "Current password is incorrect." });
     }
     if (!validPassword(nextPassword)) {
-      return res.status(400).json({ error: "Enter a new password." });
+      return res.status(400).json({ error: passwordValidationMessage() });
     }
     await prisma.$transaction([
       prisma.user.update({ where: { id: user.id }, data: { passwordHash: hashPassword(nextPassword) } }),

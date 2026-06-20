@@ -3,6 +3,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { prisma } from "./_prisma.js";
 import { getUser, requireAdmin, requireUser } from "./_auth.js";
 import { audit } from "./_audit.js";
+import { publicReservationDto } from "./_security.js";
 
 const DAY_MS = 86_400_000;
 const dateOnly = (value: Date) => new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
@@ -41,24 +42,29 @@ async function notify(
   await tx.userNotification.create({ data: { userId, type, title, message } });
 }
 
+async function ensureCourtReservationSettings() {
+  const courtsWithoutSettings = await prisma.court.findMany({
+    where: { reservationSetting: null },
+    select: { id: true }
+  });
+  if (!courtsWithoutSettings.length) return;
+  await prisma.$transaction(courtsWithoutSettings.map((court) =>
+    prisma.courtReservationSetting.create({
+      data: {
+        courtId: court.id,
+        reservationsEnabled: true,
+        openingTime: "06:00",
+        closingTime: "22:00",
+        minDurationMinutes: 30,
+        maxDurationMinutes: 180,
+        intervalMinutes: 30
+      }
+    })
+  ));
+}
+
 function publicReservation(reservation: any, user: any) {
-  const canSeePrivate = user?.role === "ADMIN" || user?.id === reservation.requesterUserId;
-  const requesterName = reservation.requester?.player?.displayName || reservation.requester?.email?.split("@")[0] || "Player";
-  return canSeePrivate
-    ? reservation
-    : {
-        id: reservation.id,
-        courtId: reservation.courtId,
-        startTime: reservation.startTime,
-        endTime: reservation.endTime,
-        approvalStatus: reservation.approvalStatus,
-        createdAt: reservation.createdAt,
-        publicLabel: reservation.publicLabel || (reservation.approvalStatus === "CONFIRMED" ? `Reserved (${requesterName})` : `Requested (${requesterName})`),
-        requester: {
-          email: reservation.requester?.email,
-          player: { displayName: requesterName }
-        }
-      };
+  return publicReservationDto(reservation, user);
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -69,25 +75,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const requested = parseDate(req.query.start) ?? new Date();
     const start = dateOnly(requested);
     const end = new Date(start.getTime() + 7 * DAY_MS);
-    const courtsWithoutSettings = await prisma.court.findMany({
-      where: { reservationSetting: null },
-      select: { id: true }
-    });
-    if (courtsWithoutSettings.length) {
-      await prisma.$transaction(courtsWithoutSettings.map((court) =>
-        prisma.courtReservationSetting.create({
-          data: {
-            courtId: court.id,
-            reservationsEnabled: true,
-            openingTime: "06:00",
-            closingTime: "22:00",
-            minDurationMinutes: 30,
-            maxDurationMinutes: 180,
-            intervalMinutes: 30
-          }
-        })
-      ));
-    }
     const [courts, reservations, allocations, blackouts] = await Promise.all([
       prisma.court.findMany({ orderBy: { number: "asc" }, include: { reservationSetting: true } }),
       prisma.courtReservation.findMany({
@@ -126,6 +113,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "GET" && action === "admin") {
     const admin = await requireAdmin(req, res);
     if (!admin) return;
+    await ensureCourtReservationSettings();
     const reservations = await prisma.courtReservation.findMany({
       include: { requester: { include: { player: true } }, court: true },
       orderBy: [{ startTime: "asc" }, { createdAt: "asc" }, { id: "asc" }],
@@ -164,6 +152,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (action === "request") {
     const member = await requireUser(req, res);
     if (!member) return;
+    await ensureCourtReservationSettings();
     const courtId = String(req.body?.courtId ?? "");
     const startTime = parseDate(req.body?.startTime);
     const endTime = parseDate(req.body?.endTime);

@@ -66,7 +66,9 @@ Copy from Supabase dashboard → **Project Settings → Database**:
 | `DATABASE_URL` | Transaction pooler URI (port **6543**, `?pgbouncer=true`) |
 | `DIRECT_URL` | Direct URI (port **5432**) |
 | `INITIAL_ADMIN_EMAIL` | Your admin email |
-| `FEEDBACK_HASH_SECRET` | Random string |
+| `FEEDBACK_HASH_SECRET` | Random string (**required in production**) |
+| `TV_DEVICE_SECRET` | Optional — when set, TV displays must send `x-tv-device-secret` for Ably tokens |
+| `SYNC_API_KEY` | Required for local Nest `/sync` only (never expose publicly) |
 | `NEXT_PUBLIC_SUPABASE_URL` | `https://YOUR_REF.supabase.co` |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase anon key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-only — avatar uploads via `/api/player-profile` |
@@ -117,6 +119,7 @@ After an incident, rotate passwords with `npm run db:rotate-passwords` (prints a
 | `.env` files in git | No (gitignored) |
 | Secret scanning on GitHub | **Enable** in repo Settings → Code security |
 | Supabase RLS blocks anon Player/Session writes | Run `npm run db:rls-profile-lockdown` |
+| Anon Player reads exclude phone/email | `db:rls-profile-lockdown` grants column-scoped SELECT only |
 | Profile/avatar edits | `/api/player-profile` only (login required) |
 | Stack/courts/matches writes | `/api/club-state` POST only (login required) |
 | `SUPABASE_SERVICE_ROLE_KEY` on Vercel | Required for server avatar uploads — **add from Supabase dashboard** |
@@ -126,6 +129,12 @@ After an incident, rotate passwords with `npm run db:rotate-passwords` (prints a
 Optional: set `TURNSTILE_SECRET_KEY` + site key on Vercel to require captcha on registration.
 
 **Never commit secrets to GitHub.** Keys belong only in Vercel env vars and local `.env` (gitignored). The Supabase publishable key is embedded in the production JS bundle by design — protect it with RLS (see `db:rls-profile-lockdown`), not by hiding the key. **Never** commit `SUPABASE_SERVICE_ROLE_KEY`, database passwords, or admin passwords.
+
+Run security regression tests before release:
+
+```bash
+npm run test:security
+```
 
 ---
 

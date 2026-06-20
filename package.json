@@ -34,7 +34,8 @@
     "db:restore-club-state": "node scripts/restore-club-state.mjs data/production-players.json --prune-orphans --clear-sessions",
     "db:seed-accounts": "node scripts/seed-accounts.mjs",
     "db:rotate-passwords": "node scripts/rotate-admin-passwords.mjs",
-    "db:reset-club": "node scripts/reset-club-state.mjs"
+    "db:reset-club": "node scripts/reset-club-state.mjs",
+    "test:security": "node --import tsx --test tests/security.test.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",

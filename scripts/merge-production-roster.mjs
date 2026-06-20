@@ -53,6 +53,11 @@ async function loadProductionPlayers(filePath) {
     return Array.isArray(payload) ? payload : payload.players ?? [];
   }
 
+  if (process.env.DATABASE_URL) {
+    const players = await prisma.player.findMany({ orderBy: { displayName: "asc" } });
+    return players;
+  }
+
   const response = await fetch(PRODUCTION_PLAYERS_URL);
   if (!response.ok) {
     throw new Error(`Failed to fetch production roster (${response.status})`);

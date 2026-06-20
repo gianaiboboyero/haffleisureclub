@@ -142,86 +142,15 @@ export type PublishClubStateInput = {
 };
 
 export async function publishClubState(
-  input: PublishClubStateInput,
-  options?: { slim?: boolean }
+  _input: PublishClubStateInput,
+  _options?: { slim?: boolean }
 ): Promise<{ sessionId: string; updatedAt: string } | null> {
-  const supabase = getSupabase();
-  if (!supabase) return null;
-
-  let session = await findActiveSession(input.sessionId);
-  if (!session) {
-    const { data, error } = await supabase
-      .from("Session")
-      .insert({
-        id: input.sessionId || "default-active-session",
-        name: "Open Play Session",
-        date: new Date().toISOString(),
-        mode: "Open Play",
-        status: "Active",
-        checkedInPlayerIds: [],
-        settings: {}
-      })
-      .select("*")
-      .single();
-    if (error || !data) return null;
-    session = data as SessionRow;
-  }
-
-  const currentSettings = (session.settings ?? {}) as ClubSettings;
-  const {
-    playerProfiles: _legacyProfiles,
-    reservations: _legacyReservations,
-    playerKudos: _legacyKudos,
-    matchReviews: _legacyReviews,
-    ...restSettings
-  } = currentSettings;
-  const settings: ClubSettings = {
-    ...restSettings,
-    adminCheckedInIds: input.adminCheckedInIds,
-    stackOrder: input.stackOrder,
-    courts: input.courts,
-    matches: input.matches,
-    tvBroadcast: currentSettings.tvBroadcast
-  };
-  if (!options?.slim) {
-    settings.reservations = input.reservations;
-    settings.playerProfiles = input.playerProfiles;
-  }
-
-  const { data, error } = await supabase
-    .from("Session")
-    .update({
-      checkedInPlayerIds: input.checkedInPlayerIds,
-      settings
-    })
-    .eq("id", session.id)
-    .select("id, updatedAt")
-    .single();
-
-  if (error || !data) return null;
-  return { sessionId: data.id, updatedAt: String(data.updatedAt) };
+  throw new Error("Direct Session writes are disabled. Use POST /api/club-state while signed in.");
 }
 
 export async function broadcastTvState(
-  sessionId: string,
-  tvBroadcast: TvBroadcast
+  _sessionId: string,
+  _tvBroadcast: TvBroadcast
 ): Promise<{ sessionId: string; updatedAt: string } | null> {
-  const supabase = getSupabase();
-  if (!supabase) return null;
-
-  const session = await findActiveSession(sessionId);
-  if (!session) return null;
-
-  const currentSettings = (session.settings ?? {}) as ClubSettings;
-  const { data, error } = await supabase
-    .from("Session")
-    .update({
-      settings: { ...currentSettings, tvBroadcast }
-    })
-    .eq("id", session.id)
-    .select("id, updatedAt")
-    .single();
-
-  if (error || !data) return null;
-  return { sessionId: data.id, updatedAt: String(data.updatedAt) };
+  throw new Error("Direct Session writes are disabled. Use POST /api/club-state while signed in.");
 }

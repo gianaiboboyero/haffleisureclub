@@ -3,6 +3,7 @@ import { prisma } from "./_prisma.js";
 import { requireUser } from "./_auth.js";
 import { audit } from "./_audit.js";
 import { uploadPlayerAvatarServer } from "./_supabaseAdmin.js";
+import { isAllowedAvatarUrl, isProductionEnv } from "./_security.js";
 
 const SKILL_LEVELS = new Set([
   "Newbie",
@@ -101,15 +102,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   let avatarUrl = typeof req.body?.avatarUrl === "string" ? req.body.avatarUrl.trim() : current.avatarUrl;
   let avatarVersion = current.avatarVersion;
-
   const avatarDataUrl = req.body?.avatarDataUrl;
+
+  const supabaseBase =
+    process.env.SUPABASE_URL?.trim()
+    ?? process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
+    ?? "";
+  if (
+    avatarUrl
+    && !isInlineAvatarData(avatarDataUrl)
+    && !isInlineAvatarData(avatarUrl)
+    && !isAllowedAvatarUrl(avatarUrl, supabaseBase)
+  ) {
+    return res.status(400).json({ error: "Avatar URL must be hosted in club storage." });
+  }
+
   if (isInlineAvatarData(avatarDataUrl)) {
     try {
       const uploaded = await uploadPlayerAvatarServer(playerId, avatarDataUrl);
       avatarUrl = uploaded.avatarUrl;
       avatarVersion = uploaded.avatarVersion;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Avatar upload failed.";
+      console.error("Avatar upload failed", error);
+      const message = isProductionEnv()
+        ? "Avatar upload failed."
+        : error instanceof Error
+          ? error.message
+          : "Avatar upload failed.";
       return res.status(400).json({ error: message });
     }
   }

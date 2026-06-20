@@ -125,8 +125,6 @@ export async function fetchMissingPlayers(ids: string[]): Promise<Player[]> {
         totalDaysPlayed: row.totalDaysPlayed,
         lastPlayedDate: row.lastPlayedDate ?? undefined,
         avatarUrl: row.avatarUrl ?? undefined,
-        statusNote: row.statusNote ?? undefined,
-        phoneNumber: row.phone ?? undefined,
         isActive: row.status !== "Inactive"
       };
     });

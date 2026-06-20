@@ -485,7 +485,12 @@ function App() {
         <AnimatePresence>
           {view === "landing" && (
             <React.Suspense fallback={<LoadingScreen />}>
-              <LandingView key="landing" setView={setView} signedIn={sessionReady && Boolean(sessionMember)} />
+              <LandingView
+                key="landing"
+                setView={setView}
+                signedIn={sessionReady && Boolean(sessionMember)}
+                isAdmin={sessionMember?.role === "ADMIN"}
+              />
             </React.Suspense>
           )}
           {view === "admin" && (
@@ -4331,7 +4336,6 @@ function PlayerView({
               placeholder="Access code"
               className="w-full rounded-2xl bg-forest/50 text-white border border-white/10 px-4 py-3 placeholder:text-ivory/40 focus:outline-none focus:ring-2 focus:ring-brass shadow-inner"
             />
-            <p className="text-[11px] text-ivory/50 leading-tight">Use 09170000000 and 1234 for the player account I created.</p>
             <Button type="submit" className="w-full bg-brass text-forest hover:bg-brass/90 font-black">
               Log In
             </Button>

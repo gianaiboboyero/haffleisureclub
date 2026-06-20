@@ -52,6 +52,7 @@ function TvCourtPlayerCell({
 
 function CourtHeader({
   courtName,
+  courtNumber,
   status,
   statusTone,
   onAnnounce,
@@ -59,6 +60,7 @@ function CourtHeader({
   announceLabel,
 }: {
   courtName: string;
+  courtNumber: number;
   status: string;
   statusTone: "playing" | "reserved" | "available" | "maintenance" | "paused";
   onAnnounce?: () => void;
@@ -67,7 +69,15 @@ function CourtHeader({
 }) {
   return (
     <div className="tv-pickle-court__header">
-      <h2 className="tv-pickle-court__court-name">{courtName.toUpperCase()}</h2>
+      <div className="tv-pickle-court__header-brand">
+        <span className="tv-pickle-court__court-badge" aria-hidden>
+          <span className="tv-pickle-court__court-number">{courtNumber}</span>
+        </span>
+        <h2 className="tv-pickle-court__court-name">
+          <span className="sr-only">{courtName}</span>
+          <span className="tv-pickle-court__court-label">Court</span>
+        </h2>
+      </div>
       <div className="tv-pickle-court__header-meta">
         <span className={`tv-pickle-court__status tv-pickle-court__status--${statusTone}`}>
           <span className="tv-pickle-court__status-dot" />
@@ -78,10 +88,11 @@ function CourtHeader({
             type="button"
             onClick={onAnnounce}
             className="tv-pickle-court__announce-btn"
-            title={announceLabel}
+            title={announceLabel ?? "Announce"}
+            aria-label={announceLabel ?? "Announce"}
           >
             {announceIcon === "megaphone" ? <Megaphone size={14} /> : <RotateCcw size={14} />}
-            <span>{announceLabel ?? "Announce"}</span>
+            <span className="tv-pickle-court__announce-label">{announceLabel ?? "Announce"}</span>
           </button>
         ) : null}
       </div>
@@ -192,6 +203,7 @@ export const TvPickleballCourt = React.memo(function TvPickleballCourt({
     >
       <CourtHeader
         courtName={court.name}
+        courtNumber={court.number}
         status={statusLabel}
         statusTone={statusTone}
         onAnnounce={onAnnounce}

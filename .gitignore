@@ -16,3 +16,4 @@ pnpm-debug.log*
 .prisma/
 data/
 *.local
+.env*.local

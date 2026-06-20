@@ -11,60 +11,77 @@ import {
 
 const VISIBLE_STACKS = 4;
 const PAGE_ROTATE_MS = 8000;
+const TV_MARQUEE_THRESHOLD = 3;
 
 type StackQueueCardProps = {
   group: Player[];
   groupIndex: number;
   getPlayerAvatar: (player: Player) => string;
   compact?: boolean;
+  strip?: boolean;
 };
 
-function StackQueueCard({ group, groupIndex, getPlayerAvatar, compact }: StackQueueCardProps) {
+function StackQueueCard({ group, groupIndex, getPlayerAvatar, compact, strip }: StackQueueCardProps) {
   const realCount = group.filter((p) => !p.isVacant).length;
   const isStackNext = groupIndex === 0;
 
   return (
-    <div className="overflow-hidden rounded-lg border border-[#1e4f3a]">
+    <div className={`overflow-hidden rounded-lg border border-[#1e4f3a] ${strip ? "tv-stack-card--strip" : ""}`}>
       <div
-        className={`flex items-center justify-between px-2 ${compact ? "py-1" : "py-1.5"} ${
-          isStackNext ? "bg-brass" : "bg-[#173d2c]"
-        }`}
+        className={`flex items-center justify-between px-2 ${
+          strip ? "py-1" : compact ? "py-1" : "py-1.5"
+        } ${isStackNext ? "bg-brass" : "bg-[#173d2c]"}`}
       >
         <span
-          className={`truncate text-[10px] font-black uppercase tracking-wide ${
-            isStackNext ? "text-forest" : "text-ivory/70"
-          }`}
+          className={`truncate font-black uppercase tracking-wide ${
+            strip ? "text-[10px]" : "text-[10px]"
+          } ${isStackNext ? "text-forest" : "text-ivory/70"}`}
         >
           {getStackLabel(groupIndex)}
         </span>
         <span
-          className={`ml-1 shrink-0 text-[10px] font-black tabular-nums ${
-            isStackNext ? "text-forest" : "text-ivory/50"
-          }`}
+          className={`ml-1 shrink-0 font-black tabular-nums ${
+            strip ? "text-[10px]" : "text-[10px]"
+          } ${isStackNext ? "text-forest" : "text-ivory/50"}`}
         >
           {realCount}/4
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-px bg-[#1a3f2e]">
+      <div className={strip ? "tv-stack-card__strip-slots" : "grid grid-cols-2 gap-px bg-[#1a3f2e]"}>
         {group.map((player) => (
           <div
             key={player.id}
-            className={`flex items-center gap-1.5 bg-[#0d2e22] px-2 ${compact ? "py-1" : "py-1.5"}`}
+            className={
+              strip
+                ? "tv-stack-card__strip-slot"
+                : `flex items-center gap-1.5 bg-[#0d2e22] px-2 ${compact ? "py-1" : "py-1.5"}`
+            }
           >
             <img
               src={getPlayerAvatar(player)}
               alt=""
-              className={`h-6 w-6 shrink-0 rounded-full object-cover border ${
-                player.isVacant ? "border-white/10 opacity-20" : "border-brass/30"
-              } bg-[#173d2c]`}
+              className={`shrink-0 rounded-full object-cover border ${
+                strip ? "h-6 w-6" : "h-6 w-6"
+              } ${player.isVacant ? "border-white/10 opacity-20" : "border-brass/30"} bg-[#173d2c]`}
             />
-            <p
-              className={`min-w-0 flex-1 truncate text-[10px] font-black leading-tight ${
-                player.isVacant ? "text-ivory/25 italic" : "text-ivory"
-              }`}
-            >
-              {getPlayerDisplayLabel(player)}
-            </p>
+            {!strip ? (
+              <p
+                className={`min-w-0 flex-1 truncate text-[10px] font-black leading-tight ${
+                  player.isVacant ? "text-ivory/25 italic" : "text-ivory"
+                }`}
+              >
+                {getPlayerDisplayLabel(player)}
+              </p>
+            ) : (
+              <p
+                className={`min-w-0 flex-1 truncate text-[10px] font-black leading-tight ${
+                  player.isVacant ? "text-ivory/20" : "text-ivory/85"
+                }`}
+                title={getPlayerDisplayLabel(player)}
+              >
+                {player.isVacant ? "—" : getPlayerDisplayLabel(player)}
+              </p>
+            )}
           </div>
         ))}
       </div>
@@ -120,8 +137,10 @@ export function TvStackQueue({
   className = "",
 }: TvStackQueueProps) {
   const allGroups = getTvStackGroups(stackOrder, players, matches, courts, MAX_STACKS);
+  const isTvStrip = variant === "tv";
+  const shouldMarquee = isTvStrip && allGroups.length > TV_MARQUEE_THRESHOLD;
   const pages = buildStackPages(allGroups);
-  const needsRotation = pages.length > 1;
+  const needsRotation = !shouldMarquee && pages.length > 1;
   const [pageIndex, setPageIndex] = React.useState(0);
 
   React.useEffect(() => {
@@ -140,12 +159,12 @@ export function TvStackQueue({
   const gridClass =
     variant === "mobile"
       ? "grid w-full grid-cols-2 gap-2"
-      : "grid w-full grid-cols-2 gap-1.5 lg:grid-cols-4 lg:gap-2";
+      : "tv-display-queue__grid grid w-full grid-cols-2 gap-1 lg:grid-cols-4 lg:gap-1.5";
 
   return (
-    <div className={`tv-display-queue shrink-0 rounded-xl border border-[#1e4f3a] bg-[#0d2e22] px-3 py-1.5 ${className}`}>
-      <div className="mb-1 flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5">
-        <p className="text-center text-[10px] font-black uppercase tracking-[0.2em] text-ivory/40">
+    <div className={`tv-display-queue shrink-0 rounded-xl border border-[#1e4f3a] bg-[#0d2e22] ${isTvStrip ? "px-3 py-1.5" : "px-3 py-1.5"} ${className}`}>
+      <div className={`flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 ${isTvStrip ? "mb-1" : "mb-1"}`}>
+        <p className={`text-center font-black uppercase tracking-[0.18em] text-ivory/45 ${isTvStrip ? "text-[10px]" : "text-[10px]"}`}>
           Stack queue
         </p>
         {needsRotation ? (
@@ -153,29 +172,52 @@ export function TvStackQueue({
             {allGroups.length} stacks · page {pageIndex + 1}/{pages.length}
           </span>
         ) : null}
+        {shouldMarquee ? (
+          <span className="rounded-full bg-ivory/10 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-ivory/50">
+            {allGroups.length} stacks
+          </span>
+        ) : null}
       </div>
 
       <div className="relative w-full overflow-hidden">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={`${activePage.startIndex}-${pageIndex}`}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.35 }}
-            className={gridClass}
-          >
-            {activePage.page.map((group, offset) => (
-              <StackQueueCard
-                key={`${activePage.startIndex + offset}-${group.map((p) => p.id).join("-")}`}
-                group={group}
-                groupIndex={activePage.startIndex + offset}
-                getPlayerAvatar={getPlayerAvatar}
-                compact={variant === "tv"}
-              />
-            ))}
-          </motion.div>
-        </AnimatePresence>
+        {shouldMarquee ? (
+          <div className="tv-display-queue__marquee" aria-label={`${allGroups.length} queued stacks`}>
+            <div className="tv-display-queue__marquee-track">
+              {[...allGroups, ...allGroups].map((group, index) => (
+                <StackQueueCard
+                  key={`${index}-${group.map((p) => p.id).join("-")}`}
+                  group={group}
+                  groupIndex={index % allGroups.length}
+                  getPlayerAvatar={getPlayerAvatar}
+                  compact
+                  strip
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={`${activePage.startIndex}-${pageIndex}`}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.35 }}
+              className={gridClass}
+            >
+              {activePage.page.map((group, offset) => (
+                <StackQueueCard
+                  key={`${activePage.startIndex + offset}-${group.map((p) => p.id).join("-")}`}
+                  group={group}
+                  groupIndex={activePage.startIndex + offset}
+                  getPlayerAvatar={getPlayerAvatar}
+                  compact={variant === "tv"}
+                  strip={variant === "tv"}
+                />
+              ))}
+            </motion.div>
+          </AnimatePresence>
+        )}
       </div>
     </div>
   );

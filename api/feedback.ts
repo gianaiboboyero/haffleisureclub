@@ -3,11 +3,18 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { prisma } from "./_prisma.js";
 import { requireAdmin } from "./_auth.js";
 import { audit } from "./_audit.js";
+import { feedbackHashSecret } from "./_security.js";
 
 const sourceHash = (req: VercelRequest) => {
   const source = String(req.headers["x-forwarded-for"] ?? req.socket.remoteAddress ?? "unknown").split(",")[0];
+  let secret: string;
+  try {
+    secret = feedbackHashSecret();
+  } catch {
+    secret = "missing-production-secret";
+  }
   return createHash("sha256")
-    .update(`${process.env.FEEDBACK_HASH_SECRET ?? "haff-cadiz"}:${source}:${new Date().toISOString().slice(0, 10)}`)
+    .update(`${secret}:${source}:${new Date().toISOString().slice(0, 10)}`)
     .digest("hex");
 };
 
@@ -15,6 +22,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const action = String(req.query.action ?? "submit");
 
   if (req.method === "POST" && action === "submit") {
+    try {
+      feedbackHashSecret();
+    } catch {
+      return res.status(503).json({ error: "Feedback is temporarily unavailable." });
+    }
     const hash = sourceHash(req);
     const recent = await prisma.improvementReport.count({
       where: { sourceHash: hash, createdAt: { gte: new Date(Date.now() - 3600_000) } }

@@ -11,6 +11,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const client = new Rest({ key: apiKey });
 
   if (scope === "tv") {
+    const tvSecret = process.env.TV_DEVICE_SECRET?.trim();
+    if (tvSecret) {
+      const provided = String(req.headers["x-tv-device-secret"] ?? req.query.secret ?? "");
+      if (provided !== tvSecret) {
+        return res.status(401).json({ error: "TV device not authorized." });
+      }
+    }
     const tokenRequest = await client.auth.createTokenRequest({
       clientId: `tv-${crypto.randomUUID()}`,
       capability: JSON.stringify({

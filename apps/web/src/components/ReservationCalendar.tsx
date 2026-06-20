@@ -563,8 +563,7 @@ export function ReservationCalendar() {
   const [drawer, setDrawer] = React.useState<{ courtId: string; date: Date; startMinutes: number; reservation?: CalReservation } | null>(null);
   const [error, setError] = React.useState("");
 
-  const isLocalAdmin = localStorage.getItem("haff_admin_authenticated") === "true";
-  const isAdmin = isLocalAdmin || member?.role === "ADMIN";
+  const isAdmin = member?.role === "ADMIN";
   const bookableCourts = React.useMemo(
     () => sortCourts(courts).filter((c) => c.status !== "Maintenance"),
     [courts]
