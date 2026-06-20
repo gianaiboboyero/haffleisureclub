@@ -1,5 +1,17 @@
 # Security patch changelog
 
+## 2026-06-21 — Vercel Hobby function limit (12 max)
+
+| File | Change |
+|------|--------|
+| `api/site-content.ts` | **Added** — merged `/api/recap` + `/api/testimonials` handlers (one serverless function) |
+| `api/recap.ts`, `api/testimonials.ts` | **Removed** — URLs preserved via `vercel.json` rewrites |
+| `vercel.json` | Rewrite `/api/recap` and `/api/testimonials` → `/api/site-content?endpoint=…` |
+| `server/production.ts` | Import named handlers from `site-content` for self-hosted API |
+| `docs/VERCEL_SUPABASE_DEPLOY.md` | Document 12-function Hobby limit and merged routes |
+
+No auth or data-access behavior changed — routing consolidation only.
+
 ## 2026-06-20 — Audit remediation (SEC-03, SEC-05, SEC-07, SEC-09, SEC-10, SEC-13, SEC-14, SEC-15, SEC-01, SEC-04, SEC-16)
 
 | File | Change |

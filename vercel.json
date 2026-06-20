@@ -17,6 +17,14 @@
   ],
   "rewrites": [
     {
+      "source": "/api/recap",
+      "destination": "/api/site-content?endpoint=recap"
+    },
+    {
+      "source": "/api/testimonials",
+      "destination": "/api/site-content?endpoint=testimonials"
+    },
+    {
       "source": "/((?!api/|src/|@vite/|node_modules/|assets/|haff-logo.jpg|favicon.ico|manifest.webmanifest|registerSW.js|sw.js|workbox-).*)",
       "destination": "/index.html"
     }

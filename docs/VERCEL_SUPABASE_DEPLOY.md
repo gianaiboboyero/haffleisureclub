@@ -31,9 +31,18 @@ This upserts all players (with avatars and stats), repoints user accounts, and r
 | `/api/club-state` POST | Auth + role checks for stack, courts, matches, TV broadcast |
 | `/api/community` POST/PATCH/DELETE | Auth + moderation |
 | `/api/sync`, `/api/operations/events` | Server-validated player sync queue |
-| `/api/feedback`, `/api/testimonials` | Admin moderation |
+| `/api/feedback`, `/api/testimonials`, `/api/recap` | Admin moderation and member recap |
+| `/api/site-content` | Internal only — merged handler for recap + testimonials (Vercel Hobby 12-function limit) |
 
 Everything else — **players (read), courts (read), live session (read), chat reads, realtime** — goes **direct to Supabase** with RLS blocking browser writes.
+
+### Vercel Hobby: 12 serverless functions max
+
+Each file under `api/` (except `_`-prefixed helpers) becomes one serverless function. This project ships **12** functions:
+
+`auth`, `club-state`, `community`, `courts`, `feedback`, `operations/events`, `player-profile`, `players`, `realtime/token`, `reservations`, `site-content`, `sync`.
+
+`/api/recap` and `/api/testimonials` are preserved via `vercel.json` rewrites to `/api/site-content?endpoint=…`. Do not split them back into separate files on Hobby without upgrading the plan or removing another route.
 
 ---
 
