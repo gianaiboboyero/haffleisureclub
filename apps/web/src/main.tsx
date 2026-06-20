@@ -95,6 +95,7 @@ import { computePlayerStats, formatMinutesPlayed } from "./lib/playerStats";
 import { StoryShareModal } from "./components/StoryShareModal";
 import { TvPickleballCourt } from "./components/TvPickleballCourt";
 import { TvStackQueue, PlayerStackPreview } from "./components/TvStackQueue";
+import { CALENDAR_PAGE_ENABLED } from "./lib/featureFlags";
 import { CheckedInStack } from "./components/CheckedInStack";
 import { getVoiceStyle, isSoundEnabled, playSound, setSoundEnabled, setVoiceStyle, speakAnnouncement, unlockAudio } from "./lib/sound";
 import type { VoiceStyle } from "./lib/sound";
@@ -220,16 +221,28 @@ function App() {
       } else if (path === "parking" || hash === "parking") {
         window.history.replaceState(null, "", "/player");
         targetView = "player";
-      } else if (["admin", "player", "tv", "calendar", "finance"].includes(path)) {
+      } else if (path === "calendar" || hash === "calendar") {
+        if (CALENDAR_PAGE_ENABLED) {
+          targetView = "calendar";
+        } else {
+          window.history.replaceState(null, "", "/home");
+          targetView = "landing";
+        }
+      } else if (["admin", "player", "tv", "finance"].includes(path)) {
         targetView = path as ViewMode;
-      } else if (["admin", "player", "tv", "calendar", "finance"].includes(hash)) {
+      } else if (["admin", "player", "tv", "finance"].includes(hash)) {
         targetView = hash as ViewMode;
       } else if (path === "display" || hash === "display") {
         targetView = "tv";
       } else if (path === "payments" || hash === "payments" || path === "revenue" || hash === "revenue") {
         targetView = "finance";
       } else if (path === "schedule" || hash === "schedule" || path === "reservation" || hash === "reservation") {
-        targetView = "calendar";
+        if (CALENDAR_PAGE_ENABLED) {
+          targetView = "calendar";
+        } else {
+          window.history.replaceState(null, "", "/home");
+          targetView = "landing";
+        }
       } else {
         if (window.location.pathname === "/" && !window.location.hash) {
           window.history.replaceState(null, "", "/home");
@@ -479,7 +492,11 @@ function App() {
           {view === "admin" && <AdminView key="admin" />}
           {view === "player" && <PlayerView key="player" />}
           {view === "tv" && <DisplayView key="tv" setView={setView} />}
-          {view === "calendar" && <React.Suspense fallback={<LoadingScreen />}><ReservationCalendar key="calendar" /></React.Suspense>}
+          {view === "calendar" && CALENDAR_PAGE_ENABLED && (
+            <React.Suspense fallback={<LoadingScreen />}>
+              <ReservationCalendar key="calendar" />
+            </React.Suspense>
+          )}
           {view === "finance" && <FinanceView key="finance" />}
         </AnimatePresence>
       </div>
@@ -771,14 +788,14 @@ function FloatingDock({ view, setView, isAdmin }: { view: string; setView: (view
   const publicItems = [
     { key: "landing", label: "Home", icon: Home },
     { key: "player", label: "Players", icon: UserRound },
-    { key: "calendar", label: "Reserve", icon: Calendar },
+    ...(CALENDAR_PAGE_ENABLED ? [{ key: "calendar", label: "Reserve", icon: Calendar }] : []),
     { key: "tv", label: "TV", icon: Monitor },
   ];
   const adminItems = [
     { key: "landing", label: "Home", icon: Home },
     { key: "admin", label: "Admin", icon: Sliders },
     { key: "player", label: "Players", icon: UserRound },
-    { key: "calendar", label: "Calendar", icon: Calendar },
+    ...(CALENDAR_PAGE_ENABLED ? [{ key: "calendar", label: "Calendar", icon: Calendar }] : []),
     { key: "finance", label: "Finance", icon: DollarSign },
     { key: "tv", label: "TV Display", icon: Monitor },
   ];
@@ -881,6 +898,7 @@ function AdminView() {
     const openAdminTab = (event: Event) => {
       const tab = (event as CustomEvent<AdminTab>).detail;
       if (["control", "players", "reservations", "history", "settings"].includes(tab)) {
+        if (!CALENDAR_PAGE_ENABLED && tab === "reservations") return;
         setActiveTab(tab);
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
@@ -1002,7 +1020,9 @@ function AdminView() {
           {[
             { id: "control", label: "Play Rotation" },
             { id: "players", label: "Manage Players" },
-            { id: "reservations", label: pendingReservations > 0 ? `Reservations (${pendingReservations})` : "Reservations" },
+            ...(CALENDAR_PAGE_ENABLED
+              ? [{ id: "reservations", label: pendingReservations > 0 ? `Reservations (${pendingReservations})` : "Reservations" }]
+              : []),
             { id: "history", label: "History" },
             { id: "settings", label: "Backup & Settings" }
           ].map((tab) => (
@@ -1065,7 +1085,7 @@ function AdminView() {
       <div key={activeTab}>
         {activeTab === "control" && <PlayRotationTab />}
         {activeTab === "players" && <PlayersCrudTab />}
-        {activeTab === "reservations" && <AdminReservationsTab />}
+        {activeTab === "reservations" && CALENDAR_PAGE_ENABLED && <AdminReservationsTab />}
         {activeTab === "history" && <HistoryTab />}
         {activeTab === "settings" && <SettingsTab />}
       </div>
@@ -1573,12 +1593,13 @@ function PlayRotationTab() {
             <Button onClick={() => { playSound("complete"); generateMatches(); }} className="bg-forest text-ivory hover:bg-forest/90">Assign Courts</Button>
           </div>
         </Card>
+        {CALENDAR_PAGE_ENABLED && (
         <Card className="work-surface">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-clay">Bookings</p>
               <h2 className="font-display text-3xl text-ivory">Court Reservations</h2>
-              {useClubStore.getState().reservations.filter((r) => r.status === "Requested").length > 0 && (
+              {CALENDAR_PAGE_ENABLED && useClubStore.getState().reservations.filter((r) => r.status === "Requested").length > 0 && (
                 <div className="mt-2 flex items-center gap-2">
                   <span className="flex h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
                   <span className="text-xs font-bold text-amber-400">
@@ -1587,17 +1608,20 @@ function PlayRotationTab() {
                 </div>
               )}
             </div>
-            <Button 
-              onClick={() => {
-                playSound("complete");
-                window.dispatchEvent(new CustomEvent("haff-admin-tab", { detail: "reservations" }));
-              }} 
-              className="bg-brass text-forest hover:bg-linen font-black"
-            >
-              <Calendar size={14} /> View Calendar
-            </Button>
+            {CALENDAR_PAGE_ENABLED && (
+              <Button 
+                onClick={() => {
+                  playSound("complete");
+                  window.dispatchEvent(new CustomEvent("haff-admin-tab", { detail: "reservations" }));
+                }} 
+                className="bg-brass text-forest hover:bg-linen font-black"
+              >
+                <Calendar size={14} /> View Calendar
+              </Button>
+            )}
           </div>
         </Card>
+        )}
         <Card className="bg-white/5 backdrop-blur-xl border border-white/10 text-ivory shadow-[0_12px_40px_rgba(0,0,0,0.25)] rounded-[2rem] p-5">
           <div className="flex flex-col gap-4">
             {/* Top row: Duration adjustment & Voice Toggle */}

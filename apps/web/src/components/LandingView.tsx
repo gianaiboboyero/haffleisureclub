@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { useClubStore } from "../store/useClubStore";
 import { sortCourts, getStackDisplayGroups } from "../lib/utils";
 import { SKIP_ADMIN_LOGIN } from "../lib/devFlags";
+import { CALENDAR_PAGE_ENABLED } from "../lib/featureFlags";
 import { apiJson } from "../lib/api";
 import { 
   Users, 
@@ -239,16 +240,18 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
             </p>
 
             <div className="flex flex-wrap gap-3 pt-2">
-              <button 
-                onClick={() => setView("calendar")} 
-                className="flex items-center gap-2 rounded-full bg-brass px-6 py-3.5 text-sm font-black text-ink shadow-lg shadow-brass/15 transition hover:scale-[1.02] hover:bg-brass/90 active:scale-[0.98]"
-              >
-                <span>Reserve a Court</span>
-                <ArrowRight className="h-4 w-4" />
-              </button>
+              {CALENDAR_PAGE_ENABLED && (
+                <button 
+                  onClick={() => setView("calendar")} 
+                  className="flex items-center gap-2 rounded-full bg-brass px-6 py-3.5 text-sm font-black text-ink shadow-lg shadow-brass/15 transition hover:scale-[1.02] hover:bg-brass/90 active:scale-[0.98]"
+                >
+                  <span>Reserve a Court</span>
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              )}
               <button 
                 onClick={() => setView("player")} 
-                className="flex items-center gap-2 rounded-full border border-ivory/20 bg-ivory/6 px-5 py-3.5 text-sm font-bold text-ivory backdrop-blur-sm transition hover:bg-ivory/12"
+                className={`flex items-center gap-2 rounded-full border border-ivory/20 bg-ivory/6 px-5 py-3.5 text-sm font-bold text-ivory backdrop-blur-sm transition hover:bg-ivory/12 ${CALENDAR_PAGE_ENABLED ? "" : "bg-brass text-ink border-brass/30 shadow-lg shadow-brass/15"}`}
               >
                 <Users className="h-4.5 w-4.5" />
                 <span>Go Open Play</span>
@@ -269,17 +272,19 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
               animate={{ opacity: 1, x: 0, rotate: -6 }}
               transition={{ duration: 0.8, delay: 0.1 }}
               whileHover={{ rotate: -2, y: -8, scale: 1.02 }}
-              onClick={() => setView("calendar")}
+              onClick={() => setView(CALENDAR_PAGE_ENABLED ? "calendar" : "player")}
               onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") setView("calendar");
+                if (event.key === "Enter" || event.key === " ") setView(CALENDAR_PAGE_ENABLED ? "calendar" : "player");
               }}
               className="absolute z-10 left-[4%] md:left-[10%] top-[10%] aspect-[3/3.6] w-36 md:w-44 rounded-2xl bg-[#FFF8EA] p-4 text-center text-ink shadow-2xl cursor-pointer"
             >
               <div className="mx-auto mb-3 h-14 w-14 overflow-hidden rounded-full bg-brass p-1 shadow-inner md:h-18 md:w-18">
                 <img src={playerImage} alt="Player" className="h-full w-full object-cover rounded-full" />
               </div>
-              <h3 className="text-sm font-black md:text-base">Rent a Court</h3>
-              <p className="mt-1 text-[10px] md:text-xs font-semibold text-ink/60">₱300 per hour</p>
+              <h3 className="text-sm font-black md:text-base">{CALENDAR_PAGE_ENABLED ? "Rent a Court" : "Join Open Play"}</h3>
+              <p className="mt-1 text-[10px] md:text-xs font-semibold text-ink/60">
+                {CALENDAR_PAGE_ENABLED ? "₱300 per hour" : "₱150 per player"}
+              </p>
             </motion.div>
 
             {/* Glass Court Card Right */}
@@ -321,6 +326,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
         </section>
 
         {/* COURT SCHEDULE & RESERVATIONS */}
+        {CALENDAR_PAGE_ENABLED && (
         <section className="mt-16">
           <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
             <div>
@@ -431,6 +437,7 @@ export function LandingView({ setView, signedIn }: LandingViewProps) {
             </div>
           </div>
         </section>
+        )}
 
         {/* BENTO STATS & INFRASTRUCTURE GRID (Live Stats) */}
         <section className="mt-20">

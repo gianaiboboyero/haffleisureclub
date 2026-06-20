@@ -12,6 +12,7 @@ import { CHECK_IN_FEE } from "../lib/pricing";
 import { apiFetch, apiJson, parseResponseJson } from "../lib/api";
 import { markRosterSynced, rosterSyncFresh } from "../lib/syncPolicy";
 import { useSupabaseData } from "../lib/dataSource";
+import { CALENDAR_PAGE_ENABLED } from "../lib/featureFlags";
 import {
   broadcastTvState,
   fetchClubState,
@@ -745,14 +746,16 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const path = window.location.pathname.replace(/^\//, "");
     if (path === "home" || path === "landing") return "landing";
     if (path === "parking") return "player";
-    if (["landing", "admin", "player", "tv", "calendar", "finance"].includes(path)) return path;
+    if (path === "calendar" && !CALENDAR_PAGE_ENABLED) return "landing";
+    if (["landing", "admin", "player", "tv", "calendar", "finance"].includes(path)) return path as ViewMode;
     const hash = window.location.hash.replace(/^#\/?/, "");
     if (hash === "home" || hash === "landing") return "landing";
     if (hash === "parking") return "player";
-    if (["landing", "admin", "player", "tv", "calendar", "finance"].includes(hash)) return hash;
+    if (hash === "calendar" && !CALENDAR_PAGE_ENABLED) return "landing";
+    if (["landing", "admin", "player", "tv", "calendar", "finance"].includes(hash)) return hash as ViewMode;
     if (hash === "display") return "tv";
     if (hash === "payments" || hash === "revenue") return "finance";
-    if (hash === "schedule" || hash === "reservation") return "calendar";
+    if (hash === "schedule" || hash === "reservation") return CALENDAR_PAGE_ENABLED ? "calendar" : "landing";
     return "landing";
   })() as ViewMode,
   returnFromTvView: null,
@@ -764,12 +767,13 @@ export const useClubStore = create<ClubState>((set, get) => ({
   clubStatus: localStorage.getItem("haff-club-status") ?? "",
   tvBroadcast: null,
   setView: (view) => {
+    const nextView = !CALENDAR_PAGE_ENABLED && view === "calendar" ? "landing" : view;
     const current = get().view;
-    if (current === view) return;
-    window.history.pushState(null, "", view === "landing" ? "/home" : `/${view}`);
+    if (current === nextView) return;
+    window.history.pushState(null, "", nextView === "landing" ? "/home" : `/${nextView}`);
     set({
-      view,
-      returnFromTvView: view === "tv" ? current : get().returnFromTvView
+      view: nextView,
+      returnFromTvView: nextView === "tv" ? current : get().returnFromTvView
     });
   },
   goBackFromTv: () => {
