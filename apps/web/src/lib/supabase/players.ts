@@ -36,6 +36,16 @@ export async function fetchPlayerStatsByIds(ids: string[]): Promise<PlayerStatsR
   return data as PlayerStatsRow[];
 }
 
+export async function fetchPlayersByIds(ids: string[]): Promise<CompactPlayerRow[]> {
+  const supabase = getSupabase();
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  if (!supabase || uniqueIds.length === 0) return [];
+
+  const { data, error } = await supabase.from("Player").select(COMPACT_SELECT).in("id", uniqueIds);
+  if (error || !data) return [];
+  return data as CompactPlayerRow[];
+}
+
 export async function fetchPlayersCompact(): Promise<CompactPlayerRow[]> {
   const supabase = getSupabase();
   if (!supabase) return [];

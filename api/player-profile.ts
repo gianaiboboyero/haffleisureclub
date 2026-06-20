@@ -32,6 +32,59 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const actor = await requireUser(req, res);
   if (!actor) return;
 
+  if (req.method === "POST" && req.body?.action === "bulk-stats") {
+    if (actor.role !== "ADMIN") {
+      return res.status(403).json({ error: "Administrator access required to update player stats." });
+    }
+    const rows = req.body?.players;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: "players array is required." });
+    }
+    if (rows.length > 32) {
+      return res.status(400).json({ error: "Too many players in one request." });
+    }
+
+    const updates = rows
+      .map((row) => ({
+        id: String(row?.id ?? "").trim(),
+        totalGamesPlayed:
+          typeof row?.totalGamesPlayed === "number"
+            ? Math.max(0, Math.floor(row.totalGamesPlayed))
+            : undefined,
+        totalDaysPlayed:
+          typeof row?.totalDaysPlayed === "number"
+            ? Math.max(0, Math.floor(row.totalDaysPlayed))
+            : undefined,
+        lastPlayedDate:
+          typeof row?.lastPlayedDate === "string" && row.lastPlayedDate
+            ? new Date(row.lastPlayedDate)
+            : row?.lastPlayedDate === null
+              ? null
+              : undefined
+      }))
+      .filter((row) => row.id);
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: "No valid player ids in request." });
+    }
+
+    await prisma.$transaction(
+      updates.map((row) =>
+        prisma.player.update({
+          where: { id: row.id },
+          data: {
+            ...(row.totalGamesPlayed !== undefined ? { totalGamesPlayed: row.totalGamesPlayed } : {}),
+            ...(row.totalDaysPlayed !== undefined ? { totalDaysPlayed: row.totalDaysPlayed } : {}),
+            ...(row.lastPlayedDate !== undefined ? { lastPlayedDate: row.lastPlayedDate } : {}),
+            version: { increment: 1 }
+          }
+        })
+      )
+    );
+    await audit(actor.id, "PLAYER_STATS_BULK_UPDATED", "Player", updates.map((row) => row.id).join(","));
+    return res.status(200).json({ updated: updates.length });
+  }
+
   const playerId = String(req.body?.id ?? req.body?.playerId ?? "").trim();
   if (!playerId) return res.status(400).json({ error: "Player id is required." });
 

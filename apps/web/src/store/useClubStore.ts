@@ -19,7 +19,7 @@ import {
 } from "../lib/supabase/clubState";
 import { fetchCourts as fetchSupabaseCourts, seedCourtsIfEmpty } from "../lib/supabase/courts";
 import { fetchPlayersCompact } from "../lib/supabase/players";
-import { updatePlayerViaApi, updatePlayerStatsViaApi, fetchMissingPlayers } from "../lib/supabase/playerUpdate";
+import { updatePlayerViaApi, updatePlayerStatsBulkViaApi, fetchMissingPlayers } from "../lib/supabase/playerUpdate";
 import { fetchPlayerStatsByIds } from "../lib/supabase/players";
 import {
   applyMatchCompletionToPlayers,
@@ -2380,8 +2380,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
       endedAt: new Date().toISOString(),
       syncStatus: "PendingSync" as const
     };
-    let matches = state.matches.map((item) => (item.id === match.id ? completed : item));
-    let courts = state.courts.map((item) =>
+    const matches = state.matches.map((item) => (item.id === match.id ? completed : item));
+    const courts = state.courts.map((item) =>
       item.id === courtId
         ? {
             ...item,
@@ -2400,20 +2400,6 @@ export const useClubStore = create<ClubState>((set, get) => ({
       (id) => id === "vacant" || !finishedPlayerIds.has(id)
     );
     const updatedCourt = courts.find((item) => item.id === courtId);
-    try {
-      await liveDb.playersBulkPut(players);
-      await liveDb.matchesPut(completed);
-      await liveDb.courtsBulkPut(courts);
-      await queue("FINISH_COURT", "Match", completed.id, completed);
-      if (updatedCourt) {
-        await queue("UPDATE_COURT", "Court", updatedCourt.id, updatedCourt);
-      }
-      if (statsParticipants.length > 0) {
-        await syncParticipantStats(statsParticipants);
-      }
-    } catch (err) {
-      console.error("Failed to write finished court to DB, falling back to local memory:", err);
-    }
     const stackOrder = reconcileStackOrder(baseOrder, players, matches, courts, {
       autoAppendMissing: false
     });
@@ -2425,7 +2411,15 @@ export const useClubStore = create<ClubState>((set, get) => ({
       `${court.name} is open. Finished players were not re-queued — add them manually when ready.`,
       "system"
     );
-    await get().publishSharedState();
+
+    void persistFinishedCourt({
+      players,
+      completed,
+      courts,
+      updatedCourt,
+      statsParticipants,
+      publish: () => get().publishSharedState()
+    });
   },
   updateMatchScores: async (matchId, scoreA, scoreB) => {
     const state = get();
@@ -2962,12 +2956,40 @@ function balanceTeams(players: Player[]) {
 async function syncParticipantStats(participants: Player[]) {
   if (participants.length === 0) return;
   if (useSupabaseData()) {
-    await Promise.all(participants.map((player) => updatePlayerStatsViaApi(player)));
+    await updatePlayerStatsBulkViaApi(participants);
     return;
   }
   for (const player of participants) {
     await queue("UPDATE_PLAYER", "Player", player.id, player);
   }
+}
+
+async function persistFinishedCourt(args: {
+  players: Player[];
+  completed: Match;
+  courts: Court[];
+  updatedCourt: Court | undefined;
+  statsParticipants: Player[];
+  publish: () => Promise<void>;
+}) {
+  const { players, completed, courts, updatedCourt, statsParticipants, publish } = args;
+  try {
+    await Promise.all([
+      liveDb.playersBulkPut(players),
+      liveDb.matchesPut(completed),
+      liveDb.courtsBulkPut(courts)
+    ]);
+    await queue("FINISH_COURT", "Match", completed.id, completed);
+    if (updatedCourt) {
+      await queue("UPDATE_COURT", "Court", updatedCourt.id, updatedCourt);
+    }
+    if (statsParticipants.length > 0) {
+      await syncParticipantStats(statsParticipants);
+    }
+  } catch (err) {
+    console.error("Failed to write finished court to DB, falling back to local memory:", err);
+  }
+  await publish();
 }
 
 /** Pull skill level, avatar, and names from the roster for session players (light TV/player views omit profiles). */

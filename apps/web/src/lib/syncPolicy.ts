@@ -1,10 +1,13 @@
 /** Client sync intervals — tuned for Vercel + Supabase free tiers. */
 
-export const POLL_MS_PUSH_HEALTHY = 5 * 60_000;
+export const POLL_MS_PUSH_HEALTHY = 15 * 60_000;
 export const POLL_MS_PUSH_DOWN = 90_000;
-export const POLL_MS_IDLE_VIEW = 5 * 60_000;   // was 3 min, raised to 5 min
-export const POLL_MS_ADMIN_TV_HEALTHY = 60_000; // was 30 s — Realtime covers urgent updates
-export const POLL_MS_ADMIN_TV_DOWN = 30_000;    // 30 s only when Realtime is degraded
+export const POLL_MS_IDLE_VIEW = 5 * 60_000;
+/** Realtime handles live ops — HTTP poll is only a fallback when push is down. */
+export const POLL_MS_ADMIN_TV_HEALTHY = 15 * 60_000;
+export const POLL_MS_ADMIN_TV_DOWN = 30_000;
+/** Safety ping when Realtime is healthy (should rarely run — see main.tsx poll gate). */
+export const POLL_MS_REALTIME_HEALTHY = 60 * 60_000;
 export const ROSTER_SYNC_TTL_MS = 4 * 60 * 60_000; // was 1 hr, raised to 4 hr
 export const REALTIME_REFRESH_DEBOUNCE_MS = 400;
 export const PUBLISH_DEBOUNCE_MS = 500;
@@ -22,15 +25,10 @@ export function isIdleView(view: string) {
 }
 
 export function clubPollIntervalMs(view: string) {
-  // Landing page has no session UI — skip polling entirely (return a very long interval).
   if (NO_POLL_VIEWS.has(view)) return 60 * 60_000;
-  // Admin / TV: tighter when Realtime is degraded, relaxed when healthy (RT handles updates).
-  if (view === "admin" || view === "tv") {
-    return clubPushHealthy ? POLL_MS_ADMIN_TV_HEALTHY : POLL_MS_ADMIN_TV_DOWN;
-  }
-  // Finance/calendar — slower poll, Realtime not critical.
+  if (clubPushHealthy) return POLL_MS_REALTIME_HEALTHY;
+  if (view === "admin" || view === "tv") return POLL_MS_ADMIN_TV_DOWN;
   if (isIdleView(view)) return POLL_MS_IDLE_VIEW;
-  if (clubPushHealthy) return POLL_MS_PUSH_HEALTHY;
   return POLL_MS_PUSH_DOWN;
 }
 

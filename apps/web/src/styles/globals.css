@@ -369,7 +369,7 @@ button:disabled {
     display: flex;
     width: max-content;
     gap: 0.65rem;
-    animation: tv-stack-marquee-left-to-right 34s linear infinite;
+    animation: tv-stack-marquee-left-to-right 60s linear infinite;
     will-change: transform;
   }
 

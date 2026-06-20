@@ -92,23 +92,30 @@ export async function updatePlayerViaApi(
 
 /** Persist lifetime stat counters after a court finishes (authenticated API queue). */
 export async function updatePlayerStatsViaApi(player: Player): Promise<void> {
-  await apiJson<PlayerProfileResponse>("/api/player-profile", {
-    method: "PATCH",
+  await updatePlayerStatsBulkViaApi([player]);
+}
+
+/** One Vercel invocation for all participants after a court finishes. */
+export async function updatePlayerStatsBulkViaApi(players: Player[]): Promise<void> {
+  if (players.length === 0) return;
+  await apiJson<{ updated: number }>("/api/player-profile", {
+    method: "POST",
     body: JSON.stringify({
-      id: player.id,
-      displayName: player.displayName,
-      skillLevel: player.skillLevel,
-      totalGamesPlayed: player.totalGamesPlayed,
-      totalDaysPlayed: player.totalDaysPlayed,
-      lastPlayedDate: player.lastPlayedDate ?? null
+      action: "bulk-stats",
+      players: players.map((player) => ({
+        id: player.id,
+        totalGamesPlayed: player.totalGamesPlayed,
+        totalDaysPlayed: player.totalDaysPlayed,
+        lastPlayedDate: player.lastPlayedDate ?? null
+      }))
     })
   });
 }
 
 export async function fetchMissingPlayers(ids: string[]): Promise<Player[]> {
   if (ids.length === 0) return [];
-  const { fetchPlayersCompact } = await import("./players");
-  const compact = await fetchPlayersCompact();
+  const { fetchPlayersByIds } = await import("./players");
+  const compact = await fetchPlayersByIds(ids);
   const byId = new Map(compact.map((row) => [row.id, row]));
   return ids
     .filter((id) => byId.has(id))

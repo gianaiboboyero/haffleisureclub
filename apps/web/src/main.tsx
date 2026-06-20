@@ -299,14 +299,20 @@ function App() {
       }
     });
 
-    const timer = window.setInterval(refreshPendingSyncCount, 120000);
+    const syncQueuePollMs = useSupabaseData() ? 10 * 60_000 : 120_000;
+    const timer = window.setInterval(refreshPendingSyncCount, syncQueuePollMs);
 
     let pollTimer: number | undefined;
     const scheduleClubPoll = () => {
       const view = useClubStore.getState().view;
       const delayMs = clubPollIntervalMs(view);
       pollTimer = window.setTimeout(() => {
-        if (!document.hidden && (!socket || !socket.connected)) {
+        const supabaseLive = useSupabaseData();
+        const needsHttpPoll =
+          !document.hidden &&
+          (!supabaseLive || !isClubPushHealthy()) &&
+          (!socket || !socket.connected);
+        if (needsHttpPoll) {
           const context =
             view === "tv" ? "tv" : view === "player" ? "player" : "default";
           void useClubStore.getState().pingSharedState({ context });
@@ -930,7 +936,7 @@ function AdminView({
     openTvDisplayWindow();
   }, [isAdmin]);
 
-  const [email, setEmail] = React.useState("gianaibo.dev@gmail.com");
+  const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [authError, setAuthError] = React.useState("");
   const [loggingIn, setLoggingIn] = React.useState(false);
@@ -2822,7 +2828,7 @@ function HistoryTab() {
 function CalendarView() {
   const [isAuthenticated, setIsAuthenticated] = React.useState(false);
   const [checkingAuth, setCheckingAuth] = React.useState(true);
-  const [email, setEmail] = React.useState("gianaibo.dev@gmail.com");
+  const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [authError, setAuthError] = React.useState("");
 
@@ -2935,7 +2941,7 @@ function CalendarView() {
 function FinanceView() {
   const [isAuthenticated, setIsAuthenticated] = React.useState(false);
   const [checkingAuth, setCheckingAuth] = React.useState(true);
-  const [email, setEmail] = React.useState("gianaibo.dev@gmail.com");
+  const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [authError, setAuthError] = React.useState("");
 
