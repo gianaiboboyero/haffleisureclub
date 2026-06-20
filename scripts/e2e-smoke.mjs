@@ -1,8 +1,17 @@
 import { chromium } from "playwright";
 
 const BASE = process.env.E2E_BASE_URL ?? "https://haffleisureclub.vercel.app";
-const SUPABASE_URL = "https://hmhhgmuuusknmucjlkth.supabase.co";
-const SUPABASE_KEY = "sb_publishable_LoX8PzAZhB2ykC5msXFQxQ_locveQNE";
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL;
+const SUPABASE_KEY =
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+  ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  ?? process.env.SUPABASE_ANON_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  console.error("Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY before running e2e smoke tests.");
+  process.exit(1);
+}
+
 const TEST_PLAYERS = ["Alex Test", "Blake Test", "Casey Test", "Dana Test"];
 
 const results = [];
@@ -78,7 +87,6 @@ try {
     log("Finish court ends match", !(await finishBtn.isVisible().catch(() => false)));
   }
 
-  const settings = session?.settings ?? {};
   await page.goto(`${BASE}/player`, { waitUntil: "networkidle" });
   await page.waitForTimeout(3000);
   const playerOk = await page.getByText(/Sign in|Register|checked in|Open play|My games|HAFF/i).first().isVisible().catch(() => false);
@@ -100,7 +108,7 @@ try {
   log("Vercel /api/auth", apiAuth && "user" in apiAuth, JSON.stringify(apiAuth));
 
   const clubRes = await fetch(`${BASE}/api/club-state?sessionId=default-active-session`);
-  const clubBody = await clubRes.json().catch(() => null);
+  await clubRes.json().catch(() => null);
   log("Vercel /api/club-state (no cookie)", clubRes.status === 401, `HTTP ${clubRes.status} — expected 401 without login`);
 
   const courts = await fetch(`${SUPABASE_URL}/rest/v1/Court?select=name`, {

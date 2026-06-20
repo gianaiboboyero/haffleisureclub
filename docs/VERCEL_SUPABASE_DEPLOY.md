@@ -125,6 +125,8 @@ After an incident, rotate passwords with `npm run db:rotate-passwords` (prints a
 
 Optional: set `TURNSTILE_SECRET_KEY` + site key on Vercel to require captcha on registration.
 
+**Never commit secrets to GitHub.** Keys belong only in Vercel env vars and local `.env` (gitignored). The Supabase publishable key is embedded in the production JS bundle by design — protect it with RLS (see `db:rls-profile-lockdown`), not by hiding the key. **Never** commit `SUPABASE_SERVICE_ROLE_KEY`, database passwords, or admin passwords.
+
 ---
 
 ```bash
