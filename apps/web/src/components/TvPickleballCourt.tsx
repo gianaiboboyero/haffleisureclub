@@ -179,6 +179,7 @@ export const TvPickleballCourt = React.memo(function TvPickleballCourt({
 }: TvPickleballCourtProps) {
   const isPlaying = Boolean(match);
   const isReserved = !isPlaying && court.status === "Reserved";
+  const isAssigned = !isPlaying && court.status === "Assigned";
 
   let statusTone: "playing" | "reserved" | "available" | "maintenance" | "paused" = "available";
   let statusLabel = "AVAILABLE";
@@ -191,9 +192,12 @@ export const TvPickleballCourt = React.memo(function TvPickleballCourt({
   } else if (court.status === "Paused") {
     statusTone = "paused";
     statusLabel = "PAUSED";
-  } else if (isReserved) {
+  } else if (isReserved || isAssigned) {
     statusTone = "reserved";
-    statusLabel = "RESERVED";
+    statusLabel = isReserved ? "RESERVED" : "ASSIGNED";
+  } else if (court.locked) {
+    statusTone = "paused";
+    statusLabel = "LOCKED";
   }
 
   return (
@@ -208,13 +212,19 @@ export const TvPickleballCourt = React.memo(function TvPickleballCourt({
         statusTone={statusTone}
         onAnnounce={onAnnounce}
         announceIcon={isPlaying ? "rotate" : "megaphone"}
-        announceLabel={isPlaying ? "Announce" : isReserved ? "Announce" : undefined}
+        announceLabel={isPlaying ? "Announce" : isReserved || isAssigned ? "Announce" : undefined}
       />
 
       {isPlaying && match ? (
         <PlayingCourtBody teamA={teamA} teamB={teamB} getPlayerAvatar={getPlayerAvatar} />
-      ) : isReserved ? (
-        <IdleCourtBody tone="reserved" title="Court Reserved" subtitle={court.reservedFor}>
+      ) : isAssigned ? (
+        <PlayingCourtBody teamA={teamA} teamB={teamB} getPlayerAvatar={getPlayerAvatar} />
+      ) : isReserved || isAssigned ? (
+        <IdleCourtBody
+          tone="reserved"
+          title={isReserved ? "Court Reserved" : "Players Assigned"}
+          subtitle={isAssigned ? "Waiting for staff to start" : court.reservedFor}
+        >
           {reservedPlayers.length > 0 ? (
             <div className="tv-pickle-court__reserved-players">
               {reservedPlayers.slice(0, 4).map((player) => (

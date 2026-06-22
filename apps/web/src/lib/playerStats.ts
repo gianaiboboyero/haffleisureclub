@@ -20,12 +20,13 @@ export function playedDateKey(value?: string | null): string | null {
 }
 
 /** Increment lifetime counters when a match is completed for this player. */
-export function bumpPlayerAfterCompletedMatch(player: Player): Player {
+export function bumpPlayerAfterCompletedMatch(player: Player, durationSeconds: number): Player {
   const playedToday = todayKey();
   const firstGameToday = playedDateKey(player.lastPlayedDate) !== playedToday;
   return {
     ...player,
     totalGamesPlayed: (player.totalGamesPlayed ?? 0) + 1,
+    totalCourtSeconds: (player.totalCourtSeconds ?? 0) + Math.max(60, Math.round(durationSeconds)),
     totalDaysPlayed: (player.totalDaysPlayed ?? 0) + (firstGameToday ? 1 : 0),
     lastPlayedDate: playedToday,
   };
@@ -33,17 +34,19 @@ export function bumpPlayerAfterCompletedMatch(player: Player): Player {
 
 export function applyMatchCompletionToPlayers(
   players: Player[],
-  participantIds: string[]
+  participantIds: string[],
+  durationSeconds: number
 ): Player[] {
   const ids = new Set(participantIds.filter(isRealPlayerId));
   if (ids.size === 0) return players;
   return players.map((player) =>
-    ids.has(player.id) ? bumpPlayerAfterCompletedMatch(player) : player
+    ids.has(player.id) ? bumpPlayerAfterCompletedMatch(player, durationSeconds) : player
   );
 }
 
 export function mergePlayerLifetimeStats(local: Player, server: {
   totalGamesPlayed: number;
+  totalCourtSeconds?: number;
   totalDaysPlayed: number;
   lastPlayedDate?: string | null;
 }): Player {
@@ -57,6 +60,7 @@ export function mergePlayerLifetimeStats(local: Player, server: {
   return {
     ...local,
     totalGamesPlayed: Math.max(local.totalGamesPlayed ?? 0, server.totalGamesPlayed ?? 0),
+    totalCourtSeconds: Math.max(local.totalCourtSeconds ?? 0, server.totalCourtSeconds ?? 0),
     totalDaysPlayed: Math.max(local.totalDaysPlayed ?? 0, server.totalDaysPlayed ?? 0),
     lastPlayedDate: lastPlayed,
   };

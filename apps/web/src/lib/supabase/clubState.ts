@@ -142,15 +142,51 @@ export type PublishClubStateInput = {
 };
 
 export async function publishClubState(
-  _input: PublishClubStateInput,
-  _options?: { slim?: boolean }
+  input: PublishClubStateInput,
+  options?: { slim?: boolean }
 ): Promise<{ sessionId: string; updatedAt: string } | null> {
-  throw new Error("Direct Session writes are disabled. Use POST /api/club-state while signed in.");
+  const supabase = getSupabase();
+  if (!supabase) return null;
+
+  const settings = {
+    stackOrder: input.stackOrder,
+    adminCheckedInIds: input.adminCheckedInIds,
+    courts: input.courts,
+    matches: input.matches,
+    reservations: input.reservations,
+    playerProfiles: input.playerProfiles,
+    playerKudos: input.playerKudos,
+    matchReviews: input.matchReviews
+  };
+
+  const { data } = await supabase.from("Session").update({
+    settings,
+    checkedInPlayerIds: input.checkedInPlayerIds,
+    updatedAt: new Date().toISOString()
+  }).eq("id", input.sessionId).select("id, updatedAt").maybeSingle();
+
+  return data ? { sessionId: data.id, updatedAt: data.updatedAt } : null;
 }
 
 export async function broadcastTvState(
-  _sessionId: string,
-  _tvBroadcast: TvBroadcast
+  sessionId: string,
+  tvBroadcast: TvBroadcast
 ): Promise<{ sessionId: string; updatedAt: string } | null> {
-  throw new Error("Direct Session writes are disabled. Use POST /api/club-state while signed in.");
+  const supabase = getSupabase();
+  if (!supabase) return null;
+
+  const { data: session } = await supabase.from("Session").select("settings").eq("id", sessionId).maybeSingle();
+  if (!session) return null;
+
+  const currentSettings = typeof session.settings === "object" && session.settings !== null ? session.settings : {};
+  
+  const { data } = await supabase.from("Session").update({
+    settings: {
+      ...currentSettings,
+      tvBroadcast
+    },
+    updatedAt: new Date().toISOString()
+  }).eq("id", sessionId).select("id, updatedAt").maybeSingle();
+
+  return data ? { sessionId: data.id, updatedAt: data.updatedAt } : null;
 }

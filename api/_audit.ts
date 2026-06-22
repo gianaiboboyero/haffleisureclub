@@ -1,20 +1,19 @@
-import type { Prisma } from "@prisma/client";
-import { prisma } from "./_prisma.js";
+import { getSupabaseAdmin } from "./_supabaseAdmin.js";
 
 export async function audit(
   userId: string | null,
   action: string,
   entityType: string,
   entityId?: string | null,
-  metadata?: Prisma.InputJsonValue
+  metadata?: any
 ) {
-  await prisma.auditLog.create({
-    data: {
-      userId,
-      action,
-      entityType,
-      entityId: entityId ?? null,
-      metadata
-    }
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return;
+  await supabase.from("AuditLog").insert({
+    userId,
+    action,
+    entityType,
+    entityId: entityId ?? null,
+    metadata
   });
 }

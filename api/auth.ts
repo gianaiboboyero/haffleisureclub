@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { prisma } from "./_prisma.js";
+import { getSupabaseAdmin } from "./_supabaseAdmin.js";
 import {
   clearSession,
   createSession,
@@ -10,27 +10,12 @@ import {
 } from "./_auth.js";
 import { audit } from "./_audit.js";
 import {
-  captchaRequired,
   loginFailureBucket,
   MAX_LOGIN_FAILURES,
   LOGIN_FAILURE_WINDOW_MS,
   passwordValidationMessage,
   validPassword
 } from "./_security.js";
-
-async function verifyCaptcha(token: unknown, ip: string) {
-  if (!captchaRequired()) return true;
-  if (typeof token !== "string" || !token) return false;
-  const secret = process.env.TURNSTILE_SECRET_KEY?.trim();
-  if (!secret) return false;
-  const body = new URLSearchParams({ secret, response: token, remoteip: ip });
-  const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-    method: "POST",
-    body
-  });
-  const result = await response.json() as { success?: boolean };
-  return Boolean(result.success);
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const action = String(req.query.action ?? "");
@@ -44,35 +29,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const password = String(req.body?.password ?? "");
     const displayName = String(req.body?.displayName ?? "").trim();
     const skillLevel = String(req.body?.skillLevel ?? "Beginner");
-    const ip = String(req.headers["x-forwarded-for"] ?? "").split(",")[0];
-    if (!(await verifyCaptcha(req.body?.captchaToken, ip))) {
-      return res.status(400).json({ error: "Please complete the verification challenge." });
-    }
     if (!email.includes("@") || !validPassword(password) || displayName.length < 2) {
       return res.status(400).json({ error: `Use a valid name, email, and ${passwordValidationMessage().toLowerCase()}` });
     }
-    if (await prisma.user.findUnique({ where: { email } })) {
+    const supabase = getSupabaseAdmin();
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+
+    const { data: existingUser } = await supabase.from("User").select().eq("email", email).single();
+    if (existingUser) {
       return res.status(409).json({ error: "An account already exists for this email." });
     }
     const adminEmail = process.env.INITIAL_ADMIN_EMAIL ? process.env.INITIAL_ADMIN_EMAIL.trim().toLowerCase() : null;
-    const user = await prisma.user.create({
-      data: {
-        email,
-        passwordHash: hashPassword(password),
-        role: (adminEmail && email === adminEmail) ? "ADMIN" : "MEMBER",
-        player: {
-          create: {
-            displayName,
-            fullName: displayName,
-            email,
-            skillLevel,
-            rating: 2,
-            tags: ["Member"]
-          }
-        }
-      },
-      include: { player: true }
-    });
+    const { data: newPlayer, error: playerError } = await supabase.from("Player").insert({
+      displayName,
+      fullName: displayName,
+      email,
+      skillLevel,
+      rating: 2,
+      tags: ["Member"]
+    }).select().single();
+
+    if (playerError) {
+      return res.status(500).json({ error: "Failed to create player record." });
+    }
+
+    const { data: user, error: userError } = await supabase.from("User").insert({
+      email,
+      passwordHash: hashPassword(password),
+      role: (adminEmail && email === adminEmail) ? "ADMIN" : "MEMBER",
+      playerId: newPlayer.id
+    }).select().single();
+
+    if (userError) {
+      return res.status(500).json({ error: "Failed to create user record." });
+    }
+    user.player = newPlayer;
     await createSession(user.id, res);
     await audit(user.id, "AUTH_REGISTER", "User", user.id);
     return res.status(201).json({ user: publicUser(user) });
@@ -83,17 +74,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const password = String(req.body?.password ?? "");
     const ip = String(req.headers["x-forwarded-for"] ?? "").split(",")[0];
     const bucket = loginFailureBucket(email, ip);
-    const recentFailures = await prisma.auditLog.count({
-      where: {
-        action: "AUTH_LOGIN_FAILED",
-        entityId: bucket,
-        createdAt: { gte: new Date(Date.now() - LOGIN_FAILURE_WINDOW_MS) }
-      }
-    });
-    if (recentFailures >= MAX_LOGIN_FAILURES) {
+    const supabase = getSupabaseAdmin();
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+
+    const { count: recentFailures } = await supabase.from("AuditLog").select("*", { count: "exact", head: true })
+      .eq("action", "AUTH_LOGIN_FAILED")
+      .eq("entityId", bucket)
+      .gte("createdAt", new Date(Date.now() - LOGIN_FAILURE_WINDOW_MS).toISOString());
+    if (recentFailures !== null && recentFailures >= MAX_LOGIN_FAILURES) {
       return res.status(429).json({ error: "Too many login attempts. Please try again later." });
     }
-    const user = await prisma.user.findUnique({ where: { email }, include: { player: true } });
+    const { data: user } = await supabase.from("User").select("*, player:Player(*)").eq("email", email).single();
     if (!user || !verifyPassword(password, user.passwordHash)) {
       await audit(null, "AUTH_LOGIN_FAILED", "LoginAttempt", bucket);
       return res.status(401).json({ error: "Invalid email or password." });
@@ -124,10 +115,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!validPassword(nextPassword)) {
       return res.status(400).json({ error: passwordValidationMessage() });
     }
-    await prisma.$transaction([
-      prisma.user.update({ where: { id: user.id }, data: { passwordHash: hashPassword(nextPassword) } }),
-      prisma.authSession.deleteMany({ where: { userId: user.id } })
-    ]);
+    const supabase = getSupabaseAdmin();
+    if (supabase) {
+      await supabase.from("User").update({ passwordHash: hashPassword(nextPassword) }).eq("id", user.id);
+      await supabase.from("AuthSession").delete().eq("userId", user.id);
+    }
     await createSession(user.id, res);
     await audit(user.id, "AUTH_PASSWORD_CHANGED", "User", user.id);
     return res.status(200).json({ success: true });
@@ -136,7 +128,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "POST" && action === "revoke-sessions") {
     const user = await getUser(req);
     if (!user) return res.status(401).json({ error: "Authentication required" });
-    await prisma.authSession.deleteMany({ where: { userId: user.id } });
+    const supabase = getSupabaseAdmin();
+    if (supabase) {
+      await supabase.from("AuthSession").delete().eq("userId", user.id);
+    }
     await clearSession(req, res);
     await audit(user.id, "AUTH_SESSIONS_REVOKED", "User", user.id);
     return res.status(200).json({ success: true });

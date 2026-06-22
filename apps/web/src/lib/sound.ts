@@ -187,6 +187,23 @@ export function playSound(key: SoundKey) {
   sounds[key].play();
 }
 
+export async function playSoundRepeatedly(
+  key: SoundKey,
+  count: number,
+  intervalMs = 650,
+  shouldContinue: () => boolean = () => true
+) {
+  const repetitions = Math.max(0, Math.floor(count));
+  for (let index = 0; index < repetitions; index += 1) {
+    if (!shouldContinue()) return false;
+    playSound(key);
+    if (index < repetitions - 1) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, intervalMs));
+    }
+  }
+  return true;
+}
+
 function makeTone(frequencies: number[]) {
   const sampleRate = 44100;
   const duration = frequencies.length > 1 ? 0.34 : 0.18;

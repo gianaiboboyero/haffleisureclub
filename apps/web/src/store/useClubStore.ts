@@ -295,7 +295,6 @@ async function enforceCourtLimit(courts: Court[]): Promise<Court[]> {
   const remove = sorted.slice(MAX_COURTS);
   for (const court of remove) {
     await liveDb.courtsDelete(court.id);
-    await db.syncQueue.where("entityId").equals(court.id).delete();
   }
   return keep;
 }
@@ -1458,7 +1457,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
         .filter((r: any) => r.status === "Conflict");
 
       if (syncedIds.length > 0) {
-        await db.syncQueue.where("id").anyOf(syncedIds).delete();
+        // disabled sync queue deletes
       }
 
       for (const item of failed) {
@@ -1607,7 +1606,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
         ...match.teamAPlayerIds,
         ...match.teamBPlayerIds,
       ]);
-      players = applyMatchCompletionToPlayers(players, participantIds);
+      players = applyMatchCompletionToPlayers(players, participantIds, 12 * 60);
     }
 
     const courts = state.courts.map((court) => ({
@@ -2396,7 +2395,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const match = state.matches.find((item) => item.id === court?.currentMatchId);
     if (!court || !match) return;
     const participantIds = [...match.teamAPlayerIds, ...match.teamBPlayerIds];
-    const players = applyMatchCompletionToPlayers(state.players, participantIds);
+    const players = applyMatchCompletionToPlayers(state.players, participantIds, 12 * 60);
     const completed = {
       ...match,
       status: "Completed" as const,

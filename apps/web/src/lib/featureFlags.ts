@@ -1,2 +1,2 @@
-/** Public court reservation calendar — hidden until booking flow is ready. */
-export const CALENDAR_PAGE_ENABLED = false;
+/** Public court reservation calendar. */
+export const CALENDAR_PAGE_ENABLED = true;

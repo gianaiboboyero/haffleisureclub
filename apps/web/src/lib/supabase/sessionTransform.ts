@@ -39,6 +39,20 @@ export type SharedClubStatePayload = {
 
 const stringArray = (value: unknown) => (Array.isArray(value) ? value.map(String) : []);
 
+const realStackPlayerIds = (stackOrder: unknown) =>
+  stringArray(stackOrder).filter(
+    (id) => id !== "vacant" && id !== "reserved" && !id.startsWith("vacant")
+  );
+
+/**
+ * A persisted queue slot is authoritative evidence that the player is checked in.
+ * This prevents a stale check-in array from turning an intact queue into vacancies.
+ */
+export const includeStackedPlayersInCheckIns = (
+  checkedInIds: string[],
+  stackOrder: unknown
+) => Array.from(new Set([...checkedInIds, ...realStackPlayerIds(stackOrder)]));
+
 const activeMatchPlayerIds = (matches: unknown) => {
   const ids = new Set<string>();
   if (!Array.isArray(matches)) return ids;
@@ -155,7 +169,10 @@ export function buildSharedPayload(
   }
 
   const adminCheckedInIds = stringArray(settings.adminCheckedInIds);
-  const rawCheckedIn = session.checkedInPlayerIds ?? [];
+  const rawCheckedIn = includeStackedPlayersInCheckIns(
+    session.checkedInPlayerIds ?? [],
+    settings.stackOrder
+  );
   // Trim completed matches older than 30 minutes on the READ path, mirroring the
   // 30-minute window already applied on the publish path. This keeps egress small:
   // a busy session won't keep growing the settings blob indefinitely.
@@ -167,7 +184,10 @@ export function buildSharedPayload(
     if (!m.startedAt) return false;
     return now - new Date(m.startedAt).getTime() < MATCH_RETAIN_MS;
   });
-  const checkedInPlayerIds = filterAuthorizedCheckIns(rawCheckedIn, adminCheckedInIds, matches);
+  const checkedInPlayerIds = includeStackedPlayersInCheckIns(
+    filterAuthorizedCheckIns(rawCheckedIn, adminCheckedInIds, matches),
+    settings.stackOrder
+  );
   // Use the full rawCheckedIn list for stack normalization so that players are only
   // replaced with "vacant" when they genuinely aren't in the session at all — not when
   // they were incidentally excluded by the adminCheckedInIds filter (e.g. race condition).

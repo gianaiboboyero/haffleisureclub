@@ -15,6 +15,7 @@ type PlayerProfileResponse = {
     tags: string[];
     status: string;
     totalGamesPlayed: number;
+    totalCourtSeconds: number;
     totalDaysPlayed: number;
     lastPlayedDate: string | null;
     version: number;
@@ -43,6 +44,7 @@ function mapProfilePlayer(player: Player, row: PlayerProfileResponse["player"]):
     tags: row.tags ?? player.tags,
     isActive: row.status !== "Inactive",
     totalGamesPlayed: row.totalGamesPlayed,
+    totalCourtSeconds: row.totalCourtSeconds,
     totalDaysPlayed: row.totalDaysPlayed,
     lastPlayedDate: row.lastPlayedDate ?? undefined,
     version: row.version
@@ -72,6 +74,7 @@ export async function updatePlayerViaApi(
     phoneNumber: player.phoneNumber,
     isActive: player.isActive !== false,
     totalGamesPlayed: player.totalGamesPlayed,
+    totalCourtSeconds: player.totalCourtSeconds ?? 0,
     totalDaysPlayed: player.totalDaysPlayed,
     lastPlayedDate: player.lastPlayedDate ?? null
   };
@@ -105,6 +108,7 @@ export async function updatePlayerStatsBulkViaApi(players: Player[]): Promise<vo
       players: players.map((player) => ({
         id: player.id,
         totalGamesPlayed: player.totalGamesPlayed,
+        totalCourtSeconds: player.totalCourtSeconds ?? 0,
         totalDaysPlayed: player.totalDaysPlayed,
         lastPlayedDate: player.lastPlayedDate ?? null
       }))
@@ -129,6 +133,7 @@ export async function fetchMissingPlayers(ids: string[]): Promise<Player[]> {
         tags: row.tags ?? [],
         checkedIn: false,
         totalGamesPlayed: row.totalGamesPlayed,
+        totalCourtSeconds: row.totalCourtSeconds,
         totalDaysPlayed: row.totalDaysPlayed,
         lastPlayedDate: row.lastPlayedDate ?? undefined,
         avatarUrl: row.avatarUrl ?? undefined,

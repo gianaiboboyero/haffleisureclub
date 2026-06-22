@@ -2,7 +2,7 @@ export type SkillLevel = "Newbie" | "Beginner" | "Novice" | "Low Intermediate" |
 export type MatchStatus = "Queued" | "Assigned" | "InProgress" | "Completed";
 export type SyncStatus = "LocalOnly" | "PendingSync" | "Synced" | "Conflict";
 
-export type TvBroadcastKind = "message" | "court" | "overtime";
+export type TvBroadcastKind = "message" | "court";
 
 export type TvBroadcast = {
   id: string;
@@ -39,6 +39,7 @@ export type Player = {
   tags: string[];
   checkedIn: boolean;
   totalGamesPlayed: number;
+  totalCourtSeconds?: number;
   totalDaysPlayed: number;
   lastPlayedDate?: string;
   isActive?: boolean;
@@ -60,7 +61,8 @@ export type Court = {
   number: number;
   priority?: number;
   reservable?: boolean;
-  status: "Available" | "InUse" | "Paused" | "Maintenance" | "Reserved";
+  status: "Available" | "Assigned" | "InUse" | "Paused" | "Maintenance" | "Reserved";
+  locked?: boolean;
   currentMatchId?: string;
   reservedFor?: string;
   reservedPlayerIds?: string[];

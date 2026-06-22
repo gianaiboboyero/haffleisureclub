@@ -70,6 +70,7 @@ model Player {
   tags                 String[]      @default([])
   status               String        @default("Active")
   totalGamesPlayed     Int           @default(0)
+  totalCourtSeconds    Int           @default(0)
   totalPointsScored    Int           @default(0)
   totalPointsAgainst   Int           @default(0)
   totalDaysPlayed      Int           @default(0)

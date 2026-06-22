@@ -1,6 +1,6 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { prisma } from "./_prisma.js";
+import { getSupabaseAdmin } from "./_supabaseAdmin.js";
 
 const COOKIE_NAME = "__Secure-haff_session";
 const LEGACY_COOKIE_NAME = "haff_session";
@@ -46,8 +46,12 @@ function cookieValue(req: VercelRequest) {
 export async function createSession(userId: string, res: VercelResponse) {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400_000);
-  await prisma.authSession.create({
-    data: { userId, tokenHash: hashToken(token), expiresAt }
+  const supabase = getSupabaseAdmin();
+  if (!supabase) throw new Error("Supabase is not configured");
+  await supabase.from("AuthSession").insert({
+    userId,
+    tokenHash: hashToken(token),
+    expiresAt: expiresAt.toISOString()
   });
   res.setHeader("Set-Cookie", sessionCookie(token, SESSION_DAYS * 86400));
 }
@@ -55,7 +59,10 @@ export async function createSession(userId: string, res: VercelResponse) {
 export async function clearSession(req: VercelRequest, res: VercelResponse) {
   const token = cookieValue(req);
   if (token) {
-    await prisma.authSession.deleteMany({ where: { tokenHash: hashToken(token) } });
+    const supabase = getSupabaseAdmin();
+    if (supabase) {
+      await supabase.from("AuthSession").delete().eq("tokenHash", hashToken(token));
+    }
   }
   res.setHeader("Set-Cookie", [
     sessionCookie("", 0),
@@ -66,11 +73,15 @@ export async function clearSession(req: VercelRequest, res: VercelResponse) {
 export async function getUser(req: VercelRequest) {
   const token = cookieValue(req);
   if (!token) return null;
-  const session = await prisma.authSession.findUnique({
-    where: { tokenHash: hashToken(token) },
-    include: { user: { include: { player: true } } }
-  });
-  if (!session || session.expiresAt <= new Date() || session.user.status !== "ACTIVE") return null;
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return null;
+  const { data: session } = await supabase
+    .from("AuthSession")
+    .select('*, user:User(*, player:Player(*))')
+    .eq("tokenHash", hashToken(token))
+    .single();
+
+  if (!session || new Date(session.expiresAt) <= new Date() || session.user?.status !== "ACTIVE") return null;
   return session.user;
 }
 

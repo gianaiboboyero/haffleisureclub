@@ -352,6 +352,22 @@ export function reconcileStackOrder(
   return capStackOrder(cleaned);
 }
 
+export function requeueFinishedPlayers(
+  stackOrder: string[],
+  participantIds: string[]
+): string[] {
+  const finishedIds = new Set(
+    participantIds.filter(
+      (id) => id !== "vacant" && id !== "reserved" && !id.startsWith("vacant")
+    )
+  );
+  if (finishedIds.size === 0) return stackOrder;
+  return [
+    ...stackOrder.filter((id) => !finishedIds.has(id)),
+    ...participantIds.filter((id, index) => finishedIds.has(id) && participantIds.indexOf(id) === index),
+  ];
+}
+
 export function getOnCourtPlayerIds(matches: Match[]): Set<string> {
   return new Set(
     matches

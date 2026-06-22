@@ -2,8 +2,9 @@ import { PrismaClient } from "@prisma/client";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-// Load .env.local to resolve Vercel-configured production database
+// Opt-in only: production maintenance should use the root DATABASE_URL.
 try {
+  if (process.env.USE_ENV_LOCAL !== "true") throw new Error("Use root environment");
   const envContent = readFileSync(join(process.cwd(), ".env.local"), "utf8");
   for (const line of envContent.split("\n")) {
     const trimmed = line.trim();
@@ -71,14 +72,29 @@ async function main() {
 
     console.log(`  - Merging duplicate IDs: ${JSON.stringify(toBeDeletedIds)} -> Kept ID: "${keptPlayer.id}"`);
 
-    // 3. Repoint Users
-    const repointedUsers = await prisma.user.updateMany({
-      where: { playerId: { in: toBeDeletedIds } },
-      data: { playerId: keptPlayer.id }
-    });
-    if (repointedUsers.count > 0) {
-      console.log(`  - Repointed ${repointedUsers.count} User account(s) to "${keptPlayer.id}"`);
+    // 3. Remove duplicate login accounts. User.playerId is unique, so multiple
+    // duplicate accounts cannot all be repointed to the same canonical player.
+    const duplicateUsers = linkedUsers.filter((user) => user.playerId !== keptPlayer.id);
+    if (duplicateUsers.length > 0) {
+      await prisma.user.deleteMany({
+        where: { id: { in: duplicateUsers.map((user) => user.id) } }
+      });
+      console.log(`  - Deleted ${duplicateUsers.length} duplicate User account(s).`);
     }
+
+    const mergedStats = {
+      totalGamesPlayed: group.reduce((sum, player) => sum + player.totalGamesPlayed, 0),
+      totalCourtSeconds: group.reduce((sum, player) => sum + player.totalCourtSeconds, 0),
+      totalDaysPlayed: Math.max(...group.map((player) => player.totalDaysPlayed)),
+      lastPlayedDate: group
+        .map((player) => player.lastPlayedDate)
+        .filter(Boolean)
+        .sort((a, b) => b.getTime() - a.getTime())[0] ?? null
+    };
+    await prisma.player.update({
+      where: { id: keptPlayer.id },
+      data: mergedStats
+    });
 
     // 4. Repoint Testimonials
     const repointedTestimonials = await prisma.testimonial.updateMany({

@@ -1,8 +1,6 @@
-import React, { useRef, useState, useEffect } from "react";
+import React, { useState } from "react";
 import {
   motion,
-  useScroll,
-  useTransform,
   AnimatePresence,
 } from "framer-motion";
 import { cn } from "../../lib/utils";
@@ -84,79 +82,45 @@ export const InteractiveImageBentoGallery: React.FC<
   InteractiveImageBentoGalleryProps
 > = ({ imageItems, title, description }) => {
   const [selectedItem, setSelectedItem] = useState<ImageItem | null>(null);
-  const [dragConstraint, setDragConstraint] = useState(0);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const gridRef = useRef<HTMLDivElement>(null);
-  const targetRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const calculateConstraints = () => {
-      if (gridRef.current && containerRef.current) {
-        const containerWidth = containerRef.current.offsetWidth;
-        const gridWidth = gridRef.current.scrollWidth;
-        const newConstraint = Math.min(0, containerWidth - gridWidth - 32);
-        setDragConstraint(newConstraint);
-      }
-    };
-
-    calculateConstraints();
-    window.addEventListener("resize", calculateConstraints);
-    return () => window.removeEventListener("resize", calculateConstraints);
-  }, [imageItems]);
-
-  const { scrollYProgress } = useScroll({
-    target: targetRef,
-    offset: ["start end", "end start"],
-  });
-  const opacity = useTransform(scrollYProgress, [0, 0.2, 0.8, 1], [0, 1, 1, 0]);
-  const y = useTransform(scrollYProgress, [0, 0.2], [30, 0]);
-
   return (
     <section
-      ref={targetRef}
-      className="relative w-full overflow-hidden bg-forest/5 border-t border-ivory/10 py-16 sm:py-24 z-30"
+      className="relative z-30 w-full overflow-hidden border-t border-ivory/10 bg-forest/5 py-16 sm:py-24"
     >
       <motion.div
-        style={{ opacity, y }}
-        className="container mx-auto px-6 text-center"
+        initial={{ opacity: 0, y: 20 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true, amount: 0.4 }}
+        className="mx-auto flex max-w-7xl flex-col gap-3 px-6 lg:flex-row lg:items-end lg:justify-between"
       >
-        <span className="text-xs font-black uppercase tracking-[0.2em] text-brass">{description}</span>
-        <h2 className="mt-2 font-display text-3xl font-black text-ivory sm:text-4xl">
-          {title}
-        </h2>
+        <div>
+          <span className="text-xs font-black uppercase tracking-[0.2em] text-brass">{description}</span>
+          <h2 className="mt-2 max-w-3xl font-display text-4xl font-black leading-none text-ivory sm:text-5xl lg:text-6xl">{title}</h2>
+        </div>
+        <p className="max-w-sm text-sm leading-relaxed text-ivory/55">
+          Five views of the courts, lounge, and play spaces—tap any image for a closer look.
+        </p>
       </motion.div>
 
-      <div
-        ref={containerRef}
-        className="relative mt-12 w-full cursor-grab active:cursor-grabbing overflow-x-hidden"
-      >
+      <div className="mx-auto mt-10 max-w-7xl px-6">
         <motion.div
-          className="w-max"
-          drag="x"
-          dragConstraints={{ left: dragConstraint, right: 0 }}
-          dragElastic={0.05}
+          className="grid auto-rows-[14rem] grid-cols-1 gap-3 sm:grid-cols-2 lg:auto-rows-[15rem] lg:grid-cols-12"
+          variants={containerVariants}
+          initial="hidden"
+          whileInView="visible"
+          viewport={{ once: true, amount: 0.15 }}
         >
-          <motion.div
-            ref={gridRef}
-            className="grid auto-cols-[minmax(18rem,1fr)] grid-flow-col gap-5 px-6 md:px-12"
-            variants={containerVariants}
-            initial="hidden"
-            whileInView="visible"
-            viewport={{ once: true, amount: 0.2 }}
-          >
             {imageItems.map((item) => (
-              <motion.div
+              <motion.button
+                type="button"
                 key={item.id}
                 variants={itemVariants}
                 className={cn(
-                  "group relative flex h-72 min-h-[18rem] w-[18rem] md:w-[22rem] cursor-pointer items-end overflow-hidden rounded-2xl border border-ivory/10 bg-ivory/5 p-5 shadow-sm transition-shadow duration-300 ease-in-out hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass",
+                  "group relative min-h-[14rem] overflow-hidden rounded-[1.4rem] border border-ivory/10 bg-ivory/5 text-left shadow-[0_20px_60px_rgba(0,0,0,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass",
                   item.span
                 )}
-                whileHover={{ scale: 1.02 }}
+                whileHover={{ y: -3 }}
                 transition={{ type: "spring", stiffness: 300, damping: 20 }}
                 onClick={() => setSelectedItem(item)}
-                onKeyDown={(e) => e.key === "Enter" && setSelectedItem(item)}
-                tabIndex={0}
                 aria-label={`View ${item.title}`}
               >
                 <img
@@ -164,15 +128,9 @@ export const InteractiveImageBentoGallery: React.FC<
                   alt={item.title}
                   className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
                 />
-                <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-forest via-forest/30 to-transparent opacity-60 transition-opacity duration-500 group-hover:opacity-90" />
-                
-                <div className="relative z-10 w-full text-left translate-y-3 opacity-80 transition-all duration-500 group-hover:translate-y-0 group-hover:opacity-100">
-                  <h3 className="text-lg font-black text-ivory font-display">{item.title}</h3>
-                  <p className="mt-1 text-xs text-brass font-bold uppercase tracking-wider">{item.desc}</p>
-                </div>
-              </motion.div>
+                <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/25 via-transparent to-white/5 opacity-70" />
+              </motion.button>
             ))}
-          </motion.div>
         </motion.div>
       </div>
 

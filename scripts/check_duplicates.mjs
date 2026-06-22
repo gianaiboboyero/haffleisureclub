@@ -23,6 +23,13 @@ try {
 
 const prisma = new PrismaClient();
 
+const normalizePlayerIdentity = (value) =>
+  String(value ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
 async function main() {
   console.log("Checking database for duplicate records...");
 
@@ -78,6 +85,50 @@ async function main() {
   }
   if (duplicatePlayersCount === 0) {
     console.log("No duplicate Player profiles found by display name.");
+  }
+
+  const identityGroups = {};
+  for (const player of players) {
+    const candidates = [player.displayName, player.fullName, player.nickname]
+      .map(normalizePlayerIdentity)
+      .filter((value) => value.length >= 3);
+    for (const key of new Set(candidates)) {
+      if (!identityGroups[key]) identityGroups[key] = [];
+      identityGroups[key].push(player);
+    }
+  }
+
+  let nearDuplicateCount = 0;
+  for (const [identity, group] of Object.entries(identityGroups)) {
+    const uniqueIds = [...new Set(group.map((player) => player.id))];
+    if (uniqueIds.length <= 1) continue;
+    nearDuplicateCount++;
+    console.log(`Near-duplicate identity found: "${identity}" (${uniqueIds.length} records):`);
+    for (const player of group.filter((item, index, all) => all.findIndex((other) => other.id === item.id) === index)) {
+      console.log(`  - ID: ${player.id}, Display: "${player.displayName}", Full: "${player.fullName ?? ""}", Nickname: "${player.nickname ?? ""}", Phone: "${player.phone ?? ""}", Email: "${player.email ?? ""}"`);
+    }
+  }
+
+  for (const field of ["phone", "email"]) {
+    const groups = {};
+    for (const player of players) {
+      const key = String(player[field] ?? "").trim().toLowerCase();
+      if (!key) continue;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(player);
+    }
+    for (const [value, group] of Object.entries(groups)) {
+      if (group.length <= 1) continue;
+      nearDuplicateCount++;
+      console.log(`Shared ${field} found: "${value}" (${group.length} records):`);
+      for (const player of group) {
+        console.log(`  - ID: ${player.id}, Display: "${player.displayName}"`);
+      }
+    }
+  }
+
+  if (nearDuplicateCount === 0) {
+    console.log("No near-duplicate player identities or shared contact fields found.");
   }
 }
 

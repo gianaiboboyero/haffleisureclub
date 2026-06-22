@@ -31,6 +31,7 @@ GRANT SELECT (
   tags,
   status,
   "totalGamesPlayed",
+  "totalCourtSeconds",
   "totalDaysPlayed",
   "lastPlayedDate",
   version,

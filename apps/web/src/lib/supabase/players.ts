@@ -10,6 +10,7 @@ export type CompactPlayerRow = {
   tags: string[];
   status: string;
   totalGamesPlayed: number;
+  totalCourtSeconds: number;
   totalDaysPlayed: number;
   lastPlayedDate: string | null;
   version: number;
@@ -18,13 +19,13 @@ export type CompactPlayerRow = {
 
 /** Public roster columns only — phone/email/statusNote require authenticated API. */
 const COMPACT_SELECT =
-  "id, displayName, fullName, skillLevel, rating, avatarUrl, tags, status, totalGamesPlayed, totalDaysPlayed, lastPlayedDate, version, updatedAt";
+  "id, displayName, fullName, skillLevel, rating, avatarUrl, tags, status, totalGamesPlayed, totalCourtSeconds, totalDaysPlayed, lastPlayedDate, version, updatedAt";
 
-const STATS_SELECT = "id, totalGamesPlayed, totalDaysPlayed, lastPlayedDate";
+const STATS_SELECT = "id, totalGamesPlayed, totalCourtSeconds, totalDaysPlayed, lastPlayedDate";
 
 export type PlayerStatsRow = Pick<
   CompactPlayerRow,
-  "id" | "totalGamesPlayed" | "totalDaysPlayed" | "lastPlayedDate"
+  "id" | "totalGamesPlayed" | "totalCourtSeconds" | "totalDaysPlayed" | "lastPlayedDate"
 >;
 
 export async function fetchPlayerStatsByIds(ids: string[]): Promise<PlayerStatsRow[]> {

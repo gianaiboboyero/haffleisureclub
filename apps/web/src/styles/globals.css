@@ -1298,12 +1298,6 @@ button:disabled {
   text-shadow: 0 0 24px rgba(201, 168, 76, 0.35);
 }
 
-.tv-court-timer__digits--overtime {
-  color: #f87171;
-  animation: tv-court-timer-pulse 1s ease-in-out infinite;
-  text-shadow: 0 0 24px rgba(248, 113, 113, 0.45);
-}
-
 .tv-court-timer__label {
   font-size: clamp(0.45rem, 0.9vw, 0.6rem);
   font-weight: 900;
@@ -1414,9 +1408,7 @@ button:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tv-pickle-court__status--playing .tv-pickle-court__status-dot,
-  .tv-court-timer__digits--overtime {
+  .tv-pickle-court__status--playing .tv-pickle-court__status-dot {
     animation: none !important;
   }
 }
-

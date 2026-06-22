@@ -10,10 +10,13 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["haff-logo.jpg"],
+      // Only include the logo in the manifest assets list.
+      // Do NOT use globPatterns to precache everything — that's what was
+      // causing 8 MB of bandwidth on every first visit.
+      includeAssets: ["haff-logo.jpg", "favicon.ico"],
       manifest: {
-        name: "HAFF Leisure Club - Cadiz City",
-        short_name: "HAFF Cadiz",
+        name: "HAFF Leisure Club",
+        short_name: "HAFF",
         theme_color: "#203d34",
         background_color: "#082d23",
         display: "standalone",
@@ -27,18 +30,27 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ["**/*.{js,css,html,svg,png,jpg,jpeg,webp,woff2}"],
-        // Cache API responses for faster repeat loads
+        // Only precache JS, CSS and HTML — skip images and fonts.
+        // Court photos, achievement images etc. are served from CDN on demand.
+        globPatterns: ["**/*.{js,css,html}"],
+        // Serve stale SW immediately so updates don't block page load.
+        skipWaiting: true,
+        clientsClaim: true,
         runtimeCaching: [
           {
+            // Auth session — short cache, network first.
             urlPattern: /^\/api\/auth\?action=me/,
             handler: "NetworkFirst",
             options: { cacheName: "api-auth", expiration: { maxAgeSeconds: 60 } }
           },
           {
-            urlPattern: /^\/api\/reservations/,
-            handler: "NetworkFirst",
-            options: { cacheName: "api-reservations", expiration: { maxAgeSeconds: 30 } }
+            // Images served from this origin — cache for 7 days, load from cache first.
+            urlPattern: /\.(jpg|jpeg|png|webp|svg)$/,
+            handler: "CacheFirst",
+            options: {
+              cacheName: "images",
+              expiration: { maxEntries: 60, maxAgeSeconds: 7 * 24 * 60 * 60 }
+            }
           }
         ]
       }
@@ -56,16 +68,22 @@ export default defineConfig({
   build: {
     outDir: "../../dist/web",
     emptyOutDir: true,
-    // Inline tiny assets to reduce HTTP requests
+    // Inline tiny assets (< 4 kB) to save HTTP round-trips.
     assetsInlineLimit: 4096,
     rollupOptions: {
       output: {
         manualChunks: {
+          // Core React — always needed.
           react: ["react", "react-dom"],
+          // Animation — large but needed on most screens.
           motion: ["framer-motion"],
-          storage: ["dexie", "zustand"],
+          // Supabase client — needed on load for auth + realtime.
+          supabase: ["@supabase/supabase-js"],
+          // Icons — medium, lazy-ish.
           icons: ["lucide-react"],
-          supabase: ["@supabase/supabase-js"]
+          // State management (Zustand only — Dexie stays in main chunk since
+          // we're server-authoritative and Dexie is barely called).
+          state: ["zustand"]
         }
       }
     }

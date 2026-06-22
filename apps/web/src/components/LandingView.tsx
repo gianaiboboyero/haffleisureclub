@@ -228,38 +228,38 @@ const TOURNAMENT_EVENTS = [
 const COURT_GALLERY_IMAGES = [
   {
     id: "court-1",
-    title: "Championship Court 1",
-    desc: "Premium court with professional net systems.",
+    title: "HAFF venue photo 1",
+    desc: "",
     url: "/court-1.jpg",
-    span: "md:col-span-2 md:row-span-2",
+    span: "lg:col-span-7 lg:row-span-2",
   },
   {
     id: "court-2",
-    title: "Side Court 2",
-    desc: "Excellent lighting for late evening play.",
+    title: "HAFF venue photo 2",
+    desc: "",
     url: "/court-2.jpg",
-    span: "md:row-span-1",
+    span: "lg:col-span-5",
   },
   {
     id: "court-3",
-    title: "Club Lounge & Seating",
-    desc: "Cozy spectator seats and refreshment counter.",
+    title: "HAFF venue photo 3",
+    desc: "",
     url: "/court-3.jpg",
-    span: "md:row-span-1",
+    span: "lg:col-span-5",
   },
   {
     id: "court-4",
-    title: "Main Play Area",
-    desc: "Wide safety margins and high-friction flooring.",
+    title: "HAFF venue photo 4",
+    desc: "",
     url: "/court-4.jpg",
-    span: "md:row-span-2",
+    span: "lg:col-span-5",
   },
   {
     id: "court-5",
-    title: "Practice Court 5",
-    desc: "Dedicated drilling zone with ball machine options.",
+    title: "HAFF venue photo 5",
+    desc: "",
     url: "/court-5.jpg",
-    span: "md:col-span-2 md:row-span-1",
+    span: "lg:col-span-7",
   },
 ];
 
@@ -988,7 +988,7 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
         <InteractiveImageBentoGallery
           imageItems={COURT_GALLERY_IMAGES}
           title="Explore Our Premium Venue"
-          description="Club Court Showcase"
+          description="HAFF Leisure Club · Cadiz City"
         />
 
         {/* FEEDBACK & TESTIMONIALS SECTION */}
