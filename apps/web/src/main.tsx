@@ -1540,9 +1540,24 @@ function PlayRotationTab() {
         }
       `}} />
 
-      <div className="rounded-2xl border border-white/10 bg-[#0a1f18]/80 px-3 py-2.5 sm:px-4">
-        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brass">Live courts</p>
-        <p className="text-xs text-linen/60 mt-0.5">Courts up top · checked-in stack · queue stacks · roster on the right</p>
+      <div className="rounded-2xl border border-white/10 bg-[#0a1f18]/80 px-3 py-2.5 sm:px-4 flex items-center justify-between">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brass">Live courts</p>
+          <p className="text-xs text-linen/60 mt-0.5">Courts up top · checked-in stack · queue stacks · roster on the right</p>
+        </div>
+        <Button
+          onClick={() => {
+            void useClubStore.getState().refreshSharedState({ force: true });
+            void useClubStore.getState().broadcastTvAnnouncement({
+              kind: "message",
+              message: "Syncing displays..."
+            });
+          }}
+          className="bg-brass/10 hover:bg-brass/20 text-brass text-[11px] h-8 px-3 font-bold"
+        >
+          <RotateCcw size={14} className="mr-1.5" />
+          Refresh TV
+        </Button>
       </div>
 
       <div className={`grid min-w-0 gap-3 sm:gap-4 ${

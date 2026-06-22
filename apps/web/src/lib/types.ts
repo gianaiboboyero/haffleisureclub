@@ -2,7 +2,7 @@ export type SkillLevel = "Newbie" | "Beginner" | "Novice" | "Low Intermediate" |
 export type MatchStatus = "Queued" | "Assigned" | "InProgress" | "Completed";
 export type SyncStatus = "LocalOnly" | "PendingSync" | "Synced" | "Conflict";
 
-export type TvBroadcastKind = "message" | "court";
+export type TvBroadcastKind = "message" | "court" | "overtime";
 
 export type TvBroadcast = {
   id: string;

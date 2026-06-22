@@ -1136,11 +1136,21 @@ export const useClubStore = create<ClubState>((set, get) => ({
           ? mergeSessionCourtRuntime(localCourts, shared.courts, MAX_COURTS)
           : (shared.courts as Court[])
         : localCourts;
+    const remoteMatches = Array.isArray(shared.matches) ? (shared.matches as Match[]) : [];
+
+    // Defeat read-replica lag: Only clear PendingSync when the server actually has the match
+    const localMatchesWithClearedPending = get().matches.map((m) => {
+      if (m.syncStatus === "PendingSync" && remoteMatches.some((rm) => rm.id === m.id)) {
+        return { ...m, syncStatus: "Synced" as const };
+      }
+      return m;
+    });
+
     // Only block server state for 30 s after creation — long enough for the publish
     // round-trip to land. After that, trust the server unconditionally so matches
     // cannot get "stuck" in PendingSync forever and disappear.
     const PENDING_SYNC_BLOCK_MS = 30_000;
-    const hasPendingSyncMatches = get().matches.some(
+    const hasPendingSyncMatches = localMatchesWithClearedPending.some(
       (m) =>
         m.syncStatus === "PendingSync" &&
         m.startedAt &&
@@ -1149,12 +1159,12 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const matches = Array.isArray(shared.matches)
       ? serverAuthoritativeLiveState()
         ? hasPendingSyncMatches
-          ? get().matches
-          : (shared.matches as Match[]).length > 0 || !get().matches.some((m) => m.status === "InProgress")
-            ? (shared.matches as Match[])
-            : get().matches
-        : mergeSharedMatches(get().matches, shared.matches as Match[])
-      : get().matches;
+          ? localMatchesWithClearedPending
+          : remoteMatches.length > 0 || !localMatchesWithClearedPending.some((m) => m.status === "InProgress")
+            ? remoteMatches
+            : localMatchesWithClearedPending
+        : mergeSharedMatches(localMatchesWithClearedPending, remoteMatches)
+      : localMatchesWithClearedPending;
     const statsTargetIds = [
       ...checkedInIds,
       ...stackedPlayerIds,
@@ -1358,13 +1368,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
         });
         if (result) {
           markSyncHealthy(set, result.updatedAt);
-          const hasPending = get().matches.some((m) => m.syncStatus === "PendingSync");
-          if (hasPending) {
-            const clearedMatches = get().matches.map((m) =>
-              m.syncStatus === "PendingSync" ? { ...m, syncStatus: "Synced" as const } : m
-            );
-            set({ matches: clearedMatches });
-          }
+          // PendingSync is no longer cleared here to defeat read-replica lag.
+          // It is cleared in refreshSharedState when the replica confirms the match.
         }
         clubStateBroadcast?.postMessage({
           type: "state-published",
@@ -1403,15 +1408,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       if (response.ok && response.headers.get("content-type")?.includes("application/json")) {
         const body = await parseResponseJson(response);
         markSyncHealthy(set, typeof body.updatedAt === "string" ? body.updatedAt : null);
-        // Clear PendingSync flags so future refreshSharedState calls can apply
-        // server state normally — prevents matches from being stuck invisible.
-        const hasPending = get().matches.some((m) => m.syncStatus === "PendingSync");
-        if (hasPending) {
-          const clearedMatches = get().matches.map((m) =>
-            m.syncStatus === "PendingSync" ? { ...m, syncStatus: "Synced" as const } : m
-          );
-          set({ matches: clearedMatches });
-        }
+        // PendingSync is no longer cleared here to defeat read-replica lag.
       }
       clubStateBroadcast?.postMessage({
         type: "state-published",

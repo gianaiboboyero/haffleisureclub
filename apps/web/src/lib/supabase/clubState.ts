@@ -119,6 +119,15 @@ export async function fetchClubState(
     };
   }
 
+  // Defeat read-replica lag: if this client recently wrote to this session,
+  // ensure our fresh local writes take precedence over potentially stale replica data.
+  if (lastKnownSessionId === sessionId && lastKnownSettings) {
+    session.settings = {
+      ...(typeof session.settings === "object" && session.settings ? session.settings : {}),
+      ...lastKnownSettings
+    };
+  }
+
   const lightView = options?.context === "tv" || options?.context === "player";
   return buildSharedPayload(session, {
     since: options?.since ?? undefined,
@@ -141,6 +150,22 @@ export type PublishClubStateInput = {
   matchReviews?: unknown[];
 };
 
+let updateMutex = Promise.resolve<any>(null);
+let lastKnownSettings: any = null;
+let lastKnownSessionId: string | null = null;
+let clearCacheTimer: number | null = null;
+
+function updateLastKnownSettings(sessionId: string, settings: any) {
+  lastKnownSettings = settings;
+  lastKnownSessionId = sessionId;
+  if (clearCacheTimer) window.clearTimeout(clearCacheTimer);
+  clearCacheTimer = window.setTimeout(() => {
+    lastKnownSettings = null;
+    lastKnownSessionId = null;
+  }, 2000);
+}
+
+
 export async function publishClubState(
   input: PublishClubStateInput,
   options?: { slim?: boolean }
@@ -148,24 +173,45 @@ export async function publishClubState(
   const supabase = getSupabase();
   if (!supabase) return null;
 
-  const settings = {
-    stackOrder: input.stackOrder,
-    adminCheckedInIds: input.adminCheckedInIds,
-    courts: input.courts,
-    matches: input.matches,
-    reservations: input.reservations,
-    playerProfiles: input.playerProfiles,
-    playerKudos: input.playerKudos,
-    matchReviews: input.matchReviews
-  };
+  return new Promise((resolve) => {
+    updateMutex = updateMutex.then(async () => {
+      // Fetch current settings to preserve keys like tvBroadcast
+      const { data: session } = await supabase.from("Session").select("settings").eq("id", input.sessionId).maybeSingle();
+      const currentSettings = typeof session?.settings === "object" && session.settings !== null ? session.settings : {};
 
-  const { data } = await supabase.from("Session").update({
-    settings,
-    checkedInPlayerIds: input.checkedInPlayerIds,
-    updatedAt: new Date().toISOString()
-  }).eq("id", input.sessionId).select("id, updatedAt").maybeSingle();
+      const baseSettings = {
+        ...currentSettings,
+        ...(lastKnownSessionId === input.sessionId && lastKnownSettings ? lastKnownSettings : {})
+      };
 
-  return data ? { sessionId: data.id, updatedAt: data.updatedAt } : null;
+      const settings = {
+        ...baseSettings,
+        stackOrder: input.stackOrder,
+        adminCheckedInIds: input.adminCheckedInIds,
+        courts: input.courts,
+        matches: input.matches,
+        reservations: input.reservations,
+        playerProfiles: input.playerProfiles,
+        playerKudos: input.playerKudos,
+        matchReviews: input.matchReviews
+      };
+
+      updateLastKnownSettings(input.sessionId, settings);
+
+      const { data } = await supabase.from("Session").update({
+        settings,
+        checkedInPlayerIds: input.checkedInPlayerIds,
+        updatedAt: new Date().toISOString()
+      }).eq("id", input.sessionId).select("id, updatedAt").maybeSingle();
+
+      const result = data ? { sessionId: data.id, updatedAt: data.updatedAt } : null;
+      resolve(result);
+      return result;
+    }).catch(() => {
+      resolve(null);
+      return null;
+    });
+  });
 }
 
 export async function broadcastTvState(
@@ -175,18 +221,39 @@ export async function broadcastTvState(
   const supabase = getSupabase();
   if (!supabase) return null;
 
-  const { data: session } = await supabase.from("Session").select("settings").eq("id", sessionId).maybeSingle();
-  if (!session) return null;
+  return new Promise((resolve) => {
+    updateMutex = updateMutex.then(async () => {
+      const { data: session } = await supabase.from("Session").select("settings").eq("id", sessionId).maybeSingle();
+      if (!session) {
+        resolve(null);
+        return null;
+      }
 
-  const currentSettings = typeof session.settings === "object" && session.settings !== null ? session.settings : {};
-  
-  const { data } = await supabase.from("Session").update({
-    settings: {
-      ...currentSettings,
-      tvBroadcast
-    },
-    updatedAt: new Date().toISOString()
-  }).eq("id", sessionId).select("id, updatedAt").maybeSingle();
+      const currentSettings = typeof session.settings === "object" && session.settings !== null ? session.settings : {};
+      
+      const baseSettings = {
+        ...currentSettings,
+        ...(lastKnownSessionId === sessionId && lastKnownSettings ? lastKnownSettings : {})
+      };
 
-  return data ? { sessionId: data.id, updatedAt: data.updatedAt } : null;
+      const settings = {
+        ...baseSettings,
+        tvBroadcast
+      };
+
+      updateLastKnownSettings(sessionId, settings);
+
+      const { data } = await supabase.from("Session").update({
+        settings,
+        updatedAt: new Date().toISOString()
+      }).eq("id", sessionId).select("id, updatedAt").maybeSingle();
+
+      const result = data ? { sessionId: data.id, updatedAt: data.updatedAt } : null;
+      resolve(result);
+      return result;
+    }).catch(() => {
+      resolve(null);
+      return null;
+    });
+  });
 }
