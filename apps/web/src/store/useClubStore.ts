@@ -1067,12 +1067,15 @@ export const useClubStore = create<ClubState>((set, get) => ({
       markSyncHealthy(set, typeof shared.updatedAt === "string" ? shared.updatedAt : null);
 
       // If the server found no active session (updatedAt === null) but we have live
-      // local state (stack, active matches), skip applying the empty shell — the server
-      // is likely returning a transient "no session" response during a race condition.
+      // local state (checked-in players, active matches), skip applying the empty shell
+      // — the server is likely returning a transient "no session" response during a race
+      // condition. Note: in server-authoritative mode stackOrder is always [] on init, so
+      // we cannot rely on it alone; use checkedIn players + matches instead.
       if (shared.updatedAt === null) {
         const localStack = get().stackOrder;
         const localActiveMatches = get().matches.filter((m) => m.status === "InProgress");
-        if (localStack.length > 0 || localActiveMatches.length > 0) return;
+        const localCheckedIn = get().players.filter((p) => p.checkedIn);
+        if (localStack.length > 0 || localActiveMatches.length > 0 || localCheckedIn.length > 0) return;
       }
 
       if (shared.unchanged === true) {
@@ -1132,13 +1135,23 @@ export const useClubStore = create<ClubState>((set, get) => ({
           ? mergeSessionCourtRuntime(localCourts, shared.courts, MAX_COURTS)
           : (shared.courts as Court[])
         : localCourts;
+    // Only block server state for 30 s after creation — long enough for the publish
+    // round-trip to land. After that, trust the server unconditionally so matches
+    // cannot get "stuck" in PendingSync forever and disappear.
+    const PENDING_SYNC_BLOCK_MS = 30_000;
+    const hasPendingSyncMatches = get().matches.some(
+      (m) =>
+        m.syncStatus === "PendingSync" &&
+        m.startedAt &&
+        Date.now() - new Date(m.startedAt).getTime() < PENDING_SYNC_BLOCK_MS
+    );
     const matches = Array.isArray(shared.matches)
       ? serverAuthoritativeLiveState()
-        // In Supabase mode the server is authoritative, but don't replace active
-        // local matches with an empty list (session-not-found / race condition guard).
-        ? (shared.matches as Match[]).length > 0 || !get().matches.some((m) => m.status === "InProgress")
-          ? (shared.matches as Match[])
-          : get().matches
+        ? hasPendingSyncMatches
+          ? get().matches
+          : (shared.matches as Match[]).length > 0 || !get().matches.some((m) => m.status === "InProgress")
+            ? (shared.matches as Match[])
+            : get().matches
         : mergeSharedMatches(get().matches, shared.matches as Match[])
       : get().matches;
     const statsTargetIds = [
@@ -1351,6 +1364,15 @@ export const useClubStore = create<ClubState>((set, get) => ({
       if (response.ok && response.headers.get("content-type")?.includes("application/json")) {
         const body = await parseResponseJson(response);
         markSyncHealthy(set, typeof body.updatedAt === "string" ? body.updatedAt : null);
+        // Clear PendingSync flags so future refreshSharedState calls can apply
+        // server state normally — prevents matches from being stuck invisible.
+        const hasPending = get().matches.some((m) => m.syncStatus === "PendingSync");
+        if (hasPending) {
+          const clearedMatches = get().matches.map((m) =>
+            m.syncStatus === "PendingSync" ? { ...m, syncStatus: "Synced" as const } : m
+          );
+          set({ matches: clearedMatches });
+        }
       }
       clubStateBroadcast?.postMessage({
         type: "state-published",
@@ -2364,7 +2386,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const stackOrder = reconcileStackOrder(state.stackOrder, state.players, matches, courts);
     saveStackOrder(stackOrder);
     set({ matches, courts, stackOrder });
-    await get().publishSharedState();
+    get().suppressRefresh(8000);
+    await get().publishSharedState({ force: true });
   },
   finishCourt: async (courtId) => {
     get().suppressRefresh(15000);
@@ -2418,7 +2441,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       courts,
       updatedCourt,
       statsParticipants,
-      publish: () => get().publishSharedState()
+      publish: () => get().publishSharedState({ force: true })
     });
   },
   updateMatchScores: async (matchId, scoreA, scoreB) => {
@@ -2437,7 +2460,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
     set({
       matches: state.matches.map((m) => (m.id === matchId ? updated : m))
     });
-    await get().publishSharedState();
+    get().suppressRefresh(8000);
+    await get().publishSharedState({ force: true });
   },
   submitMatchFeedback: async () => {
     // Kudos removed — no-op.

@@ -1265,7 +1265,7 @@ function AdminCourtCard({
   const adjustCourtTime = async (seconds: number) => {
     if (!match?.startedAt) return;
     const currentStart = new Date(match.startedAt).getTime();
-    const newStart = new Date(currentStart - seconds * 1000).toISOString();
+    const newStart = new Date(currentStart + seconds * 1000).toISOString();
     await persistMatch({ ...match, startedAt: newStart, timerPausedAt: undefined }, { force: true });
   };
 
@@ -4058,12 +4058,13 @@ function PlayerView({
     }
     setRecoveringProfile(true);
     const timer = window.setTimeout(() => {
-      if (sessionMember?.playerId === selectedPlayerId) {
+      if (sessionMember && sessionMember.playerId !== selectedPlayerId) {
+        localStorage.removeItem("haff-player-account-id");
+        setSelectedPlayerId(null);
+      } else if (sessionMember && sessionMember.playerId === selectedPlayerId) {
         void seedAuthenticatedPlayer(sessionMember).finally(() => setRecoveringProfile(false));
         return;
       }
-      localStorage.removeItem("haff-player-account-id");
-      setSelectedPlayerId(null);
       setRecoveringProfile(false);
     }, 1200);
     return () => window.clearTimeout(timer);

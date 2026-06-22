@@ -48,19 +48,25 @@ async function ensureCourtReservationSettings() {
     select: { id: true }
   });
   if (!courtsWithoutSettings.length) return;
-  await prisma.$transaction(courtsWithoutSettings.map((court) =>
-    prisma.courtReservationSetting.create({
-      data: {
-        courtId: court.id,
-        reservationsEnabled: true,
-        openingTime: "06:00",
-        closingTime: "22:00",
-        minDurationMinutes: 30,
-        maxDurationMinutes: 180,
-        intervalMinutes: 30
-      }
-    })
-  ));
+  for (const court of courtsWithoutSettings) {
+    try {
+      await prisma.courtReservationSetting.upsert({
+        where: { courtId: court.id },
+        update: {},
+        create: {
+          courtId: court.id,
+          reservationsEnabled: true,
+          openingTime: "06:00",
+          closingTime: "22:00",
+          minDurationMinutes: 30,
+          maxDurationMinutes: 180,
+          intervalMinutes: 30
+        }
+      });
+    } catch {
+      // Ignore concurrency conflicts
+    }
+  }
 }
 
 function publicReservation(reservation: any, user: any) {

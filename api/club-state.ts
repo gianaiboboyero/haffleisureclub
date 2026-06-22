@@ -4,6 +4,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { prisma } from "./_prisma.js";
 import { requireUser } from "./_auth.js";
 import { publishRealtime } from "./_realtime.js";
+import { getClientIp, rateLimit } from "./_rateLimit.js";
 
 type ClubSettings = {
   stackOrder?: string[];
@@ -262,12 +263,25 @@ async function notifySessionChanged(sessionId: string, updatedAt: Date) {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method === "GET") {
+    res.setHeader("Cache-Control", "private, no-store, max-age=0");
+    return res.status(410).json({
+      error: "Legacy GET endpoints are disabled in production. Please reload the application to use Supabase direct-reads."
+    });
+  }
+
+  // Rate limit writes to prevent runaway loops and API quota exhaustion
+  const ip = getClientIp(req);
+  if (!rateLimit(ip, 30, 60000)) {
+    return res.status(429).json({
+      error: "Too many updates. Please wait a moment before trying again."
+    });
+  }
+
   const actor = await requireUser(req, res);
   if (!actor) return;
 
-  const requestedSessionId = String(
-    req.method === "GET" ? req.query.sessionId ?? "" : req.body?.sessionId ?? ""
-  );
+  const requestedSessionId = String(req.body?.sessionId ?? "");
   const pingOnly = String(req.query.ping ?? "") === "1";
   const tvView = String(req.query.view ?? "") === "tv";
   const playerView = String(req.query.view ?? "") === "player";
@@ -480,6 +494,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   });
 
   await notifySessionChanged(updated.id, updated.updatedAt);
+
+  // Background pruning of old event/audit logs to keep DB within 500MB on Supabase Free Tier
+  const retentionCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  prisma.operationEvent.deleteMany({
+    where: { createdAt: { lt: retentionCutoff } }
+  }).catch((err) => console.error("Prune OperationEvent failed:", err));
+
+  prisma.auditLog.deleteMany({
+    where: { createdAt: { lt: retentionCutoff } }
+  }).catch((err) => console.error("Prune AuditLog failed:", err));
 
   const wantsFullBody = String(req.query.full ?? req.body?.full ?? "") === "1";
   if (wantsFullBody) {

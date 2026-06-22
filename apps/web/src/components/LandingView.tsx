@@ -23,8 +23,11 @@ import {
   Trash2,
   Megaphone,
   Instagram,
-  Facebook
+  Facebook,
+  X
 } from "lucide-react";
+import { PhotoStackCard } from "./ui/image-showcase";
+import { InteractiveImageBentoGallery } from "./ui/bento-gallery";
 
 const playerImage = "/court-2.jpg";
 const courtImage = "/court-4.jpg";
@@ -71,6 +74,195 @@ interface LandingViewProps {
   isAdmin?: boolean;
 }
 
+const TOURNAMENT_EVENTS = [
+  {
+    title: "Movemend Pickleball Tournament",
+    location: "Victorias City",
+    achievements: [
+      {
+        image: "/achievements/movemend-1.png",
+        medal: "🥇",
+        category: "Mixed Doubles (Beginners Category)",
+        placement: "Champions",
+        winners: "Florelin Kaye Negosa & Izzy Chua",
+        rotation: "-rotate-1"
+      },
+      {
+        image: "/achievements/movemend-2.jpg",
+        medal: "🥈",
+        category: "Men’s Doubles (Novice Category)",
+        placement: "1st Runner-Up",
+        winners: "Lanz Aguila & Jabie Pabilona",
+        rotation: "rotate-1"
+      },
+      {
+        image: "/achievements/movemend-3.jpg",
+        medal: "🥈",
+        category: "Mixed Doubles (Novice Category)",
+        placement: "1st Runner-Up",
+        winners: "Zeny Pabilona & Jabie Pabilona",
+        rotation: "-rotate-2"
+      },
+      {
+        image: "/achievements/movemend-4.jpg",
+        medal: "🥉",
+        category: "Mixed Doubles (Novice Category)",
+        placement: "2nd Runner-Up",
+        winners: "Lanz Aguila & Rave Irish Villamejor",
+        rotation: "rotate-2"
+      }
+    ]
+  },
+  {
+    title: "PaddleNet Pickleball Tournament",
+    location: "Ikthus Bacolod City",
+    achievements: [
+      {
+        image: "/achievements/paddlenet-1.png",
+        medal: "🥈",
+        category: "Men's Doubles (Novice Category)",
+        placement: "1st Runner-Up",
+        winners: "Lanz Aguila & Jabie Pabilona",
+        rotation: "rotate-1"
+      }
+    ]
+  },
+  {
+    title: "HAFF Leisure Club 1st In-House Pickleball Tournament",
+    location: "Cadiz City",
+    achievements: [
+      {
+        image: "/achievements/inhouse-1.jpg",
+        medal: "🥇",
+        category: "Men’s Doubles Novice Category",
+        placement: "Champion",
+        winners: "Lanz Aguila & Jabie Pabilona",
+        rotation: "-rotate-1"
+      },
+      {
+        image: "/achievements/inhouse-2.jpg",
+        medal: "🥈",
+        category: "Men’s Doubles Novice Category",
+        placement: "1st Runner Up",
+        winners: "John Marwen Batain & Wendell Batain",
+        rotation: "rotate-2"
+      },
+      {
+        image: "/achievements/inhouse-3.jpg",
+        medal: "🥈",
+        category: "Men’s Doubles Beginner Category",
+        placement: "1st Runner Up",
+        winners: "Sean Sonir & John Francis Sarabia",
+        rotation: "-rotate-2"
+      },
+      {
+        image: "/achievements/inhouse-5.jpg",
+        medal: "🥈",
+        category: "Mixed Doubles Novice & Beginner",
+        placement: "1st Runner Up",
+        winners: "Florelin Kaye Negosa & Jabie Pabilona",
+        rotation: "-rotate-1"
+      },
+      {
+        image: "/achievements/inhouse-4.jpg",
+        medal: "🥉",
+        category: "Men’s Doubles Beginner Category",
+        placement: "2nd Runner Up",
+        winners: "Florentino Negosa & Botchoy Fernandez",
+        rotation: "rotate-1"
+      },
+      {
+        image: "/achievements/inhouse-6.jpg",
+        medal: "🥉",
+        category: "Mixed Doubles Novice & Beginner",
+        placement: "2nd Runner Up",
+        winners: "Katie Angel Negosa & Wendell Ben Batain",
+        rotation: "rotate-2"
+      }
+    ]
+  },
+  {
+    title: "DUPR Night",
+    location: "Cadiz City",
+    achievements: [
+      {
+        image: "/achievements/dupr-1.jpg",
+        medal: "🥇",
+        category: "Men's Novice Category",
+        placement: "Champion",
+        winners: "Lanz Aguila & Izzy Chua",
+        rotation: "rotate-1"
+      }
+    ]
+  },
+  {
+    title: "One Pickleball Hub Inhouse Tournament",
+    location: "Bacolod City",
+    achievements: [
+      {
+        image: "/achievements/onehub-1.jpg",
+        medal: "🥇",
+        category: "Mixed Doubles Novice Category",
+        placement: "Champion",
+        winners: "Zeny Pabilona & Jabie Pabilona",
+        rotation: "-rotate-1"
+      }
+    ]
+  },
+  {
+    title: "PaddleGround Tournament",
+    location: "Bacolod City",
+    achievements: [
+      {
+        image: "/achievements/paddleground-1.png",
+        medal: "🥈",
+        category: "Mixed Doubles Novice Category",
+        placement: "1st Runner-Up",
+        winners: "Zeny Pabilona & Jabie Pabilona",
+        rotation: "rotate-1"
+      }
+    ]
+  }
+];
+
+const COURT_GALLERY_IMAGES = [
+  {
+    id: "court-1",
+    title: "Championship Court 1",
+    desc: "Premium court with professional net systems.",
+    url: "/court-1.jpg",
+    span: "md:col-span-2 md:row-span-2",
+  },
+  {
+    id: "court-2",
+    title: "Side Court 2",
+    desc: "Excellent lighting for late evening play.",
+    url: "/court-2.jpg",
+    span: "md:row-span-1",
+  },
+  {
+    id: "court-3",
+    title: "Club Lounge & Seating",
+    desc: "Cozy spectator seats and refreshment counter.",
+    url: "/court-3.jpg",
+    span: "md:row-span-1",
+  },
+  {
+    id: "court-4",
+    title: "Main Play Area",
+    desc: "Wide safety margins and high-friction flooring.",
+    url: "/court-4.jpg",
+    span: "md:row-span-2",
+  },
+  {
+    id: "court-5",
+    title: "Practice Court 5",
+    desc: "Dedicated drilling zone with ball machine options.",
+    url: "/court-5.jpg",
+    span: "md:col-span-2 md:row-span-1",
+  },
+];
+
 const MANILA_TZ = "Asia/Manila";
 const scheduleDateKey = (date: Date) =>
   new Intl.DateTimeFormat("en-CA", { timeZone: MANILA_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
@@ -84,6 +276,7 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
     addAchievement, deleteAchievement
   } = useClubStore();
   const [logoFailed, setLogoFailed] = React.useState(false);
+  const [activeEventIndex, setActiveEventIndex] = React.useState<number | null>(null);
   const [showSocialsModal, setShowSocialsModal] = React.useState(false);
   const [feedback, setFeedback] = React.useState({ category: "App", message: "", contact: "" });
   const [feedbackNotice, setFeedbackNotice] = React.useState("");
@@ -155,8 +348,9 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
 
   return (
     <div className="relative min-h-screen w-full overflow-hidden bg-forest font-sans text-ivory selection:bg-brass selection:text-forest">
-      
-
+      <div className="absolute inset-0 texture pointer-events-none" />
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,#fff8ea0c_1px,transparent_1px),linear-gradient(to_bottom,#fff8ea0c_1px,transparent_1px)] bg-[size:4rem_4rem] pointer-events-none" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(244,201,93,0.18),transparent_50%),radial-gradient(circle_at_100%_40%,rgba(127,182,154,0.15),transparent_40%),linear-gradient(180deg,rgba(14,90,67,0.1),rgba(6,36,27,0.9))] pointer-events-none" />
 
       {/* Brand Header */}
       <header className="relative z-30 mx-auto flex w-full max-w-7xl items-center justify-between px-6 py-6">
@@ -704,6 +898,98 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
 
           </div>
         </section>
+
+        {/* CLUB ACHIEVEMENTS SECTION */}
+        <section className="mt-24 border-t border-ivory/10 pt-16 relative z-30">
+          <div className="text-center max-w-2xl mx-auto mb-12">
+            <span className="text-xs font-black uppercase tracking-[0.2em] text-brass">Our Achievements</span>
+            <h2 className="mt-2 font-display text-4xl font-black text-ivory">Tournament Winners</h2>
+            <p className="mt-3 text-sm text-linen/70 leading-relaxed">
+              Celebrating the outstanding performance and victories of the HAFF Leisure Club players. Click on a folder card to explore tournament achievements.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-y-12 gap-x-8 justify-items-center mt-8">
+            {TOURNAMENT_EVENTS.map((event, idx) => {
+              const stackImages = event.achievements.map((ach) => ach.image);
+              return (
+                <PhotoStackCard
+                  key={idx}
+                  images={stackImages}
+                  category="TOURNAMENT"
+                  title={event.title}
+                  subtitle={`${event.location} • ${event.achievements.length} Medal${event.achievements.length > 1 ? "s" : ""}`}
+                  isActive={activeEventIndex === idx}
+                  onClick={() => setActiveEventIndex(idx)}
+                />
+              );
+            })}
+          </div>
+        </section>
+
+        {/* ACHIEVEMENTS DETAILS MODAL */}
+        {activeEventIndex !== null && (
+          <div 
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setActiveEventIndex(null);
+            }}
+          >
+            <div className="bg-forest border border-ivory/15 text-ivory rounded-3xl p-6 md:p-8 max-w-4xl w-full max-h-[85vh] overflow-y-auto space-y-6 shadow-2xl relative">
+              <button 
+                onClick={() => setActiveEventIndex(null)}
+                className="absolute right-4 top-4 text-ivory/60 hover:text-ivory hover:bg-ivory/5 p-1.5 rounded-full transition"
+              >
+                <X className="h-6 w-6" />
+              </button>
+              
+              <div className="space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-wider text-brass">
+                  {TOURNAMENT_EVENTS[activeEventIndex].location}
+                </span>
+                <h4 className="font-display text-2xl md:text-3xl font-black text-ivory">
+                  {TOURNAMENT_EVENTS[activeEventIndex].title}
+                </h4>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 justify-items-center pt-2">
+                {TOURNAMENT_EVENTS[activeEventIndex].achievements.map((ach, achIdx) => (
+                  <div 
+                    key={achIdx} 
+                    className={`w-[230px] shrink-0 bg-[#FAF9F6] p-4 pb-6 shadow-xl border border-black/5 hover:scale-[1.03] transition-all duration-300 flex flex-col ${ach.rotation}`}
+                  >
+                    <div className="aspect-[4/5] w-full overflow-hidden bg-slate-100 border border-black/5">
+                      <img 
+                        src={ach.image} 
+                        alt={ach.winners} 
+                        className="w-full h-full object-cover object-top grayscale-[10%] hover:grayscale-0 transition-all duration-300"
+                      />
+                    </div>
+                    <div className="mt-4 flex-grow flex flex-col justify-end text-center">
+                      <div className="text-lg font-black text-[#1E293B] flex items-center justify-center gap-1">
+                        <span>{ach.medal}</span>
+                        <span className="uppercase tracking-wide text-xs">{ach.placement}</span>
+                      </div>
+                      <p className="text-[9px] font-bold text-slate-500 uppercase mt-1 tracking-wider leading-tight">
+                        {ach.category}
+                      </p>
+                      <p className="font-display text-sm font-bold text-forest mt-3 font-serif italic border-t border-slate-200/60 pt-2.5">
+                        {ach.winners}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* COURT SHOWCASE BENTO GALLERY */}
+        <InteractiveImageBentoGallery
+          imageItems={COURT_GALLERY_IMAGES}
+          title="Explore Our Premium Venue"
+          description="Club Court Showcase"
+        />
 
         {/* FEEDBACK & TESTIMONIALS SECTION */}
         <section className="mt-20 grid gap-6 border-t border-ivory/10 pt-16 lg:grid-cols-2">

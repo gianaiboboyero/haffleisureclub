@@ -104,7 +104,6 @@ export async function unlockAudio() {
 export function speakAnnouncement(message: string) {
   if (!soundEnabled || !("speechSynthesis" in window)) return false;
 
-  window.speechSynthesis.cancel();
   if (!announcementChime) {
     announcementChime = new Howl({
       src: [makeChime()],
@@ -114,17 +113,24 @@ export function speakAnnouncement(message: string) {
     });
   }
 
-  void loadSpeechVoices().then((voices) => {
-    const utterance = new SpeechSynthesisUtterance(message);
-    const profile = voiceProfiles[voiceStyle];
-    const preferredVoice = chooseNaturalVoice(voices, profile, voiceStyle);
-    if (preferredVoice) utterance.voice = preferredVoice;
-    utterance.lang = preferredVoice?.lang ?? (profile.lang ? "en-GB" : "en-US");
-    utterance.rate = profile.rate;
-    utterance.pitch = profile.pitch;
-    utterance.volume = 1;
-    window.speechSynthesis.speak(utterance);
-  });
+  window.setTimeout(() => {
+    try {
+      window.speechSynthesis.cancel();
+      void loadSpeechVoices().then((voices) => {
+        const utterance = new SpeechSynthesisUtterance(message);
+        const profile = voiceProfiles[voiceStyle];
+        const preferredVoice = chooseNaturalVoice(voices, profile, voiceStyle);
+        if (preferredVoice) utterance.voice = preferredVoice;
+        utterance.lang = preferredVoice?.lang ?? (profile.lang ? "en-GB" : "en-US");
+        utterance.rate = profile.rate;
+        utterance.pitch = profile.pitch;
+        utterance.volume = 1;
+        window.speechSynthesis.speak(utterance);
+      });
+    } catch (e) {
+      console.warn("Speech synthesis failed:", e);
+    }
+  }, 20);
 
   void unlockAudio();
   announcementChime.play();
