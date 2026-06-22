@@ -309,7 +309,7 @@ function App() {
       pollTimer = window.setTimeout(() => {
         const supabaseLive = useSupabaseData();
         const needsHttpPoll =
-          !document.hidden &&
+          (view === "tv" || !document.hidden) &&
           (!supabaseLive || !isClubPushHealthy()) &&
           (!socket || !socket.connected);
         if (needsHttpPoll) {
@@ -325,11 +325,11 @@ function App() {
     let realtimeRefreshTimer: number | undefined;
     const scheduleRealtimeRefresh = () => {
       const view = useClubStore.getState().view;
-      if (isIdleView(view) || document.hidden) return;
+      if (isIdleView(view) || (document.hidden && view !== "tv")) return;
       window.clearTimeout(realtimeRefreshTimer);
       realtimeRefreshTimer = window.setTimeout(() => {
         const currentView = useClubStore.getState().view;
-        if (isIdleView(currentView) || document.hidden) return;
+        if (isIdleView(currentView) || (document.hidden && currentView !== "tv")) return;
         const context =
           currentView === "tv" ? "tv" : currentView === "player" ? "player" : "default";
         void useClubStore.getState().refreshSharedState({ force: true, context });
@@ -347,7 +347,7 @@ function App() {
           // hydrate when the roster cache has expired (> 4 hr old), avoiding
           // a complete DB re-fetch on every admin check-in action.
           // Skip entirely for background/hidden tabs — they will catch up on focus.
-          if (document.hidden) return;
+          if (document.hidden && useClubStore.getState().view !== "tv") return;
           const store = useClubStore.getState();
           if (!rosterSyncFresh()) {
             void store.hydrate();
@@ -374,7 +374,7 @@ function App() {
     const unsubscribeClubBroadcast = subscribeClubStateBroadcast(
       () => {
         const view = useClubStore.getState().view;
-        if (isIdleView(view) || document.hidden) return;
+        if (isIdleView(view) || (document.hidden && view !== "tv")) return;
         void useClubStore.getState().refreshSharedState({ force: true });
       },
       (stackOrder) => {
@@ -5048,7 +5048,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
     // debounced refresh on every Session change, so we don't need a second
     // subscribeToClubState here. That avoids a duplicate full-fetch per event.
     const interval = window.setInterval(() => {
-      if (!document.hidden && !isClubPushHealthy()) {
+      if (!isClubPushHealthy()) {
         void refreshSharedState({ allowUnchanged: true, context: "tv" });
       }
     }, 60_000);
