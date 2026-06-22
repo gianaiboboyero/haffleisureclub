@@ -384,42 +384,14 @@ export function resolveAuthorizedCheckInIds(
   players: Player[],
   matches: Match[]
 ): Set<string> {
-  const onCourt = getOnCourtPlayerIds(matches);
-  const adminSet = new Set(adminCheckedInIds ?? []);
-  const localAdminTagged = new Set(
-    players.filter((player) => player.tags?.includes("AdminCheckedIn")).map((player) => player.id)
-  );
-  const authorized = new Set<string>();
-  for (const id of checkedInIds) {
-    if (adminSet.has(id) || localAdminTagged.has(id) || onCourt.has(id)) {
-      authorized.add(id);
-    }
-  }
-  for (const id of localAdminTagged) authorized.add(id);
-  for (const id of onCourt) authorized.add(id);
-  // When there is no admin authority data at all (empty adminCheckedInIds AND no
-  // locally-tagged players), fall back to trusting the full incoming checkedIn list
-  // rather than returning only on-court players.  Returning only on-court players would
-  // wipe everyone waiting in the queue whenever the server has a data race or the
-  // session is fresh.
-  if ((adminCheckedInIds ?? []).length === 0 && localAdminTagged.size === 0) {
-    return new Set(checkedInIds);
-  }
-  return authorized;
+  // Completely bypass filtering. The database's checkedInPlayerIds array is the absolute source of truth.
+  return new Set(checkedInIds);
 }
 
 export function stripUnauthorizedCheckIns(players: Player[], matches: Match[]): Player[] {
-  const onCourt = getOnCourtPlayerIds(matches);
-  return players.map((player) => {
-    if (!player.checkedIn) return player;
-    const adminCleared = player.tags?.includes("AdminCheckedIn");
-    if (adminCleared || onCourt.has(player.id)) return player;
-    return {
-      ...player,
-      checkedIn: false,
-      tags: (player.tags ?? []).filter((tag) => tag !== "AdminCheckedIn")
-    };
-  });
+  // Bypassed: We no longer strip check-ins based on local offline tags. 
+  // Whatever is in the database is truth.
+  return players;
 }
 
 export function generateId() {
