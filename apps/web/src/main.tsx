@@ -128,7 +128,7 @@ type SessionMember = {
 const socket: any = null;
 
 function App() {
-  const { hydrate, hydrated, view, setView, online, setOnline, pendingSyncCount, refreshPendingSyncCount } = useClubStore();
+  const { hydrate, hydrated, view, setView, online, setOnline, pendingSyncCount, refreshPendingSyncCount, setAdminWriteToken } = useClubStore();
   const [socketConnected, setSocketConnected] = React.useState(false);
   const [sessionMember, setSessionMember] = React.useState<SessionMember | null>(null);
   const [sessionReady, setSessionReady] = React.useState(false);
@@ -139,10 +139,16 @@ function App() {
         const text = await response.text();
         return text && response.headers.get("content-type")?.includes("application/json") ? JSON.parse(text) : { user: null };
       })
-      .then((data) => setSessionMember(data.user))
-      .catch(() => setSessionMember(null))
+      .then((data) => {
+        setSessionMember(data.user);
+        setAdminWriteToken(data.user?.adminWriteToken ?? null);
+      })
+      .catch(() => {
+        setSessionMember(null);
+        setAdminWriteToken(null);
+      })
       .finally(() => setSessionReady(true));
-  }, []);
+  }, [setAdminWriteToken]);
 
   React.useEffect(() => {
     void refreshSession();

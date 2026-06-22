@@ -441,6 +441,8 @@ type ClubState = {
   matchDurationMinutes: number;
   clubStatus: string;
   tvBroadcast: TvBroadcast | null;
+  adminWriteToken: string | null;
+  setAdminWriteToken: (token: string | null) => void;
   reservations: Reservation[];
   transactions: Transaction[];
   playerKudos: PlayerKudosEntry[];
@@ -775,6 +777,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
   matchDurationMinutes: Number(localStorage.getItem("haff-match-duration-minutes") ?? 12),
   clubStatus: localStorage.getItem("haff-club-status") ?? "",
   tvBroadcast: null,
+  adminWriteToken: null,
+  setAdminWriteToken: (token) => set({ adminWriteToken: token }),
   setView: (view) => {
     const nextView = !CALENDAR_PAGE_ENABLED && view === "calendar" ? "landing" : view;
     const current = get().view;
@@ -1364,7 +1368,8 @@ export const useClubStore = create<ClubState>((set, get) => ({
           courts: state.courts,
           matches: publishMatches,
           reservations: [],
-          playerProfiles: syncedProfiles
+          playerProfiles: syncedProfiles,
+          adminWriteToken: state.adminWriteToken
         });
         if (result) {
           markSyncHealthy(set, result.updatedAt);
@@ -1435,7 +1440,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
     }
     if (useSupabaseData()) {
       try {
-        const result = await broadcastTvState(sessionId, payload);
+        const result = await broadcastTvState(sessionId, payload, get().adminWriteToken);
         if (!result) throw new Error("broadcast failed");
         markSyncHealthy(set, result.updatedAt);
       } catch {

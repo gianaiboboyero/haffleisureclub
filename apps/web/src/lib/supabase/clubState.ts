@@ -148,6 +148,7 @@ export type PublishClubStateInput = {
   playerProfiles: PlayerProfileSnapshot[];
   playerKudos?: unknown[];
   matchReviews?: unknown[];
+  adminWriteToken?: string | null;
 };
 
 let updateMutex = Promise.resolve<any>(null);
@@ -193,7 +194,8 @@ export async function publishClubState(
         reservations: input.reservations,
         playerProfiles: input.playerProfiles,
         playerKudos: input.playerKudos,
-        matchReviews: input.matchReviews
+        matchReviews: input.matchReviews,
+        adminWriteToken: input.adminWriteToken
       };
 
       updateLastKnownSettings(input.sessionId, settings);
@@ -216,7 +218,8 @@ export async function publishClubState(
 
 export async function broadcastTvState(
   sessionId: string,
-  tvBroadcast: TvBroadcast
+  tvBroadcast: TvBroadcast,
+  adminWriteToken?: string | null
 ): Promise<{ sessionId: string; updatedAt: string } | null> {
   const supabase = getSupabase();
   if (!supabase) return null;
@@ -238,7 +241,8 @@ export async function broadcastTvState(
 
       const settings = {
         ...baseSettings,
-        tvBroadcast
+        tvBroadcast,
+        adminWriteToken
       };
 
       updateLastKnownSettings(sessionId, settings);

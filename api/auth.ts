@@ -17,11 +17,23 @@ import {
   validPassword
 } from "./_security.js";
 
+async function fetchAdminWriteToken(): Promise<string | null> {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return null;
+  const { data } = await supabase.from("AdminConfig").select("value").eq("key", "write_token").maybeSingle();
+  return data?.value ?? null;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const action = String(req.query.action ?? "");
 
   if (req.method === "GET" && action === "me") {
-    return res.status(200).json({ user: publicUser(await getUser(req)) });
+    const user = await getUser(req);
+    const userJson = publicUser(user);
+    if (userJson && user?.role === "ADMIN") {
+      (userJson as any).adminWriteToken = await fetchAdminWriteToken();
+    }
+    return res.status(200).json({ user: userJson });
   }
 
   if (req.method === "POST" && action === "register") {
@@ -94,7 +106,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     await createSession(user.id, res);
     await audit(user.id, "AUTH_LOGIN", "User", user.id);
-    return res.status(200).json({ user: publicUser(user) });
+    const userJson = publicUser(user);
+    if (userJson && user.role === "ADMIN") {
+      (userJson as any).adminWriteToken = await fetchAdminWriteToken();
+    }
+    return res.status(200).json({ user: userJson });
   }
 
   if (req.method === "POST" && action === "logout") {
