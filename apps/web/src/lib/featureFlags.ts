@@ -1,2 +1,2 @@
 /** Public court reservation calendar. */
-export const CALENDAR_PAGE_ENABLED = true;
+export const CALENDAR_PAGE_ENABLED = false;

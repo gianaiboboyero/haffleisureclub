@@ -15,7 +15,9 @@ import { useSupabaseData } from "../lib/dataSource";
 import { CALENDAR_PAGE_ENABLED } from "../lib/featureFlags";
 import {
   fetchClubState,
-  pingClubState
+  pingClubState,
+  publishClubState,
+  broadcastTvState
 } from "../lib/supabase/clubState";
 import { fetchCourts as fetchSupabaseCourts, seedCourtsIfEmpty } from "../lib/supabase/courts";
 import { fetchPlayersCompact } from "../lib/supabase/players";
@@ -1339,6 +1341,44 @@ export const useClubStore = create<ClubState>((set, get) => ({
       return now - new Date(m.startedAt).getTime() < COMPLETED_MATCH_RETAIN_MS;
     });
 
+    if (useSupabaseData()) {
+      try {
+        if (!state.currentSessionId) return;
+        const result = await publishClubState({
+          sessionId: state.currentSessionId,
+          checkedInPlayerIds: state.players.filter((player) => player.checkedIn).map((player) => player.id),
+          adminCheckedInIds: state.players
+            .filter((player) => player.checkedIn && player.tags?.includes("AdminCheckedIn"))
+            .map((player) => player.id),
+          stackOrder: state.stackOrder,
+          courts: state.courts,
+          matches: publishMatches,
+          reservations: [],
+          playerProfiles: syncedProfiles
+        });
+        if (result) {
+          markSyncHealthy(set, result.updatedAt);
+          const hasPending = get().matches.some((m) => m.syncStatus === "PendingSync");
+          if (hasPending) {
+            const clearedMatches = get().matches.map((m) =>
+              m.syncStatus === "PendingSync" ? { ...m, syncStatus: "Synced" as const } : m
+            );
+            set({ matches: clearedMatches });
+          }
+        }
+        clubStateBroadcast?.postMessage({
+          type: "state-published",
+          at: Date.now(),
+          stackOrder: state.stackOrder,
+          playerProfiles: []
+        });
+        if (suppressSharedRefreshUntil < Date.now() + 4000) suppressSharedRefreshUntil = Date.now() + 4000;
+      } catch {
+        // Local state remains authoritative until the next successful sync.
+      }
+      return;
+    }
+
     try {
       const response = await apiFetch("/api/club-state", {
         method: "POST",
@@ -1352,7 +1392,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
           stackOrder: state.stackOrder,
           courts: state.courts,
           matches: publishMatches,
-          reservations: useSupabaseData() ? [] : state.reservations,
+          reservations: state.reservations,
           playerProfiles: syncedProfiles
         })
       });
@@ -1377,7 +1417,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
         type: "state-published",
         at: Date.now(),
         stackOrder: state.stackOrder,
-        playerProfiles: useSupabaseData() ? [] : syncedProfiles
+        playerProfiles: syncedProfiles
       });
       // Again, only extend — never shrink an existing longer suppress window.
       if (suppressSharedRefreshUntil < Date.now() + 4000) suppressSharedRefreshUntil = Date.now() + 4000;
@@ -1396,28 +1436,39 @@ export const useClubStore = create<ClubState>((set, get) => ({
       pushToast(set, "Broadcast failed", "No active session is selected.", "system");
       return;
     }
-    try {
-      const response = await apiFetch("/api/club-state", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId,
-          broadcastOnly: true,
-          tvBroadcast: payload
-        })
-      });
-      if (response.status === 401) {
-        if (get().online) set({ online: false });
-        throw new Error("broadcast failed");
+    if (useSupabaseData()) {
+      try {
+        const result = await broadcastTvState(sessionId, payload);
+        if (!result) throw new Error("broadcast failed");
+        markSyncHealthy(set, result.updatedAt);
+      } catch {
+        pushToast(set, "Broadcast failed", "Could not reach the TV display sync server.", "system");
+        return;
       }
-      if (!response.ok) throw new Error("broadcast failed");
-      if (response.headers.get("content-type")?.includes("application/json")) {
-        const body = await parseResponseJson(response);
-        markSyncHealthy(set, typeof body.updatedAt === "string" ? body.updatedAt : null);
+    } else {
+      try {
+        const response = await apiFetch("/api/club-state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId,
+            broadcastOnly: true,
+            tvBroadcast: payload
+          })
+        });
+        if (response.status === 401) {
+          if (get().online) set({ online: false });
+          throw new Error("broadcast failed");
+        }
+        if (!response.ok) throw new Error("broadcast failed");
+        if (response.headers.get("content-type")?.includes("application/json")) {
+          const body = await parseResponseJson(response);
+          markSyncHealthy(set, typeof body.updatedAt === "string" ? body.updatedAt : null);
+        }
+      } catch {
+        pushToast(set, "Broadcast failed", "Could not reach the TV display sync server.", "system");
+        return;
       }
-    } catch {
-      pushToast(set, "Broadcast failed", "Could not reach the TV display sync server.", "system");
-      return;
     }
     set({ tvBroadcast: payload });
     clubStateBroadcast?.postMessage({ type: "tv-broadcast", broadcast: payload, at: Date.now() });
