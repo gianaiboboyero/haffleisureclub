@@ -17,3 +17,9 @@ pnpm-debug.log*
 data/
 *.local
 .env*.local
+
+# Handbook renders and binary docs
+handbook_render/
+*.docx
+~$*.docx
+build_product_handbook.py

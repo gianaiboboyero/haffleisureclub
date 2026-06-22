@@ -11,7 +11,7 @@ When `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` are set
 
 ### Single database (important)
 
-Use **one** Supabase project everywhere — local `.env`, Vercel Production, and `supabase/config.toml` must share the same project ref (`hmhhgmuuusknmucjlkth`).
+Use **one** Supabase project everywhere — local `.env.local`, Vercel Production, and `supabase/config.toml` must share the same project ref.
 
 To restore the live roster from a production export:
 
