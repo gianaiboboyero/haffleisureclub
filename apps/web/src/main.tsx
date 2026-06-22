@@ -1420,7 +1420,7 @@ function AdminCourtCard({
             <Button type="button" onClick={() => { void finishCourt(court.id); }} className="h-8 min-h-0 bg-brass hover:bg-brass/90 px-3 text-[10px] text-forest font-black uppercase tracking-wider rounded-lg flex items-center gap-1 shadow-sm">
               <CheckCircle2 size={12} /> Finish
             </Button>
-          ) : court.status === "Reserved" ? (
+          ) : court.status === "Reserved" || court.status === "Assigned" ? (
             <>
               <Button
                 onClick={handleStartReservedCourt}
