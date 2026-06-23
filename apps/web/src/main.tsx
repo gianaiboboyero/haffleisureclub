@@ -3811,6 +3811,33 @@ function PaymentsTab() {
 function SettingsTab() {
   const { matchDurationMinutes, setMatchDurationMinutes } = useClubStore();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [isResetting, setIsResetting] = React.useState(false);
+
+  const handleResetStats = async () => {
+    if (!confirm("WARNING: This will permanently reset all game stats for all players and clear match histories. This action is irreversible. Are you absolutely sure you want to proceed?")) {
+      return;
+    }
+    
+    setIsResetting(true);
+    try {
+      const response = await apiFetch("/api/reset-stats", {
+        method: "POST"
+      });
+      if (response.ok) {
+        playSound("checkin");
+        alert("Game statistics successfully reset!");
+        window.location.reload();
+      } else {
+        const data = await response.json().catch(() => ({}));
+        alert(data.error || "Failed to reset stats.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("An unexpected error occurred while resetting stats.");
+    } finally {
+      setIsResetting(false);
+    }
+  };
 
   const handleExport = async () => {
     try {
@@ -3937,6 +3964,24 @@ function SettingsTab() {
         <p className="text-xs text-linen/50 mt-4 leading-relaxed">
           HAFF Leisure Club - Cadiz City saves all transactions locally on your device storage first. Use file backup to transfer session logs to backup devices in low-connectivity areas.
         </p>
+      </Card>
+
+      <Card className="bg-red-950/10 border border-red-500/20 text-ivory md:col-span-2">
+        <h2 className="font-display text-3xl text-red-400">Danger Zone</h2>
+        <p className="text-sm text-linen/70 mt-1">Actions in this area directly modify the remote cloud database and cannot be undone.</p>
+        <div className="mt-6">
+          <Button
+            onClick={handleResetStats}
+            disabled={isResetting}
+            className="bg-red-700 hover:bg-red-600 text-white min-h-11 font-black px-6 rounded-xl flex items-center gap-2 transition"
+          >
+            <RotateCcw size={16} className={isResetting ? "animate-spin" : ""} />
+            {isResetting ? "Resetting Stats…" : "Reset All Game Stats"}
+          </Button>
+          <p className="text-xs text-linen/50 mt-3 leading-relaxed">
+            This will reset all player stats (games played, points, streaks, etc.) and clear matches. Existing user profiles, rosters, and administrative accounts will remain completely safe.
+          </p>
+        </div>
       </Card>
     </div>
   );

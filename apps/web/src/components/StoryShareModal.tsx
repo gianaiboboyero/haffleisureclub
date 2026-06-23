@@ -114,19 +114,27 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
             </div>
           </div>
 
-          <div className="mb-4 grid grid-cols-2 sm:grid-cols-5 gap-1.5 rounded-xl bg-white/5 p-1.5 max-h-32 overflow-y-auto">
-            {LAYOUT_OPTIONS.map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                onClick={() => setLayout(option.id)}
-                className={`rounded-lg py-2.5 px-1 text-[10px] font-black uppercase tracking-wide transition ${
-                  layout === option.id ? "bg-[#2ee882] text-[#020f0a]" : "text-ivory/60 hover:text-ivory"
-                }`}
-              >
-                {option.label}
-              </button>
-            ))}
+          <div className="mb-4 grid grid-cols-5 gap-1.5 rounded-2xl bg-white/[0.03] p-2 border border-white/10 backdrop-blur-md">
+            {LAYOUT_OPTIONS.map((option) => {
+              const isActive = layout === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => setLayout(option.id)}
+                  className={`relative rounded-xl py-2.5 px-0.5 text-[9px] sm:text-[10px] font-black uppercase tracking-wider transition-all duration-300 ${
+                    isActive
+                      ? "bg-gradient-to-br from-[#2ee882] to-[#15803d] text-[#020f0a] shadow-[0_0_15px_rgba(46,232,130,0.35)] border border-[#2ee882]/30 scale-[1.02]"
+                      : "bg-white/[0.02] border border-white/5 text-ivory/60 hover:text-ivory hover:bg-white/[0.08] hover:border-white/10"
+                  }`}
+                >
+                  {option.label}
+                  {isActive && (
+                    <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-white shadow-[0_0_4px_#fff]" />
+                  )}
+                </button>
+              );
+            })}
           </div>
 
           <div
