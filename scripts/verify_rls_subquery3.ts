@@ -13,7 +13,7 @@ async function run() {
   const token = res.rows[0]?.value;
   await client.end();
 
-  console.log("Actual Token from DB:", token);
+  console.log("Actual Token from DB:", token ? "[REDACTED]" : "null");
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const supabaseAnon = createClient(supabaseUrl, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!);

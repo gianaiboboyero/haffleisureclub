@@ -11,7 +11,7 @@ async function run() {
   // Get token
   const { data: tokenData } = await supabaseAdmin.from("AdminConfig").select("value").eq("key", "write_token").maybeSingle();
   const token = tokenData?.value;
-  console.log("Fetched Token:", token);
+  console.log("Fetched Token:", token ? "[REDACTED]" : "null");
 
   // Get current session
   const { data: session } = await supabaseAnon.from("Session").select("*").limit(1).maybeSingle();

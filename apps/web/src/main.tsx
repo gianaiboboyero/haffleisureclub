@@ -1722,20 +1722,6 @@ function PlayRotationTab() {
 
   return (
     <div className="space-y-4">
-      <style dangerouslySetInnerHTML={{ __html: `
-        @keyframes overtimeJiggle {
-          0% { transform: translate(0, 0) scale(1); }
-          25% { transform: translate(-1.5px, 1px) rotate(-0.3deg); }
-          50% { transform: translate(1.5px, -1px) scale(1.01) rotate(0.3deg); }
-          75% { transform: translate(-1.5px, -1px) rotate(-0.3deg); }
-          100% { transform: translate(0, 0) scale(1); }
-        }
-        .animate-overtime {
-          animation: overtimeJiggle 0.8s ease-in-out infinite;
-          box-shadow: 0 0 25px rgba(239, 68, 68, 0.45) !important;
-          border: 1.5px solid rgba(239, 68, 68, 0.6) !important;
-        }
-      `}} />
 
       <div className="rounded-2xl border border-white/10 bg-[#0a1f18]/80 px-3 py-2.5 sm:px-4 flex items-center justify-between">
         <div>
@@ -3857,6 +3843,10 @@ function SettingsTab() {
   const handleImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (file.size > 50 * 1024 * 1024) {
+      alert("Backup file too large (max 50 MB).");
+      return;
+    }
 
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -5546,48 +5536,6 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
 
   return (
     <section className="tv-display relative flex h-[100dvh] max-h-[100dvh] w-screen max-w-[100vw] flex-col overflow-hidden bg-[#0b2e22] text-ivory select-none" style={{ fontFamily: "'Inter', 'Helvetica Neue', sans-serif" }}>
-      <style dangerouslySetInnerHTML={{ __html: `
-        @keyframes gradientShift {
-          0% { background-position: 0% 50%; }
-          50% { background-position: 100% 50%; }
-          100% { background-position: 0% 50%; }
-        }
-        .animate-billboard-bg {
-          background: linear-gradient(-45deg, #05241c, #0a3d30, #041f17, #0b4536);
-          background-size: 400% 400%;
-          animation: gradientShift 8s ease infinite;
-        }
-        .tv-elapsed {
-          letter-spacing: -0.02em;
-        }
-        .tv-court-name {
-          font-size: clamp(1.25rem, 2.8vw, 2.75rem);
-          line-height: 0.95;
-        }
-        @media (max-width: 767px) {
-          .tv-court-name {
-            font-size: clamp(1.5rem, 6vw, 2rem);
-          }
-        }
-        .tv-ready-title {
-          font-size: clamp(1.1rem, 2.2vw, 2rem);
-          line-height: 1.05;
-        }
-        .tv-player-name {
-          font-size: clamp(0.875rem, 1.75vw, 1.35rem);
-        }
-        @media (max-width: 767px) {
-          .tv-player-name-mobile {
-            font-size: clamp(0.95rem, 3.8vw, 1.15rem);
-          }
-          .tv-timer-digits-mobile {
-            font-size: clamp(1.75rem, 7vw, 2.25rem);
-          }
-        }
-        .tv-timer-digits {
-          font-size: clamp(1.35rem, 2.8vw, 2.5rem);
-        }
-      `}} />
 
       {/* ── Text announcement overlay ── */}
       <AnimatePresence>

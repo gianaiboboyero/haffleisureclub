@@ -30,7 +30,7 @@ async function run() {
       VALUES ('write_token', $1) 
       ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value";
     `, [token]);
-    console.log("Inserted write_token:", token);
+    console.log("Inserted write_token: [REDACTED — stored in AdminConfig table]");
 
     // 3. Update RLS policy for Session update
     await client.query(`

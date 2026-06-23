@@ -23,3 +23,25 @@ handbook_render/
 *.docx
 ~$*.docx
 build_product_handbook.py
+
+# Build artefacts
+build/
+.next/
+.nuxt/
+
+# Python
+__pycache__/
+venv/
+*.pyc
+
+# Editor / OS
+.idea/
+Thumbs.db
+*.log
+
+# Credentials & secrets — never commit these
+*.pem
+*.key
+credentials.json
+service-account*.json
+

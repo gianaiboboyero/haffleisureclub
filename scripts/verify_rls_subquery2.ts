@@ -10,7 +10,7 @@ const supabaseAnon = createClient(supabaseUrl, process.env.NEXT_PUBLIC_SUPABASE_
 async function run() {
   const { data: tokenData } = await supabaseAdmin.from("AdminConfig").select("value").eq("key", "write_token").maybeSingle();
   const token = tokenData?.value;
-  console.log("Actual Token:", token);
+  console.log("Actual Token:", token ? "[REDACTED]" : "null");
 
   const { data: session } = await supabaseAnon.from("Session").select("*").limit(1).maybeSingle();
   if (!session) {
