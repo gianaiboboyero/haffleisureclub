@@ -1,5 +1,6 @@
 import React from "react";
 import { Lock, Megaphone, RotateCcw } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import type { Court, Match, Player } from "../lib/types";
 import { getPlayerDisplayLabel } from "../lib/utils";
 
@@ -14,10 +15,53 @@ type TvPickleballCourtProps = {
   getPlayerAvatar: (player: CourtPlayer) => string;
   onAnnounce?: () => void;
   timerSlot?: React.ReactNode;
+  isOvertime?: boolean;
 };
 
 const COURT_LINE = "rgba(115,255,180,0.32)";
 const COURT_LINE_DIM = "rgba(255,255,255,0.14)";
+
+function OvertimeCurtain() {
+  return (
+    <div className="absolute inset-0 z-[100] flex overflow-hidden pointer-events-none rounded-[inherit]">
+      {/* Left Curtain */}
+      <motion.div
+        className="w-1/2 h-full bg-[#1e0505] border-r border-[#3a0a0a] flex flex-col items-end justify-center pr-2 sm:pr-4 shadow-[10px_0_20px_rgba(0,0,0,0.6)] z-10"
+        initial={{ x: "-100%" }}
+        animate={{ x: 0 }}
+        exit={{ x: "-100%" }}
+        transition={{ duration: 0.8, ease: "easeOut" }}
+      >
+        <span className="text-[2rem] sm:text-[3rem] md:text-[4rem] font-black tracking-widest text-brass -mr-3 sm:-mr-5 drop-shadow-[0_0_15px_rgba(255,215,0,0.3)] opacity-0 animate-fade-in [animation-delay:1000ms]">OVER</span>
+      </motion.div>
+
+      {/* Right Curtain */}
+      <motion.div
+        className="w-1/2 h-full bg-[#1e0505] border-l border-[#3a0a0a] flex flex-col items-start justify-center pl-2 sm:pl-4 shadow-[-10px_0_20px_rgba(0,0,0,0.6)] z-10"
+        initial={{ x: "100%" }}
+        animate={{ x: 0 }}
+        exit={{ x: "100%" }}
+        transition={{ duration: 0.8, ease: "easeOut" }}
+      >
+         <span className="text-[2rem] sm:text-[3rem] md:text-[4rem] font-black tracking-widest text-brass -ml-3 sm:-ml-5 drop-shadow-[0_0_15px_rgba(255,215,0,0.3)] opacity-0 animate-fade-in [animation-delay:1000ms]">TIME</span>
+      </motion.div>
+      
+      {/* Overlay Text */}
+      <motion.div
+         className="absolute inset-0 flex flex-col items-center justify-center z-20 pointer-events-none"
+         initial={{ opacity: 0, scale: 0.5 }}
+         animate={{ opacity: 1, scale: 1 }}
+         exit={{ opacity: 0 }}
+         transition={{ delay: 1.2, duration: 0.6, type: "spring" }}
+      >
+         <div className="bg-black/70 backdrop-blur-md px-6 py-4 sm:px-8 sm:py-6 rounded-3xl border border-brass/30 text-center shadow-2xl flex flex-col items-center justify-center">
+             <p className="text-[2rem] sm:text-[3rem] md:text-[4rem] font-display font-black tracking-tighter text-ivory leading-none drop-shadow-md">OVERTIME</p>
+             <p className="text-[0.65rem] sm:text-xs md:text-sm font-bold uppercase tracking-[0.2em] text-brass mt-3 sm:mt-4">Please clear the court</p>
+         </div>
+      </motion.div>
+    </div>
+  );
+}
 
 function TvCourtPlayerCell({
   player,
@@ -176,6 +220,7 @@ export const TvPickleballCourt = React.memo(function TvPickleballCourt({
   getPlayerAvatar,
   onAnnounce,
   timerSlot,
+  isOvertime,
 }: TvPickleballCourtProps) {
   const isPlaying = Boolean(match);
   const isReserved = !isPlaying && court.status === "Reserved";
@@ -202,9 +247,12 @@ export const TvPickleballCourt = React.memo(function TvPickleballCourt({
 
   return (
     <article
-      className={`tv-pickle-court tv-pickle-court--${statusTone}`}
+      className={`tv-pickle-court tv-pickle-court--${statusTone} relative overflow-hidden`}
       aria-label={`${court.name} pickleball court display`}
     >
+      <AnimatePresence>
+        {isOvertime && <OvertimeCurtain />}
+      </AnimatePresence>
       <CourtHeader
         courtName={court.name}
         courtNumber={court.number}

@@ -5492,7 +5492,11 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
       if (!match) return;
       if (announceCourtOvertime(court.name, [...match.teamAPlayerIds, ...match.teamBPlayerIds], players)) {
         announcedOvertimeRef.current[court.id] = repeatWindow;
-        void finishCourt(court.id);
+        
+        // Give the UI 10 seconds to show the curtain animation
+        setTimeout(() => {
+          void finishCourt(court.id);
+        }, 10000);
       }
     });
 
@@ -5783,6 +5787,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
                 teamB={teamB}
                 reservedPlayers={reservedPlayers}
                 getPlayerAvatar={getPlayerAvatar}
+                isOvertime={overtimeCourts.some(o => o.court.id === court.id)}
                 onAnnounce={
                   isPlaying && match
                     ? () => broadcastCourtAnnouncement(court.id, court.name, [...match.teamAPlayerIds, ...match.teamBPlayerIds], "active")
