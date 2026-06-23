@@ -127,7 +127,162 @@ type SessionMember = {
 // the existing lightweight polling path instead of opening a dead WebSocket.
 const socket: any = null;
 
-function App() {
+function AdminAnnouncementsTab() {
+  const { announcements, addAnnouncement, editAnnouncement, deleteAnnouncement } = useClubStore();
+  const [showAdd, setShowAdd] = React.useState(false);
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [annTitle, setAnnTitle] = React.useState("");
+  const [annContent, setAnnContent] = React.useState("");
+  const [annImageUrl, setAnnImageUrl] = React.useState("");
+  const [annLinkUrl, setAnnLinkUrl] = React.useState("");
+  const [annIsPopup, setAnnIsPopup] = React.useState(false);
+
+  const openAdd = () => {
+    setAnnTitle("");
+    setAnnContent("");
+    setAnnImageUrl("");
+    setAnnLinkUrl("");
+    setAnnIsPopup(false);
+    setEditingId(null);
+    setShowAdd(true);
+  };
+
+  const openEdit = (a: any) => {
+    setAnnTitle(a.title);
+    setAnnContent(a.content);
+    setAnnImageUrl(a.imageUrl || "");
+    setAnnLinkUrl(a.linkUrl || "");
+    setAnnIsPopup(!!a.isPopup);
+    setEditingId(a.id);
+    setShowAdd(true);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-display text-2xl font-black text-ivory">Manage Announcements</h2>
+          <p className="text-sm text-ivory/60">Create popups and cards to inform players.</p>
+        </div>
+        <Button onClick={openAdd} className="bg-brass text-forest font-bold hover:bg-linen">
+          + New Announcement
+        </Button>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {announcements.map(a => (
+          <div key={a.id} className="bg-ivory/5 border border-ivory/10 rounded-2xl p-4 flex flex-col justify-between relative">
+            <div className="absolute top-3 right-3 flex gap-2">
+              <button 
+                onClick={() => openEdit(a)}
+                className="text-brass hover:text-ivory bg-brass/10 px-2 py-1 rounded text-[10px] font-bold"
+              >
+                ✎ Edit
+              </button>
+              <button 
+                onClick={() => deleteAnnouncement(a.id)}
+                className="text-red-400 hover:text-red-500 bg-red-400/10 px-2 py-1 rounded text-[10px] font-bold"
+              >
+                ✕ Delete
+              </button>
+            </div>
+            <div>
+              {a.isPopup && <span className="inline-block bg-brass/20 text-brass text-[10px] px-2 py-0.5 rounded-full mb-2 font-bold uppercase">Popup</span>}
+              <h3 className="text-lg font-bold text-ivory pr-16">{a.title}</h3>
+              <p className="text-xs text-ivory/60 mt-1 whitespace-pre-wrap">{a.content}</p>
+              {a.imageUrl && <div className="mt-2 text-[10px] text-ivory/40">Has Image: {a.imageUrl}</div>}
+              {a.linkUrl && <div className="mt-1 text-[10px] text-ivory/40">Link: {a.linkUrl}</div>}
+            </div>
+            <div className="mt-4 pt-3 border-t border-ivory/10 text-[10px] text-ivory/40 text-right">
+              {a.date}
+            </div>
+          </div>
+        ))}
+        {announcements.length === 0 && (
+          <div className="col-span-full py-12 text-center text-ivory/40">
+            No announcements currently.
+          </div>
+        )}
+      </div>
+
+      {showAdd && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="bg-[#0b3a2c] text-ivory border border-white/10 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+            <button onClick={() => setShowAdd(false)} className="absolute right-4 top-4 text-white/60 hover:text-white">✕</button>
+            <h4 className="font-display text-2xl font-black text-brass">{editingId ? "Edit Announcement" : "Add Announcement"}</h4>
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-wider text-brass block mb-1 font-bold">Title (Headline)</label>
+                <input 
+                  type="text" 
+                  value={annTitle} 
+                  onChange={(e) => setAnnTitle(e.target.value)} 
+                  placeholder="Announcement title" 
+                  className="w-full rounded-xl bg-forest/50 text-white border border-white/10 px-3 py-2 text-sm focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-wider text-brass block mb-1 font-bold">Content (Body)</label>
+                <textarea 
+                  value={annContent} 
+                  onChange={(e) => setAnnContent(e.target.value)} 
+                  placeholder="Details of announcement..." 
+                  className="w-full rounded-xl bg-forest/50 text-white border border-white/10 px-3 py-2 text-sm min-h-24 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-wider text-brass block mb-1 font-bold">Image URL (Optional)</label>
+                <input 
+                  type="text" 
+                  value={annImageUrl}
+                  onChange={(e) => setAnnImageUrl(e.target.value)}
+                  placeholder="e.g. /poster.jpg" 
+                  className="w-full rounded-xl bg-forest/50 text-white border border-white/10 px-3 py-2 text-sm focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-wider text-brass block mb-1 font-bold">Link URL (Optional - For Register Button)</label>
+                <input 
+                  type="text" 
+                  value={annLinkUrl}
+                  onChange={(e) => setAnnLinkUrl(e.target.value)}
+                  placeholder="e.g. https://forms.gle/..." 
+                  className="w-full rounded-xl bg-forest/50 text-white border border-white/10 px-3 py-2 text-sm focus:outline-none"
+                />
+              </div>
+              <div className="flex items-center gap-2 mt-2">
+                <input type="checkbox" id="annIsPopup2" checked={annIsPopup} onChange={(e) => setAnnIsPopup(e.target.checked)} className="rounded border-white/10 text-brass focus:ring-brass bg-white/10" />
+                <label htmlFor="annIsPopup2" className="text-xs font-bold text-ivory cursor-pointer">Show as popup on open</label>
+              </div>
+            </div>
+            <button 
+              onClick={async () => {
+                if (!annTitle.trim() || !annContent.trim()) return;
+                if (editingId) {
+                  await editAnnouncement(editingId, {
+                    title: annTitle.trim(),
+                    content: annContent.trim(),
+                    imageUrl: annImageUrl.trim() || undefined,
+                    linkUrl: annLinkUrl.trim() || undefined,
+                    isPopup: annIsPopup
+                  });
+                } else {
+                  await addAnnouncement(annTitle.trim(), annContent.trim(), annImageUrl.trim() || undefined, annLinkUrl.trim() || undefined, annIsPopup);
+                }
+                setShowAdd(false);
+              }}
+              className="w-full bg-brass text-forest font-black py-3 rounded-xl hover:bg-linen transition"
+            >
+              {editingId ? "Save Changes" : "Post Announcement"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function App() {
   const { hydrate, hydrated, view, setView, online, setOnline, pendingSyncCount, refreshPendingSyncCount, setAdminWriteToken } = useClubStore();
   const [socketConnected, setSocketConnected] = React.useState(false);
   const [sessionMember, setSessionMember] = React.useState<SessionMember | null>(null);
@@ -826,19 +981,58 @@ function FloatingDock({ view, setView, isAdmin }: { view: string; setView: (view
       {navItems.map((item) => {
         const Icon = item.icon;
         const isActive = view === item.key;
+        
+        const content = (
+          <>
+            <Icon size={16} className="shrink-0" />
+            <span className="hidden md:inline">{item.label}</span>
+          </>
+        );
+
+        const className = `relative flex h-11 items-center gap-2 rounded-full px-4 text-xs font-extrabold uppercase tracking-wider transition-all duration-300 ${
+          isActive
+            ? "bg-brass text-forest shadow-[0_4px_20px_rgba(203,239,67,0.25)] font-black"
+            : "text-ivory/70 hover:bg-white/5 hover:text-ivory"
+        }`;
+
+        if (item.key === "tv") {
+          return (
+            <a
+              key={item.key}
+              href="/tv"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={className}
+              title={item.label}
+            >
+              {content}
+            </a>
+          );
+        }
+
+        if (item.key === "admin") {
+          return (
+            <button
+              key={item.key}
+              onClick={() => {
+                setView("admin");
+              }}
+              className={className}
+              title={item.label}
+            >
+              {content}
+            </button>
+          );
+        }
+
         return (
           <button
             key={item.key}
             onClick={() => setView(item.key as ViewMode)}
-            className={`relative flex h-11 items-center gap-2 rounded-full px-4 text-xs font-extrabold uppercase tracking-wider transition-all duration-300 ${
-              isActive
-                ? "bg-brass text-forest shadow-[0_4px_20px_rgba(203,239,67,0.25)] font-black"
-                : "text-ivory/70 hover:bg-white/5 hover:text-ivory"
-            }`}
+            className={className}
             title={item.label}
           >
-            <Icon size={16} className="shrink-0" />
-            <span className="hidden md:inline">{item.label}</span>
+            {content}
           </button>
         );
       })}
@@ -907,7 +1101,7 @@ function PlayerProfileSheet({
   );
 }
 
-type AdminTab = "control" | "players" | "reservations" | "history" | "settings";
+type AdminTab = "control" | "players" | "reservations" | "history" | "settings" | "announcements";
 
 function AdminView({
   sessionMember,
@@ -936,11 +1130,6 @@ function AdminView({
   }, []);
 
   const isAdmin = SKIP_ADMIN_LOGIN || sessionMember?.role === "ADMIN";
-
-  React.useEffect(() => {
-    if (!isAdmin || !shouldManageTvDisplayWindow()) return;
-    openTvDisplayWindow();
-  }, [isAdmin]);
 
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
@@ -1071,7 +1260,8 @@ function AdminView({
               ? [{ id: "reservations", label: pendingReservations > 0 ? `Reservations (${pendingReservations})` : "Reservations" }]
               : []),
             { id: "history", label: "History" },
-            { id: "settings", label: "Backup & Settings" }
+            { id: "settings", label: "Backup & Settings" },
+            { id: "announcements", label: "Announcements" }
           ].map((tab) => (
             <button
               key={tab.id}
@@ -1136,6 +1326,7 @@ function AdminView({
         {activeTab === "reservations" && CALENDAR_PAGE_ENABLED && <AdminReservationsTab />}
         {activeTab === "history" && <HistoryTab />}
         {activeTab === "settings" && <SettingsTab />}
+        {activeTab === "announcements" && <AdminAnnouncementsTab />}
       </div>
 
       {/* Player QR Modal */}
@@ -2037,6 +2228,7 @@ function PlayersCrudTab() {
   const [preferredPlayStyle, setPreferredPlayStyle] = React.useState("");
   const [notes, setNotes] = React.useState("");
   const [avatarUrl, setAvatarUrl] = React.useState("");
+  const [dynamicAvatars, setDynamicAvatars] = React.useState(AVATAR_PRESETS);
   const [formError, setFormError] = React.useState("");
   const [isSaving, setIsSaving] = React.useState(false);
   const [photoCropSource, setPhotoCropSource] = React.useState<string | null>(null);
@@ -2463,7 +2655,10 @@ function PlayersCrudTab() {
             {!isAdding && (
               <div className="grid grid-cols-3 gap-3">
                 <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase tracking-wider text-brass">Games played</label>
+                  <div className="flex justify-between items-center">
+                    <label className="text-xs font-bold uppercase tracking-wider text-brass">Games played</label>
+                    <button type="button" onClick={() => { setTotalGamesPlayed("0"); setTotalDaysPlayed("0"); setRating("2.0"); }} className="text-[10px] text-brass hover:text-white transition bg-brass/10 px-2 py-0.5 rounded">Reset Stats</button>
+                  </div>
                   <input
                     type="number"
                     min={0}
@@ -4052,6 +4247,7 @@ function PlayerView({
   const [editDisplayName, setEditDisplayName] = React.useState("");
   const [editSkillLevel, setEditSkillLevel] = React.useState("Beginner");
   const [editAvatarUrl, setEditAvatarUrl] = React.useState("");
+  const [dynamicAvatars, setDynamicAvatars] = React.useState(AVATAR_PRESETS);
   const [editStatusNote, setEditStatusNote] = React.useState("");
   const [statusNoteDraft, setStatusNoteDraft] = React.useState("");
   const [isSavingStatusNote, setIsSavingStatusNote] = React.useState(false);
@@ -4667,7 +4863,7 @@ function PlayerView({
                     {profilePhotoError && <p className="mb-2 text-xs font-semibold text-red-200">{profilePhotoError}</p>}
                     <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Choose an avatar</label>
                     <div className="grid grid-cols-5 gap-2">
-                      {AVATAR_PRESETS.map((opt) => (
+                      {dynamicAvatars.map((opt) => (
                         <button
                           key={opt.url}
                           type="button"
@@ -4680,6 +4876,19 @@ function PlayerView({
                         </button>
                       ))}
                     </div>
+                    <button 
+                      type="button" 
+                      onClick={() => {
+                        const newBatch = Array.from({length: 10}).map(() => {
+                          const seed = Math.random().toString(36).substring(7);
+                          return { name: "Random", seed, url: tapbackAvatar(seed) };
+                        });
+                        setDynamicAvatars(newBatch);
+                      }}
+                      className="w-full mt-2 py-2 text-xs font-bold text-brass bg-brass/10 hover:bg-brass/20 rounded-xl transition"
+                    >
+                      More Options
+                    </button>
                   </div>
                   <div>
                     <label className="text-[10px] uppercase font-bold text-linen/70 block mb-1">Skill Level</label>
@@ -5060,6 +5269,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
   const syncDegraded = useClubStore((s) => s.syncDegraded);
   const refreshSharedState = useClubStore((s) => s.refreshSharedState);
   const goBackFromTv = useClubStore((s) => s.goBackFromTv);
+  const finishCourt = useClubStore((s) => s.finishCourt);
   const now = useNow();
 
   React.useEffect(() => {
@@ -5282,6 +5492,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
       if (!match) return;
       if (announceCourtOvertime(court.name, [...match.teamAPlayerIds, ...match.teamBPlayerIds], players)) {
         announcedOvertimeRef.current[court.id] = repeatWindow;
+        void finishCourt(court.id);
       }
     });
 
@@ -5473,14 +5684,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
         )}
       </AnimatePresence>
 
-      {/* ── Back button ── */}
-      <div className="fixed left-2 top-2 z-50 md:left-4 md:top-4">
-        <button onClick={() => goBackFromTv()}
-          className="rounded-full border border-ivory/20 bg-ivory/5 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-ivory/70 backdrop-blur hover:bg-ivory hover:text-forest transition flex items-center gap-1 shadow-md md:border-ivory/30 md:bg-ivory/10 md:px-3 md:py-1.5 md:text-xs md:text-ivory md:shadow-lg md:gap-1.5">
-          <ArrowLeft className="h-3 w-3 md:h-3.5 md:w-3.5" />
-          <span className="sr-only sm:not-sr-only sm:inline">Back</span>
-        </button>
-      </div>
+
 
       {/* ── Auth warning ── */}
         {!online && (
@@ -5500,10 +5704,17 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
       <div className={`tv-display-shell mx-auto min-h-0 w-full max-w-[1920px] flex-1 overflow-hidden px-[clamp(0.75rem,1.5vw,1.75rem)] pb-[clamp(0.25rem,0.5vh,0.5rem)] pt-[clamp(2rem,3vh,2.5rem)]${courtCount >= 3 ? " tv-display-shell--courts-primary" : ""}`}>
 
         {/* ── Header ── */}
-        <header className="tv-display-header order-1 shrink-0 flex flex-col items-center gap-0.5 text-center md:flex-row md:items-end md:justify-between md:gap-2 md:text-left">
-          <div className="min-w-0">
-            <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.22em] text-ivory/60 leading-none">HAFF LEISURE CLUB</p>
-            <h1 className="tv-display-title font-display font-black leading-none tracking-tighter uppercase text-ivory mt-0.5">NOW PLAYING</h1>
+        <header className="tv-display-header order-1 shrink-0 flex flex-col items-center gap-4 text-center md:flex-row md:items-end md:justify-between md:gap-2 md:text-left">
+          <div className="min-w-0 flex flex-col md:flex-row md:items-center gap-3 md:gap-4">
+            <button onClick={() => goBackFromTv()}
+              className="rounded-full border border-ivory/20 bg-ivory/5 px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-ivory/70 backdrop-blur hover:bg-ivory hover:text-forest transition flex items-center justify-center gap-1.5 shadow-md md:border-ivory/30 md:bg-ivory/10 md:text-xs md:text-ivory md:shadow-lg">
+              <ArrowLeft className="h-3 w-3 md:h-3.5 md:w-3.5" />
+              <span>Back</span>
+            </button>
+            <div>
+              <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.22em] text-ivory/60 leading-none">HAFF LEISURE CLUB</p>
+              <h1 className="tv-display-title font-display font-black leading-none tracking-tighter uppercase text-ivory mt-0.5">NOW PLAYING</h1>
+            </div>
           </div>
           <div className="tv-display-header-meta flex items-center justify-center gap-1.5 md:gap-2 flex-wrap">
             {clubStatus && (

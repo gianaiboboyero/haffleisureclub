@@ -143,4 +143,8 @@ export type Announcement = {
   title: string;
   content: string;
   date: string;
+  imageUrl?: string;
+  linkUrl?: string;
+  isPopup?: boolean;
+  expiresAt?: string;
 };

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "../../lib/utils";
 
 // --- PROPS INTERFACE ---
-interface PhotoStackCardProps extends React.HTMLAttributes<HTMLDivElement> {
+interface PhotoStackCardProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "onDrag"> {
   images: string[];
   category: string;
   title: string;
