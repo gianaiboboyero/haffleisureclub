@@ -5490,14 +5490,13 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
 
       const match = matches.find((item) => item.id === court.currentMatchId);
       if (!match) return;
-      if (announceCourtOvertime(court.name, [...match.teamAPlayerIds, ...match.teamBPlayerIds], players)) {
-        announcedOvertimeRef.current[court.id] = repeatWindow;
-        
-        // Give the UI 10 seconds to show the curtain animation
-        setTimeout(() => {
-          void finishCourt(court.id);
-        }, 10000);
-      }
+      announceCourtOvertime(court.name, [...match.teamAPlayerIds, ...match.teamBPlayerIds], players);
+      announcedOvertimeRef.current[court.id] = repeatWindow;
+      
+      // Give the UI 10 seconds to show the curtain animation
+      setTimeout(() => {
+        void finishCourt(court.id);
+      }, 10000);
     });
 
     const activeCourtIds = new Set(overtimeCourts.map(({ court }) => court.id));
