@@ -6,6 +6,7 @@ const SOUND_SETTING_KEY = "haff-sound-enabled";
 const VOICE_STYLE_KEY = "haff-announcement-voice-style";
 let soundEnabled = localStorage.getItem(SOUND_SETTING_KEY) !== "false";
 let unlocked = false;
+let activeUtterance: SpeechSynthesisUtterance | null = null;
 
 export type SoundKey = "score" | "complete" | "checkin";
 export type VoiceStyle = "british" | "warm" | "clear" | "bright" | "formal";
@@ -54,6 +55,8 @@ export async function setSoundEnabled(enabled: boolean) {
   if (enabled) {
     await unlockAudio();
     playSound("checkin");
+  } else if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
   }
 }
 
@@ -116,8 +119,11 @@ export function speakAnnouncement(message: string) {
   window.setTimeout(() => {
     try {
       window.speechSynthesis.cancel();
-      void loadSpeechVoices().then((voices) => {
+      
+      const speakWithVoices = (voices: SpeechSynthesisVoice[]) => {
         const utterance = new SpeechSynthesisUtterance(message);
+        activeUtterance = utterance; // Prevent Safari GC bug
+        
         const profile = voiceProfiles[voiceStyle];
         const preferredVoice = chooseNaturalVoice(voices, profile, voiceStyle);
         if (preferredVoice) utterance.voice = preferredVoice;
@@ -125,8 +131,19 @@ export function speakAnnouncement(message: string) {
         utterance.rate = profile.rate;
         utterance.pitch = profile.pitch;
         utterance.volume = 1;
+        
+        utterance.onend = () => { activeUtterance = null; };
+        utterance.onerror = () => { activeUtterance = null; };
+        
         window.speechSynthesis.speak(utterance);
-      });
+      };
+
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        speakWithVoices(voices);
+      } else {
+        void loadSpeechVoices().then(speakWithVoices);
+      }
     } catch (e) {
       console.warn("Speech synthesis failed:", e);
     }
