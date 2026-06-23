@@ -1,4 +1,4 @@
-const TV_WINDOW_NAME = "haff-club-tv-display";
+const TV_WINDOW_NAME = "_blank";
 
 let managedTvWindow: Window | null = null;
 

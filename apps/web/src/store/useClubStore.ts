@@ -537,7 +537,8 @@ type ClubState = {
   isRefreshSuppressed: () => boolean;
   addTestimonial: (quote: string, rating: number, displayName: string) => Promise<void>;
   deleteTestimonial: (id: string) => Promise<void>;
-  addAnnouncement: (title: string, content: string) => Promise<void>;
+  addAnnouncement: (title: string, content: string, imageUrl?: string, linkUrl?: string, isPopup?: boolean) => Promise<void>;
+  editAnnouncement: (id: string, updates: Partial<Announcement>) => Promise<void>;
   deleteAnnouncement: (id: string) => Promise<void>;
   addAchievement: (title: string, value: string, desc: string) => Promise<void>;
   deleteAchievement: (id: string) => Promise<void>;
@@ -581,13 +582,27 @@ const getInitialAchievements = () => {
 };
 
 const getInitialAnnouncements = () => {
-  const existing = localStorage.getItem("haff-announcements");
-  if (existing) return JSON.parse(existing);
   const defaults = [
-    { id: "an-1", title: "Summer Pickleball Open", content: "Registration opens next Monday at the front desk. Limited slots available!", date: "2026-06-15" },
-    { id: "an-2", title: "New Court Hours", content: "We are now open from 6:00 AM to 10:00 PM daily starting this week.", date: "2026-06-14" }
+    {
+      id: "an-outfit-day-v3",
+      title: "WRONG OUTFIT PICKLEBALL DAY",
+      content: "Think you have the funniest, craziest, or most unexpected pickleball outfit? Now's your chance to show it off!\nJune 24, 2026 | 5:00 PM\n\nAll players (Newbies, Beginners, Novice) are invited to join our Wrong Outfit Pickleball Day! Come dressed in your most creative, hilarious, and out-of-place outfit and compete for exciting prizes.\n\nAll of our 3 courts will be used for open play. You'll have to register ₱150 for open play to join.\n\nPrizes:\n1st Place – ₱1,500\n2nd Place – ₱1,000\n3rd Place – ₱500\n\nIMPORTANT:\nFor safety reasons, all participants must still wear proper court shoes while playing.",
+      date: "2026-06-23",
+      imageUrl: "/outfit-day.png",
+      isPopup: true,
+      expiresAt: "2026-06-26T00:00:00.000Z"
+    },
+    { 
+      id: "an-tournament-1-v3", 
+      title: "1st Cadiz City Open Pickleball Tournament", 
+      content: "🏓 A NEW CHAPTER OF PICKLEBALL BEGINS IN CADIZ CITY.\nGet ready for the 1st Cadiz City Open Pickleball Tournament happening on July 4–5, 2026 at Haff Leisure Club!\nWhether you’re a seasoned player or just starting your pickleball journey, this tournament is OPEN TO ALL eligible players. Gather your partner, bring your best game, and compete for exciting cash prizes, exclusive tournament shirts, and souvenir bags!\n\n🔥 Categories:\n• Men’s Doubles (Beginner)\n• Men’s Doubles (Novice)\n• Women’s Doubles (Beginner)\n• Women’s Doubles (Novice)\n• Mixed Doubles (Beginner)\n\n🏆 Cash Prizes Per Category\nChampion – ₱7,000\n1st Runner-Up – ₱4,000\n2nd Runner-Up – ₱2,500\n\n📍 Haff Leisure Club, Cadiz City\n📅 July 4–5, 2026\n💰 Registration Fee: ₱1,000 / person\n➕ Additional Category: ₱600 / person\n\nThis is more than just a tournament—it’s a celebration of the fastest-growing sport and one of the highlights of the 59th Charter Day Celebration of Cadiz City.\n\n🎾 Paddles ready? Registration is now open! Scan the QR code or message us for inquiries.\nRegistration is on a first-registered, first-confirmed basis with limited slots available. Register on or before June 28, 2026.\nGuidelines will be posted shortly.\nSee you on the courts! 💚", 
+      date: "2026-06-23",
+      imageUrl: "/tournament-poster.jpg",
+      linkUrl: "https://docs.google.com/forms/d/e/1FAIpQLSd64QO3BVDqGMhVYGYjX8yareDfwNzDpxHb03fI8Ff0klr06g/viewform",
+      isPopup: true
+    }
   ];
-  localStorage.setItem("haff-announcements", JSON.stringify(defaults));
+
   return defaults;
 };
 
@@ -2959,18 +2974,22 @@ export const useClubStore = create<ClubState>((set, get) => ({
       return { testimonials: next };
     });
   },
-  addAnnouncement: async (title, content) => {
-    const announcement = { id: generateId(), title, content, date: new Date().toISOString().split("T")[0] };
+  addAnnouncement: async (title, content, imageUrl, linkUrl, isPopup) => {
+    const announcement = { id: generateId(), title, content, date: new Date().toISOString().split("T")[0], imageUrl, linkUrl, isPopup };
     set(state => {
       const next = [announcement, ...state.announcements];
-      localStorage.setItem("haff-announcements", JSON.stringify(next));
       return { announcements: next };
     });
   },
   deleteAnnouncement: async (id) => {
     set(state => {
       const next = state.announcements.filter(a => a.id !== id);
-      localStorage.setItem("haff-announcements", JSON.stringify(next));
+      return { announcements: next };
+    });
+  },
+  editAnnouncement: async (id, updates) => {
+    set(state => {
+      const next = state.announcements.map(a => a.id === id ? { ...a, ...updates } : a);
       return { announcements: next };
     });
   },

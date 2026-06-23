@@ -12,6 +12,7 @@ import {
   Coffee, 
   ArrowRight, 
   ChevronRight, 
+  ChevronLeft,
   Calendar,
   Sparkles,
   MapPin,
@@ -280,6 +281,36 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
   const [showSocialsModal, setShowSocialsModal] = React.useState(false);
   const [feedback, setFeedback] = React.useState({ category: "App", message: "", contact: "" });
   const [feedbackNotice, setFeedbackNotice] = React.useState("");
+  const [activePopupIndex, setActivePopupIndex] = React.useState<number | null>(null);
+  const [dismissTick, setDismissTick] = React.useState(0);
+
+  const popupAnns = React.useMemo(() => {
+    return announcements.filter(a => 
+      a.isPopup && 
+      !sessionStorage.getItem(`dismissed-popup-${a.id}`) && 
+      !localStorage.getItem(`dismissed-popup-forever-${a.id}`) &&
+      (!a.expiresAt || new Date() < new Date(a.expiresAt))
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [announcements, dismissTick]);
+
+  React.useEffect(() => {
+    if (activePopupIndex === null && popupAnns.length > 0) {
+      setActivePopupIndex(0);
+    } else if (activePopupIndex !== null && popupAnns.length === 0) {
+      setActivePopupIndex(null);
+    } else if (activePopupIndex !== null && activePopupIndex >= popupAnns.length) {
+      setActivePopupIndex(Math.max(0, popupAnns.length - 1));
+    }
+  }, [popupAnns, activePopupIndex]);
+
+  const closePopup = () => {
+    popupAnns.forEach(a => sessionStorage.setItem(`dismissed-popup-${a.id}`, "true"));
+    setActivePopupIndex(null);
+    setDismissTick(t => t + 1);
+  };
+
+  const activePopup = activePopupIndex !== null ? popupAnns[activePopupIndex] : null;
 
   const isAdmin = SKIP_ADMIN_LOGIN || isServerAdmin;
 
@@ -435,26 +466,22 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
             </p>
 
             <div className="flex flex-wrap gap-3 pt-2">
-              {CALENDAR_PAGE_ENABLED && (
-                <button 
-                  onClick={() => setView("calendar")} 
-                  className="flex items-center gap-2 rounded-full bg-brass px-6 py-3.5 text-sm font-black text-ink shadow-lg shadow-brass/15 transition hover:scale-[1.02] hover:bg-brass/90 active:scale-[0.98]"
-                >
-                  <span>Reserve a Court</span>
-                  <ArrowRight className="h-4 w-4" />
-                </button>
-              )}
               <button 
                 onClick={() => setView("player")} 
-                className={
-                  CALENDAR_PAGE_ENABLED
-                    ? "flex items-center gap-2 rounded-full border border-ivory/20 bg-ivory/6 px-5 py-3.5 text-sm font-bold text-ivory backdrop-blur-sm transition hover:bg-ivory/12"
-                    : "flex items-center gap-2 rounded-full border border-brass/30 bg-brass px-5 py-3.5 text-sm font-black text-forest shadow-lg shadow-brass/15 transition hover:scale-[1.02] hover:bg-brass/90 active:scale-[0.98]"
-                }
+                className="flex items-center gap-2 rounded-full bg-brass px-6 py-3.5 text-sm font-black text-forest shadow-lg shadow-brass/15 transition hover:scale-[1.02] hover:bg-brass/90 active:scale-[0.98]"
               >
                 <Users className="h-4.5 w-4.5" />
                 <span>Go Open Play</span>
               </button>
+              <a 
+                href="https://haffleisureclub.setmore.com/?utm_id=97758_v0_s00_e0_tv0&fbclid=IwZXh0bgNhZW0CMTAAYnJpZBEyMXhKYm9KVGE5WU1ucFFvcnNydGMGYXBwX2lkEDIyMjAzOTE3ODgyMDA4OTIAAR6IEW3aO9LDNwPTt_4_fP07ig68933qOpV4V60VIT6Qr7_WZ9dB2ZiOFI-xJw_aem_7GRfRUItUmcIVFbR-XCoPw"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 rounded-full border border-ivory/20 bg-ivory/5 px-6 py-3.5 text-sm font-bold text-ivory backdrop-blur-md transition hover:bg-ivory/15 hover:scale-[1.02] active:scale-[0.98]"
+              >
+                <span>Reserve a Court</span>
+                <ArrowRight className="h-4 w-4" />
+              </a>
             </div>
           </div>
 
@@ -480,9 +507,9 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
               <div className="mx-auto mb-3 h-14 w-14 overflow-hidden rounded-full bg-brass p-1 shadow-inner md:h-18 md:w-18">
                 <img src={playerImage} alt="Player" className="h-full w-full object-cover rounded-full" />
               </div>
-              <h3 className="text-sm font-black text-forest md:text-base">{CALENDAR_PAGE_ENABLED ? "Rent a Court" : "Join Open Play"}</h3>
+              <h3 className="text-sm font-black text-forest md:text-base">Rent a Court</h3>
               <p className="mt-1 text-[10px] md:text-xs font-semibold text-ink/60">
-                {CALENDAR_PAGE_ENABLED ? "₱300 per hour" : "₱150 per player"}
+                rent a court for as low as ₱300/hr. Book your court now!
               </p>
             </motion.div>
 
@@ -645,7 +672,7 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
             <h2 className="font-display text-3xl font-bold mt-1 text-ivory">Welcome Dashboard</h2>
           </div>
 
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
             
             {/* Live Courts status card */}
             <div className="relative overflow-hidden rounded-3xl bg-ivory/5 border border-ivory/10 p-6 flex flex-col justify-between min-h-[160px] backdrop-blur-sm shadow-md">
@@ -696,47 +723,6 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
                   ))
                 ) : (
                   <p className="text-[11px] text-ivory/50 italic">No waiting stacks yet.</p>
-                )}
-              </div>
-            </div>
-
-            {/* Club Announcements card */}
-            <div className="relative overflow-hidden rounded-3xl bg-ivory/5 border border-ivory/10 p-6 flex flex-col justify-between min-h-[160px] backdrop-blur-sm shadow-md">
-              <div className="flex items-center justify-between border-b border-ivory/10 pb-2">
-                <span className="text-xs font-bold text-ivory/60 uppercase tracking-wider">Announcements</span>
-                <div className="flex items-center gap-2">
-                  {isAdmin && (
-                    <button 
-                      onClick={() => setShowAddAnnouncement(true)}
-                      className="text-[10px] font-black uppercase text-brass hover:text-white transition"
-                    >
-                      + Add
-                    </button>
-                  )}
-                  <div className="h-2 w-2 rounded-full bg-brass animate-pulse" />
-                </div>
-              </div>
-              <div className="flex-1 overflow-y-auto max-h-24 mt-2 pr-1 space-y-1.5 scrollbar-none">
-                {announcements.length > 0 ? (
-                  announcements.map((a) => (
-                    <div key={a.id} className="text-[11px] bg-forest/30 border border-ivory/5 p-2 rounded-xl relative group">
-                      <div className="flex justify-between items-baseline gap-2">
-                        <span className="font-black text-brass truncate">{a.title}</span>
-                        <span className="text-[9px] text-ivory/40 shrink-0">{a.date}</span>
-                      </div>
-                      <p className="text-ivory/80 mt-1 leading-normal">{a.content}</p>
-                      {isAdmin && (
-                        <button 
-                          onClick={() => deleteAnnouncement(a.id)}
-                          className="absolute top-2 right-2 text-red-400 hover:text-red-600 font-bold text-[10px] opacity-0 group-hover:opacity-100 transition"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-[11px] text-ivory/50 italic">No news postings.</p>
                 )}
               </div>
             </div>
@@ -831,6 +817,35 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
         </section>
 
 
+
+        {/* SOCIAL MEDIA SECTION */}
+        <section className="mt-20 flex flex-col md:flex-row items-center justify-between gap-6 bg-forest rounded-3xl p-8 border border-brass/20 shadow-lg">
+          <div className="text-left space-y-2">
+            <span className="text-[10px] font-black uppercase tracking-wider text-brass">Connect With Us</span>
+            <h3 className="font-display text-3xl font-black text-ivory">Follow HAFF Leisure Club</h3>
+            <p className="text-sm text-ivory/70">Stay updated with matches, events, tournaments, and specialty kitchen announcements.</p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-4 shrink-0 w-full md:w-auto">
+            <a 
+              href="https://facebook.com/haffleisureclub" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-3 bg-ivory/10 hover:bg-ivory/20 transition rounded-xl px-6 py-4 border border-ivory/10"
+            >
+              <Facebook className="h-6 w-6 text-brass" />
+              <span className="font-bold text-ivory">Facebook</span>
+            </a>
+            <a 
+              href="https://instagram.com/haffleisureclub" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-3 bg-ivory/10 hover:bg-ivory/20 transition rounded-xl px-6 py-4 border border-ivory/10"
+            >
+              <Instagram className="h-6 w-6 text-brass" />
+              <span className="font-bold text-ivory">Instagram</span>
+            </a>
+          </div>
+        </section>
 
         {/* HLC MEMBERSHIP BENEFITS SECTION */}
         <section className="mt-24 rounded-3xl bg-ivory p-8 text-forest relative overflow-hidden border border-brass/25 shadow-xl">
@@ -991,6 +1006,62 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
           description="HAFF Leisure Club · Cadiz City"
         />
 
+        {/* CLUB ANNOUNCEMENTS */}
+        <section className="mt-20 border-t border-ivory/10 pt-16">
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <span className="text-xs font-black uppercase tracking-wider text-brass">Updates & Events</span>
+              <h3 className="mt-1 font-display text-4xl font-black text-ivory">Club Announcements</h3>
+            </div>
+            {isAdmin && (
+              <button 
+                onClick={() => setShowAddAnnouncement(true)}
+                className="rounded-full bg-brass text-forest px-4 py-2 text-xs font-black uppercase hover:bg-linen transition shadow-lg"
+              >
+                + New Announcement
+              </button>
+            )}
+          </div>
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {announcements.map((ann) => (
+              <div key={ann.id} className="group relative overflow-hidden rounded-3xl bg-ivory/5 border border-ivory/10 flex flex-col">
+                {ann.imageUrl && (
+                  <div className="h-56 w-full bg-black/20 shrink-0 border-b border-ivory/10 overflow-hidden relative">
+                    <img src={ann.imageUrl} alt={ann.title} className="w-full h-full object-cover group-hover:scale-105 transition duration-700" />
+                  </div>
+                )}
+                <div className="p-6 md:p-8 flex-1 flex flex-col">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[10px] font-black text-brass uppercase tracking-[0.2em]">{ann.date}</span>
+                    {isAdmin && (
+                      <button 
+                        onClick={() => deleteAnnouncement(ann.id)}
+                        className="text-red-400 hover:text-red-300 transition text-xs font-bold"
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                  <h4 className="font-display text-2xl font-black text-ivory mb-4 leading-tight">{ann.title}</h4>
+                  <p className="text-sm text-ivory/70 whitespace-pre-line leading-relaxed flex-1 opacity-90 line-clamp-4">
+                    {ann.content}
+                  </p>
+                  {ann.linkUrl && (
+                    <a href={ann.linkUrl} target="_blank" rel="noopener noreferrer" className="mt-6 inline-flex items-center text-xs font-black uppercase tracking-widest text-brass hover:text-ivory transition">
+                      Register / Learn More <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))}
+            {announcements.length === 0 && (
+              <div className="col-span-full rounded-3xl border border-dashed border-ivory/20 bg-ivory/5 p-16 text-center">
+                <p className="text-sm text-ivory/60 font-medium">No announcements at the moment.</p>
+              </div>
+            )}
+          </div>
+        </section>
+
         {/* FEEDBACK & TESTIMONIALS SECTION */}
         <section className="mt-20 grid gap-6 border-t border-ivory/10 pt-16 lg:grid-cols-2">
           {/* Left Column: Member stories */}
@@ -1068,7 +1139,13 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
             <span className="hover:text-ivory/70 transition cursor-pointer">Terms of Play</span>
             <span className="hover:text-ivory/70 transition cursor-pointer">Contact Desk</span>
             <button className="transition hover:text-brass text-brass font-bold flex items-center gap-1" onClick={() => setShowSocialsModal(true)}>Social Media</button>
-            <button className="transition hover:text-ivory/70" onClick={() => setView("admin")}>Staff access</button>
+            {isAdmin ? (
+              <button className="transition hover:text-ivory/70" onClick={() => {
+                setView("admin");
+              }}>Staff access</button>
+            ) : (
+              <span></span>
+            )}
           </div>
         </div>
       </footer>
@@ -1141,12 +1218,12 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
       {/* ADD ANNOUNCEMENT MODAL */}
       {showAddAnnouncement && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="bg-[#0b3a2c] text-ivory border border-white/10 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl relative">
+          <div className="bg-[#0b3a2c] text-ivory border border-white/10 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl relative max-h-[90vh] overflow-y-auto">
             <button onClick={() => setShowAddAnnouncement(false)} className="absolute right-4 top-4 text-white/60 hover:text-white">✕</button>
             <h4 className="font-display text-2xl font-black text-brass">Add Announcement</h4>
             <div className="space-y-3">
               <div>
-                <label className="text-[10px] font-black uppercase tracking-wider text-brass block mb-1 font-bold">Title</label>
+                <label className="text-[10px] font-black uppercase tracking-wider text-brass block mb-1 font-bold">Title (Headline)</label>
                 <input 
                   type="text" 
                   value={annTitle} 
@@ -1156,7 +1233,7 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
                 />
               </div>
               <div>
-                <label className="text-[10px] font-black uppercase tracking-wider text-brass block mb-1 font-bold">Content</label>
+                <label className="text-[10px] font-black uppercase tracking-wider text-brass block mb-1 font-bold">Content (Body)</label>
                 <textarea 
                   value={annContent} 
                   onChange={(e) => setAnnContent(e.target.value)} 
@@ -1164,11 +1241,36 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
                   className="w-full rounded-xl bg-forest/50 text-white border border-white/10 px-3 py-2 text-sm min-h-24 focus:outline-none"
                 />
               </div>
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-wider text-brass block mb-1 font-bold">Image URL (Optional)</label>
+                <input 
+                  type="text" 
+                  id="annImageUrl"
+                  placeholder="e.g. /poster.jpg" 
+                  className="w-full rounded-xl bg-forest/50 text-white border border-white/10 px-3 py-2 text-sm focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-wider text-brass block mb-1 font-bold">Link URL (Optional - For Register Button)</label>
+                <input 
+                  type="text" 
+                  id="annLinkUrl"
+                  placeholder="e.g. https://forms.gle/..." 
+                  className="w-full rounded-xl bg-forest/50 text-white border border-white/10 px-3 py-2 text-sm focus:outline-none"
+                />
+              </div>
+              <div className="flex items-center gap-2 mt-2">
+                <input type="checkbox" id="annIsPopup" className="rounded border-white/10 text-brass focus:ring-brass bg-white/10" />
+                <label htmlFor="annIsPopup" className="text-xs font-bold text-ivory cursor-pointer">Show as popup on open</label>
+              </div>
             </div>
             <button 
               onClick={async () => {
                 if (!annTitle.trim() || !annContent.trim()) return;
-                await addAnnouncement(annTitle.trim(), annContent.trim());
+                const imageUrl = (document.getElementById("annImageUrl") as HTMLInputElement)?.value.trim();
+                const linkUrl = (document.getElementById("annLinkUrl") as HTMLInputElement)?.value.trim();
+                const isPopup = (document.getElementById("annIsPopup") as HTMLInputElement)?.checked;
+                await addAnnouncement(annTitle.trim(), annContent.trim(), imageUrl || undefined, linkUrl || undefined, isPopup);
                 setAnnTitle("");
                 setAnnContent("");
                 setShowAddAnnouncement(false);
@@ -1286,6 +1388,82 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
             >
               Add Testimonial
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* POPUP ANNOUNCEMENT MODAL */}
+      {activePopup && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-md">
+          <div className="bg-[#FFF8EA] text-forest rounded-3xl overflow-hidden max-w-4xl w-full shadow-2xl relative flex flex-col md:flex-row max-h-[90vh] md:max-h-[80vh]">
+            <button 
+              onClick={closePopup}
+              className="absolute right-4 top-4 bg-black/20 text-white rounded-full p-1.5 hover:bg-black/40 transition z-20"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            {popupAnns.length > 1 && (
+              <>
+                <button 
+                  onClick={() => setActivePopupIndex(prev => prev === 0 ? popupAnns.length - 1 : prev! - 1)}
+                  className="absolute left-2 md:left-4 top-1/2 -translate-y-1/2 bg-black/30 hover:bg-black/60 text-white rounded-full p-2 transition z-20 backdrop-blur"
+                >
+                  <ChevronLeft className="h-6 w-6 md:h-8 md:w-8" />
+                </button>
+                <button 
+                  onClick={() => setActivePopupIndex(prev => prev === popupAnns.length - 1 ? 0 : prev! + 1)}
+                  className="absolute right-2 md:right-4 top-1/2 -translate-y-1/2 bg-black/10 hover:bg-black/30 text-forest hover:text-white rounded-full p-2 transition z-20 backdrop-blur"
+                >
+                  <ChevronRight className="h-6 w-6 md:h-8 md:w-8" />
+                </button>
+              </>
+            )}
+            <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+              {activePopup.imageUrl && (
+                <div className="md:w-1/2 bg-black/5 flex items-center justify-center shrink-0 border-b md:border-b-0 md:border-r border-black/10 p-4 md:p-6">
+                  <img src={activePopup.imageUrl} alt="Announcement" className="w-full h-auto max-h-[35vh] md:max-h-[70vh] object-contain rounded-xl shadow-sm" />
+                </div>
+              )}
+              <div className="flex-1 flex flex-col overflow-y-auto">
+                <div className="p-4 bg-black/5 border-b border-black/5 flex items-center justify-center md:justify-end">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          localStorage.setItem(`dismissed-popup-forever-${activePopup.id}`, "true");
+                        } else {
+                          localStorage.removeItem(`dismissed-popup-forever-${activePopup.id}`);
+                        }
+                      }} 
+                      className="rounded border-ink/20 text-forest focus:ring-forest"
+                    />
+                    <span className="text-xs font-bold text-ink/70">Do not show again next time</span>
+                  </label>
+                </div>
+                <div className="p-6 md:p-10 text-center md:text-left space-y-4 flex-1 flex flex-col justify-center px-12 md:px-14">
+                  <span className="text-[10px] font-black uppercase tracking-[0.2em] text-brass block">
+                    Announcement {popupAnns.length > 1 ? `(${activePopupIndex! + 1} / ${popupAnns.length})` : ""}
+                  </span>
+                  <h3 className="font-display text-2xl md:text-3xl font-black text-black leading-tight">{activePopup.title}</h3>
+                  <p className="text-xs md:text-sm text-black/80 whitespace-pre-line leading-relaxed mx-auto md:mx-0">
+                    {activePopup.content}
+                  </p>
+                  {activePopup.linkUrl && (
+                    <div className="pt-6">
+                      <a 
+                        href={activePopup.linkUrl} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="inline-block bg-brass text-forest font-black px-8 py-3.5 rounded-full hover:bg-brass/90 hover:scale-105 active:scale-95 transition shadow-lg w-full md:w-auto text-center"
+                      >
+                        Register / Learn More
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
