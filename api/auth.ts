@@ -62,7 +62,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }).select().single();
 
     if (playerError) {
-      return res.status(500).json({ error: "Failed to create player record." });
+      console.error("Player insert error:", playerError);
+      return res.status(500).json({ error: "Failed to create player record. Details: " + playerError.message });
     }
 
     const { data: user, error: userError } = await supabase.from("User").insert({
@@ -73,7 +74,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }).select().single();
 
     if (userError) {
-      return res.status(500).json({ error: "Failed to create user record." });
+      console.error("User insert error:", userError);
+      return res.status(500).json({ error: "Failed to create user record. Details: " + userError.message });
     }
     user.player = newPlayer;
     await createSession(req, user.id, res);
