@@ -13,6 +13,27 @@ export async function apiFetch(path: string, options?: RequestInit): Promise<Res
   });
 }
 
+export async function apiFetchWithTimeout(
+  path: string,
+  options?: RequestInit,
+  timeoutMs = 8000
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  const signal = options?.signal
+    ? AbortSignal.any([options.signal, controller.signal])
+    : controller.signal;
+
+  try {
+    return await apiFetch(path, {
+      ...options,
+      signal
+    });
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 /** Safely parse a fetch Response — never throws on HTML error pages or invalid JSON. */
 export async function parseResponseJson<T = Record<string, unknown>>(response: Response): Promise<T> {
   const text = await response.text();
@@ -32,6 +53,26 @@ export async function apiJson<T = unknown>(path: string, options?: RequestInit):
     headers: { "Content-Type": "application/json", ...(options?.headers ?? {}) },
     ...options
   });
+  const data = await parseResponseJson<T>(response);
+  if (!response.ok) {
+    const message =
+      typeof data === "object" && data !== null && "error" in data
+        ? String((data as { error?: string }).error)
+        : `Request failed (${response.status})`;
+    throw new Error(message);
+  }
+  return data;
+}
+
+export async function apiJsonWithTimeout<T = unknown>(
+  path: string,
+  options?: RequestInit,
+  timeoutMs = 8000
+): Promise<T> {
+  const response = await apiFetchWithTimeout(path, {
+    headers: { "Content-Type": "application/json", ...(options?.headers ?? {}) },
+    ...options
+  }, timeoutMs);
   const data = await parseResponseJson<T>(response);
   if (!response.ok) {
     const message =

@@ -102,7 +102,7 @@ import type { Court, Match, Player, TvBroadcast } from "./lib/types";
 import "./styles/globals.css";
 import { Analytics } from "@vercel/analytics/react";
 import { SKIP_ADMIN_LOGIN } from "./lib/devFlags";
-import { apiFetch, apiJson, parseResponseJson } from "./lib/api";
+import { apiFetch, apiFetchWithTimeout, apiJson, apiJsonWithTimeout, parseResponseJson } from "./lib/api";
 
 const LandingView = React.lazy(() =>
   import("./components/LandingView").then((module) => ({ default: module.LandingView }))
@@ -289,13 +289,11 @@ export default function App() {
   const [sessionReady, setSessionReady] = React.useState(false);
 
   const refreshSession = React.useCallback(() => {
-    return fetch(`/api/auth?action=me`, { credentials: "include" })
-      .then(async (response) => {
-        const text = await response.text();
-        return text && response.headers.get("content-type")?.includes("application/json") ? JSON.parse(text) : { user: null };
-      })
+    setSessionReady(false);
+    return apiFetchWithTimeout("/api/auth?action=me", undefined, 7000)
+      .then((response) => parseResponseJson<{ user?: SessionMember & { adminWriteToken?: string | null } }>(response))
       .then((data) => {
-        setSessionMember(data.user);
+        setSessionMember(data.user ?? null);
         setAdminWriteToken(data.user?.adminWriteToken ?? null);
       })
       .catch(() => {
@@ -4066,15 +4064,10 @@ function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void | Pr
     setError("");
     setLoading(true);
     try {
-      const res = await fetch(`/api/auth?action=${mode}`, {
+      const data = await apiJsonWithTimeout<{ user: AuthMember }>(`/api/auth?action=${mode}`, {
         method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form)
-      });
-      const text = await res.text();
-      const data = text ? JSON.parse(text) : {};
-      if (!res.ok) throw new Error(data.error ?? "Unable to continue");
+      }, 12000);
       if (mode === "register") {
         setSuccessMsg("Welcome to HAFF Leisure Club! Your account has been created.");
       }
