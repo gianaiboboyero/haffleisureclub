@@ -1,7 +1,7 @@
 import React from "react";
-import { Lock, Megaphone, RotateCcw } from "lucide-react";
+import { Lock, Megaphone, RotateCcw, CalendarClock } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { Court, Match, Player } from "../lib/types";
+import type { Court, Match, Player, Reservation } from "../lib/types";
 import { getPlayerDisplayLabel } from "../lib/utils";
 
 type CourtPlayer = Pick<Player, "id" | "displayName" | "avatarUrl" | "skillLevel" | "rating">;
@@ -12,6 +12,7 @@ type TvPickleballCourtProps = {
   teamA: CourtPlayer[];
   teamB: CourtPlayer[];
   reservedPlayers?: CourtPlayer[];
+  activeReservation?: Reservation & { participantNames?: string[] };
   getPlayerAvatar: (player: CourtPlayer) => string;
   onAnnounce?: () => void;
   timerSlot?: React.ReactNode;
@@ -60,6 +61,70 @@ function OvertimeCurtain() {
          </div>
       </motion.div>
     </div>
+  );
+}
+
+function ReservationOverlay({
+  reservation,
+}: {
+  reservation: Reservation & { participantNames?: string[] };
+}) {
+  const fmt = (iso: string) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Manila",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(iso));
+
+  const names = reservation.participantNames ?? [];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="absolute inset-0 z-[90] flex flex-col items-center justify-center bg-[#0a2a1e]/92 backdrop-blur-sm rounded-[inherit] p-4 text-center"
+    >
+      {/* Badge */}
+      <div className="flex items-center gap-2 rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-1 mb-4">
+        <CalendarClock size={14} className="text-amber-300" />
+        <span className="text-[11px] font-black uppercase tracking-widest text-amber-300">Court Rental</span>
+      </div>
+
+      {/* Title */}
+      <p className="font-display text-2xl sm:text-3xl font-black text-ivory leading-tight">
+        {reservation.title || "Reserved"}
+      </p>
+
+      {/* Time */}
+      <p className="mt-2 text-sm font-bold text-linen/70">
+        {fmt(reservation.startTime)} – {fmt(reservation.endTime)}
+      </p>
+
+      {/* Player names */}
+      {names.length > 0 && (
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          {names.map((name, i) => (
+            <span
+              key={i}
+              className="rounded-full border border-brass/30 bg-brass/10 px-3 py-1 text-xs font-bold text-brass"
+            >
+              {name}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Subtle court lines watermark */}
+      <div
+        className="absolute inset-0 opacity-5 pointer-events-none"
+        style={{
+          backgroundImage:
+            "linear-gradient(90deg, rgba(115,255,180,0.6) 1px, transparent 1px), linear-gradient(rgba(115,255,180,0.6) 1px, transparent 1px)",
+          backgroundSize: "40px 40px",
+        }}
+      />
+    </motion.div>
   );
 }
 
@@ -217,6 +282,7 @@ export const TvPickleballCourt = React.memo(function TvPickleballCourt({
   teamA,
   teamB,
   reservedPlayers = [],
+  activeReservation,
   getPlayerAvatar,
   onAnnounce,
   timerSlot,
@@ -225,12 +291,17 @@ export const TvPickleballCourt = React.memo(function TvPickleballCourt({
   const isPlaying = Boolean(match);
   const isReserved = !isPlaying && court.status === "Reserved";
   const isAssigned = !isPlaying && court.status === "Assigned";
+  // Active schedule-based reservation takes priority over idle states
+  const hasActiveRental = Boolean(activeReservation) && !isPlaying;
 
   let statusTone: "playing" | "reserved" | "available" | "maintenance" | "paused" = "available";
   let statusLabel = "AVAILABLE";
   if (isPlaying) {
     statusTone = "playing";
     statusLabel = "PLAYING";
+  } else if (hasActiveRental) {
+    statusTone = "reserved";
+    statusLabel = "RENTAL";
   } else if (court.status === "Maintenance") {
     statusTone = "maintenance";
     statusLabel = "MAINTENANCE";
@@ -252,6 +323,9 @@ export const TvPickleballCourt = React.memo(function TvPickleballCourt({
     >
       <AnimatePresence>
         {isOvertime && <OvertimeCurtain />}
+        {hasActiveRental && activeReservation && (
+          <ReservationOverlay key="rental" reservation={activeReservation} />
+        )}
       </AnimatePresence>
       <CourtHeader
         courtName={court.name}

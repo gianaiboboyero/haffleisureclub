@@ -123,16 +123,21 @@ export const playerProfilesFrom = (value: unknown): PlayerProfileSnapshot[] =>
           if (!entry || typeof entry !== "object") return null;
           const profile = entry as Record<string, unknown>;
           if (typeof profile.id !== "string" || typeof profile.displayName !== "string") return null;
+          // Strip inline base64 avatar data — these are 100KB+ per player and get
+          // re-broadcast to every tab on every state change, ballooning egress.
+          // Only Supabase Storage URLs (https://...) are kept; local data: blobs are dropped.
+          const avatarUrl = typeof profile.avatarUrl === "string" && !profile.avatarUrl.startsWith("data:") ? profile.avatarUrl : null;
           return {
             id: profile.id,
             displayName: profile.displayName,
-            avatarUrl: typeof profile.avatarUrl === "string" ? profile.avatarUrl : null,
+            avatarUrl,
             skillLevel: typeof profile.skillLevel === "string" ? profile.skillLevel : "Beginner",
             statusNote: typeof profile.statusNote === "string" ? profile.statusNote : null
           } satisfies PlayerProfileSnapshot;
         })
         .filter((entry): entry is PlayerProfileSnapshot => entry !== null)
     : [];
+
 
 export function isUnchangedSince(sinceRaw: string, serverUpdatedAt: string | Date): boolean {
   const serverIso =

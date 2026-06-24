@@ -33,6 +33,13 @@ import {
   reservationOverlapsHour,
   reservationTimeMinutes
 } from "../lib/reservationTime";
+import {
+  isSlotRentable,
+  isSlotOpenPlay,
+  getRentalCutoffMinutes,
+  bookingExceedsRentalWindow,
+  SCHEDULE_CLOSE_MINUTES
+} from "../lib/courtSchedule";
 
 const isCourtBookable = (court: Court) => {
   const setting = getCourtSetting(court.id);
@@ -167,9 +174,11 @@ function CourtSlotGrid({
                 {Array.from({ length: 16 }, (_, i) => {
                   const hourStart = (6 + i) * 60;
                   const hourEnd = hourStart + 60;
-                  const openMins = parseClock(setting.openingTime || "06:00");
-                  const closeMins = parseClock(setting.closingTime || "22:00");
-                  if (hourStart < openMins || hourStart >= closeMins) {
+                  const courtNum = court.number ?? 3;
+                  const rentable = isSlotRentable(courtNum, selectedDay, hourStart);
+                  const openPlay = isSlotOpenPlay(courtNum, selectedDay, hourStart);
+                  // Slots outside operating hours entirely (before 6AM or after 10PM)
+                  if (!rentable && !openPlay) {
                     return (
                       <div className="rounded-xl border border-white/5 bg-slate-800/40 px-3 py-3 text-center text-ivory/30" key={hourStart}>
                         <span className="block text-xs font-black">{clockLabel(hourStart)}</span>
@@ -181,6 +190,43 @@ function CourtSlotGrid({
                     reservationOverlapsHour(r, hourStart, hourEnd)
                   );
                   const reservation = overlapping[0];
+                  // Open Play zone — show informational badge, not bookable
+                  if (openPlay) {
+                    if (reservation) {
+                      // Shouldn't happen but handle gracefully
+                      const isPending = reservation.status === "Requested";
+                      const label = mode === "admin"
+                        ? (reservation.hostDisplayName ?? reservation.title ?? "Reserved")
+                        : (reservation.publicLabel || reservation.title || "Reserved");
+                      return (
+                        <button
+                          type="button"
+                          className={`rounded-xl border px-3 py-3 text-center transition hover:opacity-95 ${
+                            isPending
+                              ? "border-amber-400/40 bg-amber-400/15 hover:border-amber-400/60"
+                              : "border-brass/30 bg-brass/10 hover:border-brass/50"
+                          }`}
+                          key={hourStart}
+                          onClick={() => onOpenSlot({ courtId: court.id, date: selectedDay, startMinutes: hourStart, reservation })}
+                        >
+                          <span className={`block text-xs font-black ${isPending ? "text-amber-300" : "text-brass"}`}>{clockLabel(hourStart)}</span>
+                          <span className={`mt-0.5 block truncate text-[9px] font-bold ${isPending ? "text-amber-200/80" : "text-brass/80"}`} title={label}>{label}</span>
+                        </button>
+                      );
+                    }
+                    return (
+                      <div
+                        className="rounded-xl border border-teal-500/25 bg-teal-500/8 px-3 py-3 text-center cursor-default select-none"
+                        key={hourStart}
+                      >
+                        <span className="block text-xs font-black text-teal-300/80">{clockLabel(hourStart)}</span>
+                        <span className="mt-0.5 block text-[9px] font-bold text-teal-400/70">
+                          {mode === "admin" ? "Open Play" : "Walk In"}
+                        </span>
+                      </div>
+                    );
+                  }
+                  // Rental zone
                   if (reservation) {
                     const isPending = reservation.status === "Requested";
                     const host = playerName?.(reservation) ?? reservation.hostDisplayName ?? reservation.publicLabel ?? "Reserved";
@@ -321,7 +367,8 @@ export function AdminReservationCalendar() {
               <div className="mt-5 flex flex-wrap gap-2 text-[11px] font-black uppercase tracking-[0.12em]">
                 <Legend className="bg-brass text-forest" label="Confirmed" />
                 <Legend className="bg-amber-500/80 text-forest" label="Pending" />
-                <Legend className="border border-dashed border-white/20 text-ivory/50" label="Open" />
+                <Legend className="border border-teal-500/40 bg-teal-500/10 text-teal-300" label="Open Play" />
+                <Legend className="border border-dashed border-white/20 text-ivory/50" label="Open Rental Slot" />
               </div>
             }
           />
@@ -612,7 +659,7 @@ export function ReservationCalendar() {
           <div>
             <p className="text-xs font-black uppercase tracking-[0.22em] text-brass">HAFF court schedule</p>
             <h1 className="mt-1 font-display text-4xl font-black sm:text-5xl">Book a Court</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-linen/70">Choose a day and tap any open slot. Player bookings require admin approval. Court rate: {formatPeso(COURT_HOURLY_FEE)}/hr.</p>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-linen/70">Choose a day and tap any open slot. Player bookings require admin approval. Court rate: {formatPeso(COURT_HOURLY_FEE)}/hr. Teal slots marked <span className="font-black text-teal-300">Walk In</span> are open play — no reservation needed, just show up.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" className="calendar-control" onClick={() => setWeekStart(addDays(weekStart, -7))}><ChevronLeft size={16} /> Previous Week</button>
@@ -630,6 +677,7 @@ export function ReservationCalendar() {
         <div className="mt-5 flex flex-wrap gap-2 text-[11px] font-black uppercase tracking-[0.12em]">
           <Legend className="bg-brass text-forest" label="Confirmed" />
           <Legend className="bg-amber-500/80 text-forest" label="Pending" />
+          <Legend className="border border-teal-500/40 bg-teal-500/10 text-teal-300" label="Open Play – Walk In" />
           <Legend className="bg-slate-600 text-white" label="Unavailable" />
         </div>
       </header>
@@ -666,6 +714,7 @@ export function ReservationCalendar() {
           member={member}
           selection={drawer}
           courts={courts}
+          players={players}
           close={() => setDrawer(null)}
           onMemberUpdate={setMember}
           onReserve={async (data) => { await addReservation(data); setDrawer(null); }}
@@ -679,11 +728,12 @@ export function ReservationCalendar() {
 
 // ── Reservation Drawer ─────────────────────────────────────────────────────────
 function ReservationDrawer({
-  member, selection, courts, close, onMemberUpdate, onReserve, onCancel, isAdmin
+  member, selection, courts, players, close, onMemberUpdate, onReserve, onCancel, isAdmin
 }: {
   member: Member;
   selection: { courtId: string; date: Date; startMinutes: number; reservation?: CalReservation };
   courts: Court[];
+  players?: ReturnType<typeof useClubStore.getState>["players"];
   close: () => void;
   onMemberUpdate: (m: Member) => void;
   onReserve: (data: Omit<Reservation, "id">) => Promise<void>;
@@ -699,6 +749,38 @@ function ReservationDrawer({
   const [successMsg, setSuccessMsg] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
   const [showConfirm, setShowConfirm] = React.useState(false);
+
+  // Participant picker (admin only)
+  const [participantSearch, setParticipantSearch] = React.useState("");
+  const [selectedPlayerIds, setSelectedPlayerIds] = React.useState<string[]>(reservation?.playerIds ?? []);
+  const [customNames, setCustomNames] = React.useState<{id: string; name: string}[]>([]);
+  const searchResults = React.useMemo(() => {
+    if (!participantSearch.trim() || !players) return [];
+    const q = participantSearch.toLowerCase();
+    return players.filter(p =>
+      p.displayName.toLowerCase().includes(q) &&
+      !selectedPlayerIds.includes(p.id)
+    ).slice(0, 6);
+  }, [participantSearch, players, selectedPlayerIds]);
+
+  const removeParticipant = (id: string) => {
+    setSelectedPlayerIds(prev => prev.filter(x => x !== id));
+    setCustomNames(prev => prev.filter(x => x.id !== id));
+  };
+  const addCustomName = () => {
+    const name = participantSearch.trim();
+    if (!name) return;
+    const id = `guest-${Date.now()}`;
+    setCustomNames(prev => [...prev, { id, name }]);
+    setSelectedPlayerIds(prev => [...prev, id]);
+    setParticipantSearch("");
+  };
+  const allSelectedLabels = selectedPlayerIds.map(id => {
+    const custom = customNames.find(c => c.id === id);
+    if (custom) return { id, name: custom.name, isCustom: true };
+    const p = players?.find(x => x.id === id);
+    return { id, name: p?.displayName ?? id, isCustom: false };
+  });
 
   const [authMode, setAuthMode] = React.useState<"login" | "register">("login");
   const [authForm, setAuthForm] = React.useState({ displayName: "", email: "", password: "", skillLevel: "Beginner" });
@@ -740,15 +822,14 @@ function ReservationDrawer({
       return false;
     }
     
-    // Validate that booking doesn't extend beyond closing hours
+    // Validate that booking doesn't extend beyond the rental cutoff for this court/day
     if (court) {
-      const setting = getCourtSetting(court.id);
-      const closingMinutes = parseClock(setting.closingTime || "22:00");
+      const courtNum = court.number ?? 3;
       const totalDurationMinutes = (1 + extendHours) * 60;
       const endMinutes = selection.startMinutes + totalDurationMinutes;
-      
-      if (endMinutes > closingMinutes) {
-        setError(`This booking would extend beyond closing time (${clockLabel(closingMinutes)}). Please choose a shorter duration or earlier start time.`);
+      if (bookingExceedsRentalWindow(courtNum, selection.date, selection.startMinutes, endMinutes)) {
+        const cutoffMinutes = getRentalCutoffMinutes(courtNum, selection.date);
+        setError(`This booking would extend beyond the rental window (${clockLabel(cutoffMinutes)}). Slots after that time are Open Play — walk-in only.`);
         return false;
       }
     }
@@ -766,7 +847,7 @@ function ReservationDrawer({
         notes: notes.trim() || undefined,
         hostPlayerId: member?.playerId || "admin",
         hostDisplayName: member?.displayName,
-        playerIds: [],
+        playerIds: selectedPlayerIds,
         status: isAdmin ? "Confirmed" : "Requested",
         paymentStatus: isAdmin ? "Paid" : "Pending",
         feeAmount: estimateCourtFee(extendHours)
@@ -841,6 +922,61 @@ function ReservationDrawer({
           <div className="mt-6 space-y-4">
             {isAdmin && (
               <label className="block text-xs font-black uppercase tracking-wider">Reservation title<input className="calendar-input" value={title} onChange={(e) => setTitle(e.target.value)} /></label>
+            )}
+            <label className="block text-xs font-black uppercase tracking-wider">
+              Notes for admin
+              <textarea
+                className="calendar-input min-h-16"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="e.g. beginner group, need extra balls, celebrating a birthday..."
+              />
+            </label>
+            {isAdmin && players && (
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider text-forest/70 mb-1.5">Players on court</p>
+                {/* Selected participants */}
+                {allSelectedLabels.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {allSelectedLabels.map(({id, name, isCustom}) => (
+                      <span key={id} className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold ${isCustom ? "bg-amber-100 text-amber-800" : "bg-forest/10 text-forest"}`}>
+                        {isCustom ? "👤" : "🏓"} {name}
+                        <button type="button" onClick={() => removeParticipant(id)} className="ml-0.5 text-forest/50 hover:text-red-600 font-black">×</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {/* Search input */}
+                <div className="relative">
+                  <input
+                    className="calendar-input pr-20"
+                    value={participantSearch}
+                    onChange={e => setParticipantSearch(e.target.value)}
+                    placeholder="Search roster or type a guest name…"
+                    onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); if (searchResults.length === 0 && participantSearch.trim()) addCustomName(); }}}
+                  />
+                  {participantSearch.trim() && searchResults.length === 0 && (
+                    <button type="button" onClick={addCustomName} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-forest/10 px-2 py-1 text-[10px] font-black text-forest hover:bg-forest/20">Add guest</button>
+                  )}
+                </div>
+                {/* Roster suggestions */}
+                {searchResults.length > 0 && (
+                  <div className="mt-1 rounded-xl border border-forest/10 bg-white shadow-lg overflow-hidden">
+                    {searchResults.map(p => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-forest/5 text-forest"
+                        onClick={() => { setSelectedPlayerIds(prev => [...prev, p.id]); setParticipantSearch(""); }}
+                      >
+                        <span className="h-6 w-6 shrink-0 rounded-full bg-forest/10 text-center text-[10px] leading-6 font-bold">{p.displayName[0]}</span>
+                        <span className="font-semibold">{p.displayName}</span>
+                        <span className="ml-auto text-[10px] text-forest/40">{p.skillLevel}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
             <label className="block text-xs font-black uppercase tracking-wider">
               Notes for admin

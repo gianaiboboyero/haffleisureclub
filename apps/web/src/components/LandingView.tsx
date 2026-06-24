@@ -750,10 +750,7 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
                   <span className="text-forest">👥</span>
                   <span>Maximum of 4 players per court booking (Extra ₱100/hr per additional player)</span>
                 </li>
-                <li className="flex items-start gap-2">
-                  <span className="text-forest">🏓</span>
-                  <span>Equipment is provided (Additional paddles available for rent)</span>
-                </li>
+
                 <li className="flex items-start gap-2">
                   <span className="text-forest">🚫</span>
                   <span>No cancellations</span>

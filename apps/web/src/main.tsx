@@ -4553,7 +4553,7 @@ function PlayerView({
         </motion.div>
       )}
       
-      {!sessionMember && (
+      {!sessionMember && !player && (
         <AuthModal onSuccess={async (member) => {
           await seedAuthenticatedPlayer(member);
           if (member?.playerId) {
@@ -5297,6 +5297,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
   const courts = useClubStore((s) => s.courts);
   const matches = useClubStore((s) => s.matches);
   const players = useClubStore((s) => s.players);
+  const reservations = useClubStore((s) => s.reservations);
   const stackOrder = useClubStore((s) => s.stackOrder);
   const clubStatus = useClubStore((s) => s.clubStatus);
   const tvBroadcast = useClubStore((s) => s.tvBroadcast);
@@ -5306,6 +5307,30 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
   const goBackFromTv = useClubStore((s) => s.goBackFromTv);
   const finishCourt = useClubStore((s) => s.finishCourt);
   const now = useNow();
+
+  // Compute which courts have an active confirmed reservation right now.
+  // Runs every second (now changes) but is very cheap — just a filter + map.
+  const activeReservationByCourt = React.useMemo(() => {
+    const result: Record<string, typeof reservations[number] & { participantNames: string[] }> = {};
+    for (const r of reservations) {
+      if (r.status !== "Confirmed") continue;
+      const start = new Date(r.startTime).getTime();
+      const end = new Date(r.endTime).getTime();
+      const nowMs = now.getTime();
+      if (nowMs >= start && nowMs < end) {
+        // Resolve participant display names from playerIds
+        const participantNames = (r.playerIds ?? []).map(id => {
+          if (id.startsWith("guest-")) return id.replace(/^guest-\d+-?/, "") || "Guest";
+          return players.find(p => p.id === id)?.displayName ?? "Player";
+        });
+        // Prefer the reservation with the earliest start if multiple exist for same court
+        if (!result[r.courtId] || start < new Date(result[r.courtId].startTime).getTime()) {
+          result[r.courtId] = { ...r, participantNames };
+        }
+      }
+    }
+    return result;
+  }, [reservations, players, now]);
 
   React.useEffect(() => {
     void refreshSharedState({ force: true, context: "tv" });
@@ -5778,6 +5803,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
                 teamA={teamA}
                 teamB={teamB}
                 reservedPlayers={reservedPlayers}
+                activeReservation={activeReservationByCourt[court.id]}
                 getPlayerAvatar={getPlayerAvatar}
                 isOvertime={overtimeCourts.some(o => o.court.id === court.id)}
                 onAnnounce={
