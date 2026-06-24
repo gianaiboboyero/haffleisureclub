@@ -1395,37 +1395,37 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
       {/* POPUP ANNOUNCEMENT MODAL */}
       {activePopup && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-md">
-          <div className="bg-[#FFF8EA] text-forest rounded-3xl overflow-hidden max-w-4xl w-full shadow-2xl relative flex flex-col md:flex-row max-h-[90vh] md:max-h-[80vh]">
+          <div className="bg-[#FFF8EA] text-forest rounded-3xl overflow-hidden max-w-lg md:max-w-4xl w-[92%] sm:w-full shadow-2xl relative flex flex-col md:flex-row max-h-[85vh] md:max-h-[80vh]">
             <button 
               onClick={closePopup}
-              className="absolute right-4 top-4 bg-black/20 text-white rounded-full p-1.5 hover:bg-black/40 transition z-20"
+              className="absolute right-3 top-3 md:right-4 top-4 bg-black/20 text-white rounded-full p-1.5 hover:bg-black/40 transition z-20"
             >
-              <X className="h-5 w-5" />
+              <X className="h-4.5 w-4.5 md:h-5 md:w-5" />
             </button>
             {popupAnns.length > 1 && (
               <>
                 <button 
                   onClick={() => setActivePopupIndex(prev => prev === 0 ? popupAnns.length - 1 : prev! - 1)}
-                  className="absolute left-2 md:left-4 top-1/2 -translate-y-1/2 bg-black/30 hover:bg-black/60 text-white rounded-full p-2 transition z-20 backdrop-blur"
+                  className="absolute left-2 md:left-4 top-1/2 -translate-y-1/2 bg-black/30 hover:bg-black/60 text-white rounded-full p-1.5 md:p-2 transition z-20 backdrop-blur"
                 >
-                  <ChevronLeft className="h-6 w-6 md:h-8 md:w-8" />
+                  <ChevronLeft className="h-5 w-5 md:h-8 md:w-8" />
                 </button>
                 <button 
                   onClick={() => setActivePopupIndex(prev => prev === popupAnns.length - 1 ? 0 : prev! + 1)}
-                  className="absolute right-2 md:right-4 top-1/2 -translate-y-1/2 bg-black/10 hover:bg-black/30 text-forest hover:text-white rounded-full p-2 transition z-20 backdrop-blur"
+                  className="absolute right-2 md:right-4 top-1/2 -translate-y-1/2 bg-black/10 hover:bg-black/30 text-forest hover:text-white rounded-full p-1.5 md:p-2 transition z-20 backdrop-blur"
                 >
-                  <ChevronRight className="h-6 w-6 md:h-8 md:w-8" />
+                  <ChevronRight className="h-5 w-5 md:h-8 md:w-8" />
                 </button>
               </>
             )}
             <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
               {activePopup.imageUrl && (
-                <div className="md:w-1/2 bg-black/5 flex items-center justify-center shrink-0 border-b md:border-b-0 md:border-r border-black/10 p-4 md:p-6">
-                  <img src={activePopup.imageUrl} alt="Announcement" className="w-full h-auto max-h-[35vh] md:max-h-[70vh] object-contain rounded-xl shadow-sm" />
+                <div className="md:w-1/2 bg-black/5 flex items-center justify-center shrink-0 border-b md:border-b-0 md:border-r border-black/10 p-3 md:p-6">
+                  <img src={activePopup.imageUrl} alt="Announcement" className="w-full h-auto max-h-[22vh] md:max-h-[70vh] object-contain rounded-xl shadow-sm" />
                 </div>
               )}
               <div className="flex-1 flex flex-col overflow-y-auto">
-                <div className="p-4 bg-black/5 border-b border-black/5 flex items-center justify-center md:justify-end">
+                <div className="p-3 bg-black/5 border-b border-black/5 flex items-center justify-center md:justify-end">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input 
                       type="checkbox" 
@@ -1438,24 +1438,24 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
                       }} 
                       className="rounded border-ink/20 text-forest focus:ring-forest"
                     />
-                    <span className="text-xs font-bold text-ink/70">Do not show again next time</span>
+                    <span className="text-[10px] sm:text-xs font-bold text-ink/70">Do not show again next time</span>
                   </label>
                 </div>
-                <div className="p-6 md:p-10 text-center md:text-left space-y-4 flex-1 flex flex-col justify-center px-12 md:px-14">
-                  <span className="text-[10px] font-black uppercase tracking-[0.2em] text-brass block">
+                <div className="p-5 md:p-10 text-center md:text-left space-y-3 sm:space-y-4 flex-1 flex flex-col justify-center px-6 md:px-14">
+                  <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] text-brass block">
                     Announcement {popupAnns.length > 1 ? `(${activePopupIndex! + 1} / ${popupAnns.length})` : ""}
                   </span>
-                  <h3 className="font-display text-2xl md:text-3xl font-black text-black leading-tight">{activePopup.title}</h3>
+                  <h3 className="font-display text-xl md:text-3xl font-black text-black leading-tight">{activePopup.title}</h3>
                   <p className="text-xs md:text-sm text-black/80 whitespace-pre-line leading-relaxed mx-auto md:mx-0">
                     {activePopup.content}
                   </p>
                   {activePopup.linkUrl && (
-                    <div className="pt-6">
+                    <div className="pt-4 md:pt-6">
                       <a 
                         href={activePopup.linkUrl} 
                         target="_blank" 
                         rel="noopener noreferrer"
-                        className="inline-block bg-brass text-forest font-black px-8 py-3.5 rounded-full hover:bg-brass/90 hover:scale-105 active:scale-95 transition shadow-lg w-full md:w-auto text-center"
+                        className="inline-block bg-brass text-forest font-black px-6 py-2.5 sm:px-8 sm:py-3.5 rounded-full hover:bg-brass/90 hover:scale-105 active:scale-95 transition shadow-lg w-full md:w-auto text-center text-xs sm:text-sm"
                       >
                         Register / Learn More
                       </a>
