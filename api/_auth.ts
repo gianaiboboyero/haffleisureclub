@@ -1,4 +1,4 @@
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, scryptSync, timingSafeEqual, randomUUID } from "node:crypto";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSupabaseAdmin } from "./_supabaseAdmin.js";
 
@@ -57,6 +57,7 @@ export async function createSession(req: VercelRequest, userId: string, res: Ver
   const supabase = getSupabaseAdmin();
   if (!supabase) throw new Error("Supabase is not configured");
   await supabase.from("AuthSession").insert({
+    id: randomUUID(),
     userId,
     tokenHash: hashToken(token),
     expiresAt: expiresAt.toISOString()

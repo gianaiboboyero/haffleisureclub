@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { randomUUID } from "node:crypto";
 import { getSupabaseAdmin } from "./_supabaseAdmin.js";
 import {
   clearSession,
@@ -56,6 +57,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const adminEmail = process.env.INITIAL_ADMIN_EMAIL ? process.env.INITIAL_ADMIN_EMAIL.trim().toLowerCase() : null;
     const { data: newPlayer, error: playerError } = await supabase.from("Player").insert({
+      id: randomUUID(),
       displayName,
       fullName: displayName,
       email,
@@ -71,6 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const { data: user, error: userError } = await supabase.from("User").insert({
+      id: randomUUID(),
       email,
       passwordHash: hashPassword(password),
       role: (adminEmail && email === adminEmail) ? "ADMIN" : "MEMBER",
