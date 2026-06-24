@@ -6,16 +6,24 @@ const COOKIE_NAME = "__Secure-haff_session";
 const LEGACY_COOKIE_NAME = "haff_session";
 const SESSION_DAYS = 30;
 
-function sessionCookie(value: string, maxAgeSeconds: number) {
+function sessionCookie(req: VercelRequest, value: string, maxAgeSeconds: number) {
   const domain = process.env.COOKIE_DOMAIN?.trim();
   const domainPart = domain ? `; Domain=${domain}` : "";
-  return `${COOKIE_NAME}=${value}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}${domainPart}`;
+  const host = req.headers.host || "";
+  const isLocalhost = host.includes("localhost") || host.includes("127.0.0.1");
+  const isSecure = (req.headers["x-forwarded-proto"] === "https" || process.env.NODE_ENV === "production") && !isLocalhost;
+  const securePart = isSecure ? "; Secure" : "";
+  return `${COOKIE_NAME}=${value}; Path=/; HttpOnly; SameSite=Lax${securePart}; Max-Age=${maxAgeSeconds}${domainPart}`;
 }
 
-function legacySessionCookie(value: string, maxAgeSeconds: number) {
+function legacySessionCookie(req: VercelRequest, value: string, maxAgeSeconds: number) {
   const domain = process.env.COOKIE_DOMAIN?.trim();
   const domainPart = domain ? `; Domain=${domain}` : "";
-  return `${LEGACY_COOKIE_NAME}=${value}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}${domainPart}`;
+  const host = req.headers.host || "";
+  const isLocalhost = host.includes("localhost") || host.includes("127.0.0.1");
+  const isSecure = (req.headers["x-forwarded-proto"] === "https" || process.env.NODE_ENV === "production") && !isLocalhost;
+  const securePart = isSecure ? "; Secure" : "";
+  return `${LEGACY_COOKIE_NAME}=${value}; Path=/; HttpOnly; SameSite=Lax${securePart}; Max-Age=${maxAgeSeconds}${domainPart}`;
 }
 
 export function hashPassword(password: string) {
@@ -43,7 +51,7 @@ function cookieValue(req: VercelRequest) {
     ?? values.find(([name]) => name === LEGACY_COOKIE_NAME)?.[1];
 }
 
-export async function createSession(userId: string, res: VercelResponse) {
+export async function createSession(req: VercelRequest, userId: string, res: VercelResponse) {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400_000);
   const supabase = getSupabaseAdmin();
@@ -53,7 +61,10 @@ export async function createSession(userId: string, res: VercelResponse) {
     tokenHash: hashToken(token),
     expiresAt: expiresAt.toISOString()
   });
-  res.setHeader("Set-Cookie", sessionCookie(token, SESSION_DAYS * 86400));
+  res.setHeader("Set-Cookie", [
+    sessionCookie(req, token, SESSION_DAYS * 86400),
+    legacySessionCookie(req, token, SESSION_DAYS * 86400)
+  ]);
 }
 
 export async function clearSession(req: VercelRequest, res: VercelResponse) {
@@ -65,8 +76,8 @@ export async function clearSession(req: VercelRequest, res: VercelResponse) {
     }
   }
   res.setHeader("Set-Cookie", [
-    sessionCookie("", 0),
-    legacySessionCookie("", 0)
+    sessionCookie(req, "", 0),
+    legacySessionCookie(req, "", 0)
   ]);
 }
 

@@ -76,7 +76,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(500).json({ error: "Failed to create user record." });
     }
     user.player = newPlayer;
-    await createSession(user.id, res);
+    await createSession(req, user.id, res);
     await audit(user.id, "AUTH_REGISTER", "User", user.id);
     return res.status(201).json({ user: publicUser(user) });
   }
@@ -104,7 +104,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (user.status !== "ACTIVE") {
       return res.status(403).json({ error: "This account is not active. Please contact a club administrator." });
     }
-    await createSession(user.id, res);
+    await createSession(req, user.id, res);
     await audit(user.id, "AUTH_LOGIN", "User", user.id);
     const userJson = publicUser(user);
     if (userJson && user.role === "ADMIN") {
@@ -136,7 +136,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await supabase.from("User").update({ passwordHash: hashPassword(nextPassword) }).eq("id", user.id);
       await supabase.from("AuthSession").delete().eq("userId", user.id);
     }
-    await createSession(user.id, res);
+    await createSession(req, user.id, res);
     await audit(user.id, "AUTH_PASSWORD_CHANGED", "User", user.id);
     return res.status(200).json({ success: true });
   }
