@@ -58,7 +58,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       email,
       skillLevel,
       rating: 2,
-      tags: ["Member"]
+      tags: ["Member"],
+      updatedAt: new Date().toISOString()
     }).select().single();
 
     if (playerError) {
