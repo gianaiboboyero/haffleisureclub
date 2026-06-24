@@ -34,9 +34,11 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const dockClearance = 112;
-  const modalMaxH = Math.max(360, viewportH - dockClearance - 24);
-  const previewBudget = Math.min(280, modalMaxH * 0.34);
+  const dockClearance = 96;
+  const modalMaxH = Math.max(360, viewportH - dockClearance - 16);
+  const previewBudget = typeof window !== "undefined" && window.innerWidth < 640
+    ? Math.min(180, modalMaxH * 0.28)
+    : Math.min(280, modalMaxH * 0.34);
   const scale = Math.min(1, previewBudget / STORY_H);
 
   const activeLayout = LAYOUT_OPTIONS.find((option) => option.id === layout);
@@ -86,35 +88,35 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
     <>
       <div
         className="fixed inset-0 z-[250] flex items-end justify-center bg-black/85 px-3 pt-3 backdrop-blur-sm sm:items-center sm:p-4"
-        style={{ paddingBottom: "calc(6.5rem + env(safe-area-inset-bottom, 0px))" }}
+        style={{ paddingBottom: "calc(5.5rem + env(safe-area-inset-bottom, 0px))" }}
         onClick={onClose}
       >
         <div
-          className="w-full max-w-xl rounded-3xl border border-white/10 bg-[#060f0a] p-4 shadow-2xl overflow-y-auto sm:p-6"
+          className="w-[92%] sm:w-full max-w-xl rounded-3xl border border-white/10 bg-[#060f0a] p-3.5 sm:p-6 shadow-2xl overflow-y-auto"
           style={{ maxHeight: modalMaxH }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-3 sm:mb-4">
             <div className="flex items-center gap-2">
-              <Share2 size={20} className="text-[#2ee882]" />
-              <span className="text-base font-black uppercase tracking-widest text-ivory">Share Story</span>
+              <Share2 size={18} className="text-[#2ee882] sm:w-5 sm:h-5" />
+              <span className="text-sm sm:text-base font-black uppercase tracking-widest text-ivory">Share Story</span>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowHelp(true)}
-                className="rounded-full bg-white/10 p-2 text-ivory/60 hover:text-ivory hover:bg-white/15 transition"
+                className="rounded-full bg-white/10 p-1.5 sm:p-2 text-ivory/60 hover:text-ivory hover:bg-white/15 transition"
                 type="button"
                 title="How to share"
               >
-                <HelpCircle size={16} />
+                <HelpCircle size={14} className="sm:w-4 sm:h-4" />
               </button>
-              <button onClick={onClose} className="rounded-full bg-white/10 p-2 text-ivory/60 hover:text-ivory hover:bg-white/15 transition" type="button">
-                <X size={16} />
+              <button onClick={onClose} className="rounded-full bg-white/10 p-1.5 sm:p-2 text-ivory/60 hover:text-ivory hover:bg-white/15 transition" type="button">
+                <X size={14} className="sm:w-4 sm:h-4" />
               </button>
             </div>
           </div>
 
-          <div className="mb-4 grid grid-cols-5 gap-1.5 rounded-2xl bg-white/[0.03] p-2 border border-white/10 backdrop-blur-md">
+          <div className="mb-3 grid grid-cols-5 gap-1 rounded-xl bg-white/[0.03] p-1.5 border border-white/10 backdrop-blur-md">
             {LAYOUT_OPTIONS.map((option) => {
               const isActive = layout === option.id;
               return (
@@ -122,15 +124,15 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
                   key={option.id}
                   type="button"
                   onClick={() => setLayout(option.id)}
-                  className={`relative rounded-xl py-2.5 px-0.5 text-[9px] sm:text-[10px] font-black uppercase tracking-wider transition-all duration-300 ${
+                  className={`relative rounded-lg py-2 px-0.5 text-[8px] sm:text-[10px] font-black uppercase tracking-wider transition-all duration-300 ${
                     isActive
-                      ? "bg-gradient-to-br from-[#2ee882] to-[#15803d] text-[#020f0a] shadow-[0_0_15px_rgba(46,232,130,0.35)] border border-[#2ee882]/30 scale-[1.02]"
+                      ? "bg-gradient-to-br from-[#2ee882] to-[#15803d] text-[#020f0a] shadow-[0_0_12px_rgba(46,232,130,0.35)] border border-[#2ee882]/30 scale-[1.01]"
                       : "bg-white/[0.02] border border-white/5 text-ivory/60 hover:text-ivory hover:bg-white/[0.08] hover:border-white/10"
                   }`}
                 >
                   {option.label}
                   {isActive && (
-                    <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-white shadow-[0_0_4px_#fff]" />
+                    <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-white shadow-[0_0_3px_#fff]" />
                   )}
                 </button>
               );
@@ -138,10 +140,10 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
           </div>
 
           <div
-            className="flex justify-center mb-4 min-h-0 shrink rounded-xl overflow-hidden"
+            className="flex justify-center mb-3 min-h-0 shrink rounded-xl overflow-hidden"
             style={{
-              height: Math.max(160, STORY_H * scale),
-              background: "repeating-conic-gradient(#1a1a1a 0% 25%, #2a2a2a 0% 50%) 50% / 16px 16px"
+              height: Math.max(120, STORY_H * scale),
+              background: "repeating-conic-gradient(#1a1a1a 0% 25%, #2a2a2a 0% 50%) 50% / 12px 12px"
             }}
           >
             <div
@@ -162,7 +164,7 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
 
           {copyMessage && (
             <div
-              className={`mb-3 rounded-xl px-4 py-2.5 text-xs font-semibold text-center ${
+              className={`mb-2.5 rounded-xl px-3 py-2 text-[11px] font-semibold text-center ${
                 copyResult === "downloaded"
                   ? "bg-amber-400/15 text-amber-300 border border-amber-400/25"
                   : "bg-[#2ee882]/15 text-[#2ee882] border border-[#2ee882]/25"
@@ -173,33 +175,33 @@ export function StoryShareModal({ onClose, layout: initialLayout = "overlay-hero
           )}
 
           {copyError && (
-            <div className="mb-3 rounded-xl px-4 py-2.5 text-xs font-semibold text-center bg-red-500/15 text-red-300 border border-red-500/25">
+            <div className="mb-2.5 rounded-xl px-3 py-2 text-[11px] font-semibold text-center bg-red-500/15 text-red-300 border border-red-500/25">
               {copyError}
             </div>
           )}
 
-          <div className="flex gap-3">
+          <div className="flex gap-2 sm:gap-3">
             <button
               type="button"
               disabled={isCopying}
               onClick={handleCopy}
-              className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-[#2ee882] py-3.5 text-sm font-black text-[#020f0a] hover:bg-[#4dea96] disabled:opacity-50 transition"
+              className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-[#2ee882] py-2.5 sm:py-3.5 text-xs sm:text-sm font-black text-[#020f0a] hover:bg-[#4dea96] disabled:opacity-50 transition"
             >
-              {copyResult === "copied" || copyResult === "shared" ? <CheckCheck size={18} /> : <Copy size={18} />}
+              {copyResult === "copied" || copyResult === "shared" ? <CheckCheck size={16} /> : <Copy size={16} />}
               {isCopying ? "Generating…" : "Copy Image"}
             </button>
             <button
               type="button"
               disabled={isDownloading}
               onClick={handleDownload}
-              className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-white/10 py-3.5 text-sm font-black text-ivory hover:bg-white/15 disabled:opacity-50 transition"
+              className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-white/10 py-2.5 sm:py-3.5 text-xs sm:text-sm font-black text-ivory hover:bg-white/15 disabled:opacity-50 transition"
             >
-              <Download size={18} />
+              <Download size={16} />
               {isDownloading ? "Saving…" : "Download"}
             </button>
           </div>
 
-          <p className="mt-3 text-center text-[10px] leading-relaxed text-ivory/45">
+          <p className="mt-2.5 text-center text-[9px] sm:text-[10px] leading-relaxed text-ivory/45">
             {activeLayout?.hint ?? "1080×1920 transparent overlay — uses your live player statistics."}
           </p>
         </div>
