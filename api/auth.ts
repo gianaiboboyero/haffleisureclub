@@ -77,7 +77,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       email,
       passwordHash: hashPassword(password),
       role: (adminEmail && email === adminEmail) ? "ADMIN" : "MEMBER",
-      playerId: newPlayer.id
+      playerId: newPlayer.id,
+      updatedAt: new Date().toISOString()
     }).select().single();
 
     if (userError) {
