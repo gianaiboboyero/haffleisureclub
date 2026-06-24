@@ -132,7 +132,7 @@ function parseTvBroadcast(value: unknown): TvBroadcast | null {
   if (typeof item.id !== "string" || typeof item.kind !== "string" || typeof item.createdAt !== "string") {
     return null;
   }
-  if (!["message", "court", "overtime"].includes(item.kind)) return null;
+  if (!["message", "court", "overtime", "config"].includes(item.kind)) return null;
   return {
     id: item.id,
     kind: item.kind as TvBroadcast["kind"],
@@ -141,7 +141,9 @@ function parseTvBroadcast(value: unknown): TvBroadcast | null {
     courtId: typeof item.courtId === "string" ? item.courtId : undefined,
     courtName: typeof item.courtName === "string" ? item.courtName : undefined,
     participantIds: Array.isArray(item.participantIds) ? item.participantIds.map(String) : undefined,
-    variant: item.variant === "reserved" ? "reserved" : item.variant === "active" ? "active" : undefined
+    variant: item.variant === "active" || item.variant === "reserved" ? item.variant : undefined,
+    matchDurationMinutes: typeof item.matchDurationMinutes === "number" ? item.matchDurationMinutes : undefined,
+    clubStatus: typeof item.clubStatus === "string" ? item.clubStatus : undefined
   };
 }
 
@@ -692,13 +694,20 @@ async function hydrateFromServer(set: ClubStoreSet, get: ClubStoreGet) {
     }
   ];
 
+  let remoteConfig: Record<string, string> | null = null;
   if (navigator.onLine) {
     try {
       await seedCourtsIfEmpty();
-      const [serverPlayers, serverCourts] = await Promise.all([
+      const [serverPlayers, serverCourts, configResponse] = await Promise.all([
         fetchPlayersCompact(),
-        fetchSupabaseCourts()
+        fetchSupabaseCourts(),
+        fetch("/api/config").catch(() => null)
       ]);
+      
+      if (configResponse && configResponse.ok) {
+        remoteConfig = await configResponse.json();
+      }
+
       if (serverPlayers.length > 0) {
         players = mergePlayersFromServer([], serverPlayers as Record<string, unknown>[], {
           authoritative: true
@@ -720,6 +729,14 @@ async function hydrateFromServer(set: ClubStoreSet, get: ClubStoreGet) {
     }
   }
 
+  const initialClubStatus = remoteConfig?.clubStatus ?? localStorage.getItem("haff-club-status") ?? "";
+  const initialMatchDuration = remoteConfig?.matchDurationMinutes 
+    ? parseInt(remoteConfig.matchDurationMinutes, 10) 
+    : parseInt(localStorage.getItem("haff-match-duration-minutes") || "15", 10);
+
+  if (remoteConfig?.clubStatus) localStorage.setItem("haff-club-status", initialClubStatus);
+  if (remoteConfig?.matchDurationMinutes) localStorage.setItem("haff-match-duration-minutes", String(initialMatchDuration));
+
   set({
     players,
     courts,
@@ -730,7 +747,8 @@ async function hydrateFromServer(set: ClubStoreSet, get: ClubStoreGet) {
     currentSessionId,
     stackOrder,
     pendingSyncCount: 0,
-    clubStatus: localStorage.getItem("haff-club-status") ?? "",
+    clubStatus: initialClubStatus,
+    matchDurationMinutes: initialMatchDuration,
     playerKudos: getInitialPlayerKudos(),
     matchReviews: getInitialMatchReviews(),
     hydrated: false
@@ -812,6 +830,14 @@ export const useClubStore = create<ClubState>((set, get) => ({
     const next = Math.max(5, Math.min(45, Math.round(minutes)));
     localStorage.setItem("haff-match-duration-minutes", String(next));
     set({ matchDurationMinutes: next });
+    if (get().adminWriteToken) {
+      fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matchDurationMinutes: next })
+      }).catch(console.error);
+      get().broadcastTvAnnouncement({ kind: "config", matchDurationMinutes: next }).catch(() => {});
+    }
   },
   setClubStatus: (status) => {
     const next = status.trim().slice(0, 120);
@@ -819,6 +845,14 @@ export const useClubStore = create<ClubState>((set, get) => ({
     else localStorage.removeItem("haff-club-status");
     set({ clubStatus: next });
     window.dispatchEvent(new CustomEvent("haff-club-status", { detail: next }));
+    if (get().adminWriteToken) {
+      fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clubStatus: next })
+      }).catch(console.error);
+      get().broadcastTvAnnouncement({ kind: "config", clubStatus: next }).catch(() => {});
+    }
   },
   hydrate: async () => {
     if (Date.now() < suppressSharedRefreshUntil) return;
@@ -1236,6 +1270,16 @@ export const useClubStore = create<ClubState>((set, get) => ({
     );
     if (currentSignature === nextSignature) {
       if (broadcastChanged && incomingTvBroadcast) {
+        if (incomingTvBroadcast.kind === "config") {
+          if (incomingTvBroadcast.matchDurationMinutes) {
+            localStorage.setItem("haff-match-duration-minutes", String(incomingTvBroadcast.matchDurationMinutes));
+            set({ matchDurationMinutes: incomingTvBroadcast.matchDurationMinutes });
+          }
+          if (incomingTvBroadcast.clubStatus !== undefined) {
+            localStorage.setItem("haff-club-status", incomingTvBroadcast.clubStatus);
+            set({ clubStatus: incomingTvBroadcast.clubStatus });
+          }
+        }
         set({ tvBroadcast: incomingTvBroadcast });
       }
       return;
@@ -1257,6 +1301,16 @@ export const useClubStore = create<ClubState>((set, get) => ({
     suppressSharedPublishUntil = Date.now() + 3000;
     applyingRemoteClubBroadcast = true;
     try {
+      if (broadcastChanged && incomingTvBroadcast?.kind === "config") {
+        if (incomingTvBroadcast.matchDurationMinutes) {
+          localStorage.setItem("haff-match-duration-minutes", String(incomingTvBroadcast.matchDurationMinutes));
+          set({ matchDurationMinutes: incomingTvBroadcast.matchDurationMinutes });
+        }
+        if (incomingTvBroadcast.clubStatus !== undefined) {
+          localStorage.setItem("haff-club-status", incomingTvBroadcast.clubStatus);
+          set({ clubStatus: incomingTvBroadcast.clubStatus });
+        }
+      }
       set({
         players,
         courts,

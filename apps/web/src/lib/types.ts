@@ -2,7 +2,7 @@ export type SkillLevel = "Newbie" | "Beginner" | "Novice" | "Low Intermediate" |
 export type MatchStatus = "Queued" | "Assigned" | "InProgress" | "Completed";
 export type SyncStatus = "LocalOnly" | "PendingSync" | "Synced" | "Conflict";
 
-export type TvBroadcastKind = "message" | "court" | "overtime";
+export type TvBroadcastKind = "message" | "court" | "overtime" | "config";
 
 export type TvBroadcast = {
   id: string;
@@ -13,6 +13,8 @@ export type TvBroadcast = {
   courtName?: string;
   participantIds?: string[];
   variant?: "active" | "reserved";
+  matchDurationMinutes?: number;
+  clubStatus?: string;
 };
 
 export type Session = {
