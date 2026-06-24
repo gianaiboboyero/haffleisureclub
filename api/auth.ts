@@ -28,6 +28,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const action = String(req.query.action ?? "");
 
   if (req.method === "GET" && action === "me") {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     const user = await getUser(req);
     const userJson = publicUser(user);
     if (userJson && user?.role === "ADMIN") {
