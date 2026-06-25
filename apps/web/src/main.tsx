@@ -290,7 +290,7 @@ export default function App() {
 
   const refreshSession = React.useCallback(() => {
     setSessionReady(false);
-    return apiFetchWithTimeout("/api/auth?action=me", undefined, 7000)
+    return apiFetchWithTimeout("/api/auth?action=me", undefined, 25000)
       .then((response) => parseResponseJson<{ user?: SessionMember & { adminWriteToken?: string | null } }>(response))
       .then((data) => {
         setSessionMember(data.user ?? null);

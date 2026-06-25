@@ -1,5 +1,10 @@
 {
   "buildCommand": "npm run build:web",
+  "functions": {
+    "api/**/*.ts": {
+      "maxDuration": 30
+    }
+  },
   "devCommand": "npm run dev:web -- --port $PORT",
   "outputDirectory": "dist/web",
   "installCommand": "npm install",

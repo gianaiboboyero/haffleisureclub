@@ -54,7 +54,7 @@ function combineSignals(signals: AbortSignal[]): AbortSignal {
 export async function apiFetchWithTimeout(
   path: string,
   options?: RequestInit,
-  timeoutMs = 8000
+  timeoutMs = 25000
 ): Promise<Response> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => {
@@ -105,7 +105,7 @@ export async function apiJson<T = unknown>(path: string, options?: RequestInit):
 export async function apiJsonWithTimeout<T = unknown>(
   path: string,
   options?: RequestInit,
-  timeoutMs = 8000
+  timeoutMs = 15000
 ): Promise<T> {
   const response = await apiFetchWithTimeout(path, {
     headers: { "Content-Type": "application/json", ...(options?.headers ?? {}) },
