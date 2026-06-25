@@ -133,6 +133,10 @@ export function publicUser(user: Awaited<ReturnType<typeof getUser>>) {
     role: user.role,
     status: user.status,
     playerId: user.playerId,
+    // Flatten key player fields so SessionMember type is satisfied
+    displayName: user.player?.displayName ?? user.email.split("@")[0],
+    avatarUrl: user.player?.avatarUrl ?? null,
+    skillLevel: user.player?.skillLevel ?? null,
     player: user.player ?? null,
   };
 }
