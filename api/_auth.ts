@@ -1,6 +1,6 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual, randomUUID } from "node:crypto";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { dbQuery } from "./_db.js";
+import { getSupabaseAdmin } from "./_supabaseAdmin.js";
 
 const COOKIE_NAME = "__Secure-haff_session";
 const LEGACY_COOKIE_NAME = "haff_session";
@@ -40,7 +40,7 @@ export function verifyPassword(password: string, stored: string) {
   return actual.length === expectedBuffer.length && timingSafeEqual(actual, expectedBuffer);
 }
 
-const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
+export const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
 function cookieValue(req: VercelRequest) {
   const cookie = req.headers.cookie ?? "";
@@ -54,65 +54,76 @@ function cookieValue(req: VercelRequest) {
 export async function createSession(req: VercelRequest, userId: string, res: VercelResponse) {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400_000);
-  await dbQuery(
-    `INSERT INTO "AuthSession" (id, "userId", "tokenHash", "expiresAt", "createdAt")
-     VALUES ($1, $2, $3, $4, NOW())`,
-    [randomUUID(), userId, hashToken(token), expiresAt.toISOString()]
-  );
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    await supabase.from("AuthSession").insert({
+      id: randomUUID(),
+      userId,
+      tokenHash: hashToken(token),
+      expiresAt: expiresAt.toISOString()
+    });
+  }
   res.setHeader("Set-Cookie", [
     sessionCookie(req, token, SESSION_DAYS * 86400),
     legacySessionCookie(req, token, SESSION_DAYS * 86400)
   ]);
 }
 
-export async function clearSession(req: VercelRequest, res: VercelResponse) {
+export async function clearSession(req: VercelRequest, res?: VercelResponse) {
   const token = cookieValue(req);
-  if (token) {
-    await dbQuery(`DELETE FROM "AuthSession" WHERE "tokenHash" = $1`, [hashToken(token)]).catch(() => {});
+  const supabase = getSupabaseAdmin();
+  if (token && supabase) {
+    await supabase.from("AuthSession").delete().eq("tokenHash", hashToken(token)).catch(() => {});
   }
-  res.setHeader("Set-Cookie", [
-    sessionCookie(req, "", 0),
-    legacySessionCookie(req, "", 0)
-  ]);
+  if (res) {
+    res.setHeader("Set-Cookie", [
+      sessionCookie(req, "", 0),
+      legacySessionCookie(req, "", 0)
+    ]);
+  }
 }
 
 export async function getUser(req: VercelRequest) {
   const token = cookieValue(req);
   if (!token) return null;
-  const { rows } = await dbQuery(
-    `SELECT
-       u.id, u.email, u.role, u.status, u."playerId", u."passwordHash", u."createdAt", u."updatedAt",
-       p.id as "_pid", p."displayName", p."fullName", p."avatarUrl", p."avatarVersion",
-       p."skillLevel", p.rating, p.tags, p.status as "_pstatus", p.email as "_pemail"
-     FROM "AuthSession" s
-     JOIN "User" u ON u.id = s."userId"
-     LEFT JOIN "Player" p ON p.id = u."playerId"
-     WHERE s."tokenHash" = $1 AND s."expiresAt" > NOW() AND u.status = 'ACTIVE'`,
-    [hashToken(token)]
-  );
-  if (!rows[0]) return null;
-  const r = rows[0];
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return null;
+  
+  const { data: session } = await supabase.from("AuthSession").select(`
+    userId,
+    User (
+      id, email, role, status, playerId, passwordHash, createdAt, updatedAt,
+      Player:playerId ( id, displayName, fullName, avatarUrl, avatarVersion, skillLevel, rating, tags, status, email )
+    )
+  `).eq("tokenHash", hashToken(token)).gt("expiresAt", new Date().toISOString()).maybeSingle();
+  
+  if (!session || !session.User) return null;
+  const userRow = Array.isArray(session.User) ? session.User[0] : session.User;
+  if (!userRow || userRow.status !== 'ACTIVE') return null;
+  
+  const p = Array.isArray(userRow.Player) ? userRow.Player[0] : userRow.Player;
+  
   return {
-    id: r.id,
-    email: r.email,
-    role: r.role,
-    status: r.status,
-    playerId: r.playerId,
-    passwordHash: r.passwordHash,
-    createdAt: r.createdAt,
-    updatedAt: r.updatedAt,
-    player: r._pid ? {
-      id: r._pid,
-      displayName: r.displayName,
-      fullName: r.fullName,
-      avatarUrl: r.avatarUrl,
-      avatarVersion: r.avatarVersion,
-      skillLevel: r.skillLevel,
-      rating: r.rating,
-      tags: r.tags,
-      status: r._pstatus,
-      email: r._pemail,
-    } : null,
+    id: userRow.id,
+    email: userRow.email,
+    role: userRow.role,
+    status: userRow.status,
+    playerId: userRow.playerId,
+    passwordHash: userRow.passwordHash,
+    createdAt: userRow.createdAt,
+    updatedAt: userRow.updatedAt,
+    player: p ? {
+      id: p.id,
+      displayName: p.displayName,
+      fullName: p.fullName,
+      avatarUrl: p.avatarUrl,
+      avatarVersion: p.avatarVersion,
+      skillLevel: p.skillLevel,
+      rating: p.rating,
+      tags: p.tags,
+      status: p.status,
+      email: p.email
+    } : undefined
   };
 }
 

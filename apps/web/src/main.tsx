@@ -1303,21 +1303,7 @@ function AdminView({
           >
             Sign Out
           </Button>
-          {activeSession && (
-            <Button
-              onClick={async () => {
-                const res = await useClubStore.getState().endSession();
-                if (res?.hasActiveCourts) {
-                  if (confirm("There are still active/reserved courts in progress. Force ending the session will finish all matches and clear the courts. Proceed?")) {
-                    await useClubStore.getState().endSession(true);
-                  }
-                }
-              }}
-              className="min-h-10 bg-clay px-4 text-xs font-bold text-ivory hover:bg-clay/90"
-            >
-              End Session
-            </Button>
-          )}
+
         </div>
       </div>
 
