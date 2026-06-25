@@ -199,7 +199,7 @@ export async function publishClubState(
         playerProfiles: input.playerProfiles,
         playerKudos: input.playerKudos,
         matchReviews: input.matchReviews,
-        adminWriteToken: input.adminWriteToken
+        ...(input.adminWriteToken ? { adminWriteToken: input.adminWriteToken } : {})
       };
 
       updateLastKnownSettings(input.sessionId, settings);
@@ -246,7 +246,7 @@ export async function broadcastTvState(
       const settings = {
         ...baseSettings,
         tvBroadcast,
-        adminWriteToken
+        ...(adminWriteToken ? { adminWriteToken } : {})
       };
 
       updateLastKnownSettings(sessionId, settings);

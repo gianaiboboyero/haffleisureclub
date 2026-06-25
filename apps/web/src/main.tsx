@@ -5325,7 +5325,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
 
   React.useEffect(() => {
     void refreshSharedState({ context: "tv" });
-    // 5 min fallback interval when Realtime is degraded. The app-level Realtime
+    // Fast fallback when Realtime is degraded. TV must stay visibly live.
     // subscriber (in the root useEffect) already handles TV context and fires a
     // debounced refresh on every Session change, so we don't need a second
     // subscribeToClubState here. That avoids a duplicate full-fetch per event.
@@ -5333,7 +5333,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
       if (!isClubPushHealthy()) {
         void refreshSharedState({ allowUnchanged: true, context: "tv" });
       }
-    }, 5 * 60_000);
+    }, 30_000);
     const onTvRefresh = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === "haff-tv-refresh") {
