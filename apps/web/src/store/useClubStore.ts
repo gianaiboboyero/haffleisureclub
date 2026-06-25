@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { db, getDeviceId, seedCourts } from "../lib/db";
 import { playSound, speakAnnouncement } from "../lib/sound";
-import { todayKey, generateId, sortCourts, mergeSessionCourtRuntime, reconcileCourtsWithMatches, reconcileStackOrder, mergeSharedMatches, stripUnauthorizedCheckIns, resolveAuthorizedCheckInIds, splitStackGroups, flattenStackGroups, MAX_STACKS, countStackGroups } from "../lib/utils";
+import { todayKey, generateId, sortCourts, mergeSessionCourtRuntime, reconcileCourtsWithMatches, reconcileStackOrder, mergeSharedMatches, normalizeMatch, stripUnauthorizedCheckIns, resolveAuthorizedCheckInIds, splitStackGroups, flattenStackGroups, MAX_STACKS, countStackGroups } from "../lib/utils";
 import {
   type MatchReviewRecord,
   type PlayerKudosEntry
@@ -888,7 +888,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       await liveDb.courtsBulkPut(seedCourts);
     }
 
-    const [rawPlayers, rawCourts, matches, sessions, rawReservations, rawTransactions] = await Promise.all([
+    const [rawPlayers, rawCourts, rawMatches, sessions, rawReservations, rawTransactions] = await Promise.all([
       db.players.toArray(),
       db.courts.toArray(),
       db.matches.toArray(),
@@ -896,6 +896,7 @@ export const useClubStore = create<ClubState>((set, get) => ({
       db.reservations.toArray(),
       db.transactions.toArray(),
     ]);
+    const matches = rawMatches.map(normalizeMatch);
 
     const players = stripUnauthorizedCheckIns(
       rawPlayers.map((player) => ({
@@ -1189,10 +1190,10 @@ export const useClubStore = create<ClubState>((set, get) => ({
           ? mergeSessionCourtRuntime(localCourts, shared.courts, MAX_COURTS)
           : (shared.courts as Court[])
         : localCourts;
-    const remoteMatches = Array.isArray(shared.matches) ? (shared.matches as Match[]) : [];
+    const remoteMatches = Array.isArray(shared.matches) ? (shared.matches as Match[]).map(normalizeMatch) : [];
 
     // Defeat read-replica lag: Only clear PendingSync when the server actually has the match
-    const localMatchesWithClearedPending = get().matches.map((m) => {
+    const localMatchesWithClearedPending = get().matches.map(normalizeMatch).map((m) => {
       if (m.syncStatus === "PendingSync" && remoteMatches.some((rm) => rm.id === m.id)) {
         return { ...m, syncStatus: "Synced" as const };
       }

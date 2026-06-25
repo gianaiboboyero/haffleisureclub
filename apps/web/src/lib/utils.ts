@@ -51,21 +51,31 @@ function pickPreferredMatch(local: Match, remote: Match): Match {
   return local;
 }
 
+export function normalizeMatch(match: Match): Match {
+  return {
+    ...match,
+    teamAPlayerIds: Array.isArray(match.teamAPlayerIds) ? match.teamAPlayerIds : [],
+    teamBPlayerIds: Array.isArray(match.teamBPlayerIds) ? match.teamBPlayerIds : [],
+  };
+}
+
 /** Prefer newer local finishes over stale shared InProgress rows during refresh. */
 export function mergeSharedMatches(local: Match[], remote: Match[]): Match[] {
   const merged = new Map<string, Match>();
+  const normalizedLocal = local.map(normalizeMatch);
+  const normalizedRemote = remote.map(normalizeMatch);
   const localCompletedCourtIds = new Set(
-    local.filter(m => m.status === "Completed" && m.courtId).map(m => m.courtId)
+    normalizedLocal.filter(m => m.status === "Completed" && m.courtId).map(m => m.courtId)
   );
   
-  for (const match of remote) {
+  for (const match of normalizedRemote) {
     if (match.status === "InProgress" && match.courtId && localCompletedCourtIds.has(match.courtId)) {
       continue;
     }
     merged.set(match.id, match);
   }
   
-  for (const match of local) {
+  for (const match of normalizedLocal) {
     const existing = merged.get(match.id);
     merged.set(match.id, existing ? pickPreferredMatch(match, existing) : match);
   }

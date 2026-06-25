@@ -600,6 +600,7 @@ export function ReservationCalendar() {
   const {
     courts,
     reservations,
+    players,
     addReservation,
     cancelReservation,
     loadReservationsRange,

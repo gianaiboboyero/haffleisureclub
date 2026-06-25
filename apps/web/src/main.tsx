@@ -491,7 +491,7 @@ export default function App() {
         if (isIdleView(currentView) || (document.hidden && currentView !== "tv")) return;
         const context =
           currentView === "tv" ? "tv" : currentView === "player" ? "player" : "default";
-        void useClubStore.getState().refreshSharedState({ force: true, context });
+        void useClubStore.getState().pingSharedState({ context });
       }, REALTIME_REFRESH_DEBOUNCE_MS);
     };
 
@@ -511,7 +511,7 @@ export default function App() {
           if (!rosterSyncFresh()) {
             void store.hydrate();
           } else {
-            void store.refreshSharedState({ force: true });
+            void store.pingSharedState();
           }
         })
       : () => undefined;
@@ -534,7 +534,7 @@ export default function App() {
       () => {
         const view = useClubStore.getState().view;
         if (isIdleView(view) || (document.hidden && view !== "tv")) return;
-        void useClubStore.getState().refreshSharedState({ force: true });
+        void useClubStore.getState().pingSharedState();
       },
       (stackOrder) => {
         applyIncomingStackOrder(stackOrder);
@@ -558,10 +558,14 @@ export default function App() {
     };
     window.addEventListener("storage", onStackStorage);
 
+    let lastFocusRefreshAt = 0;
     const onWindowFocus = () => {
       const view = useClubStore.getState().view;
       if (view === "admin" || view === "tv" || view === "player") {
-        void useClubStore.getState().refreshSharedState({ force: true, context: view === "tv" ? "tv" : view === "player" ? "player" : "default" });
+        const now = Date.now();
+        if (now - lastFocusRefreshAt < 60_000) return;
+        lastFocusRefreshAt = now;
+        void useClubStore.getState().pingSharedState({ context: view === "tv" ? "tv" : view === "player" ? "player" : "default" });
       }
     };
     window.addEventListener("focus", onWindowFocus);
@@ -4245,8 +4249,11 @@ function PlayerView({
   const [selectedPlayerId, setSelectedPlayerId] = React.useState<string | null>(() => localStorage.getItem("haff-player-account-id"));
   const [recoveringProfile, setRecoveringProfile] = React.useState(false);
   const now = useNow();
+  const authenticatedPlayerId = sessionMember?.playerId ?? null;
 
-  const player = selectedPlayerId ? players.find((item) => item.id === selectedPlayerId) : undefined;
+  const player = authenticatedPlayerId
+    ? players.find((item) => item.id === authenticatedPlayerId)
+    : undefined;
   // Coarsen the clock dependency to per-minute: queue position and estimated play
   // times change at most once per minute, so recomputing every second is wasteful
   // across 100 player tabs. The 1 Hz `now` is still used for display elsewhere.
@@ -4256,8 +4263,8 @@ function PlayerView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [player?.id, players, courts, matches, stackOrder, matchDurationMinutes, nowMinute]
   );
-  const assignedMatch = selectedPlayerId
-    ? matches.find((match) => match.status === "InProgress" && [...match.teamAPlayerIds, ...match.teamBPlayerIds].includes(selectedPlayerId))
+  const assignedMatch = authenticatedPlayerId
+    ? matches.find((match) => match.status === "InProgress" && [...match.teamAPlayerIds, ...match.teamBPlayerIds].includes(authenticatedPlayerId))
     : undefined;
   const assignedCourt = courts.find((court) => court.id === assignedMatch?.courtId);
   const [dismissedTurnMatchId, setDismissedTurnMatchId] = React.useState<string | null>(null);
@@ -4290,7 +4297,13 @@ function PlayerView({
   }, [refreshSharedState]);
 
   React.useEffect(() => {
-    if (!sessionReady || !sessionMember?.playerId) return;
+    if (!sessionReady) return;
+    if (!sessionMember?.playerId) {
+      localStorage.removeItem("haff-player-account-id");
+      setSelectedPlayerId(null);
+      setRecoveringProfile(false);
+      return;
+    }
     localStorage.setItem("haff-player-account-id", sessionMember.playerId);
     setSelectedPlayerId(sessionMember.playerId);
     void seedAuthenticatedPlayer(sessionMember);
@@ -4335,7 +4348,7 @@ function PlayerView({
   );
 
   if (!sessionReady || !hydrated) return <LoadingScreen />;
-  if (selectedPlayerId && !player && recoveringProfile) {
+  if (authenticatedPlayerId && !player && recoveringProfile) {
     return (
       <div className="mx-auto max-w-lg px-4 py-16 text-center text-ivory">
         <LoadingScreen />
@@ -4546,7 +4559,7 @@ function PlayerView({
         </motion.div>
       )}
       
-      {!sessionMember && !player && (
+      {!sessionMember && (
         <AuthModal onSuccess={async (member) => {
           await seedAuthenticatedPlayer(member);
           if (member?.playerId) {
@@ -5309,7 +5322,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
       if (r.status !== "Confirmed") continue;
       const start = new Date(r.startTime).getTime();
       const end = new Date(r.endTime).getTime();
-      const nowMs = now.getTime();
+      const nowMs = now;
       if (nowMs >= start && nowMs < end) {
         // Resolve participant display names from playerIds
         const participantNames = (r.playerIds ?? []).map(id => {
@@ -5326,8 +5339,8 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
   }, [reservations, players, now]);
 
   React.useEffect(() => {
-    void refreshSharedState({ force: true, context: "tv" });
-    // 60 s fallback interval when Realtime is degraded. The app-level Realtime
+    void refreshSharedState({ context: "tv" });
+    // 120 s fallback interval when Realtime is degraded. The app-level Realtime
     // subscriber (in the root useEffect) already handles TV context and fires a
     // debounced refresh on every Session change, so we don't need a second
     // subscribeToClubState here. That avoids a duplicate full-fetch per event.
@@ -5335,11 +5348,11 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
       if (!isClubPushHealthy()) {
         void refreshSharedState({ allowUnchanged: true, context: "tv" });
       }
-    }, 60_000);
+    }, 120_000);
     const onTvRefresh = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === "haff-tv-refresh") {
-        void refreshSharedState({ force: true, context: "tv" });
+        void refreshSharedState({ context: "tv" });
       }
     };
     window.addEventListener("message", onTvRefresh);

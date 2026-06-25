@@ -13,16 +13,54 @@ export async function apiFetch(path: string, options?: RequestInit): Promise<Res
   });
 }
 
+function createTimeoutError(timeoutMs: number): DOMException {
+  return new DOMException(`Request timed out after ${timeoutMs}ms`, "TimeoutError");
+}
+
+function abortWithReason(controller: AbortController, reason: unknown): void {
+  if (controller.signal.aborted) return;
+  try {
+    controller.abort(reason);
+  } catch {
+    controller.abort();
+  }
+}
+
+function combineSignals(signals: AbortSignal[]): AbortSignal {
+  const activeSignals = signals.filter(Boolean);
+  const abortedSignal = activeSignals.find((signal) => signal.aborted);
+  if (abortedSignal) {
+    const controller = new AbortController();
+    abortWithReason(controller, abortedSignal.reason);
+    return controller.signal;
+  }
+
+  const controller = new AbortController();
+  const onAbort = (event: Event) => {
+    const signal = event.target as AbortSignal;
+    abortWithReason(controller, signal.reason);
+    for (const activeSignal of activeSignals) {
+      activeSignal.removeEventListener("abort", onAbort);
+    }
+  };
+
+  for (const signal of activeSignals) {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  return controller.signal;
+}
+
 export async function apiFetchWithTimeout(
   path: string,
   options?: RequestInit,
   timeoutMs = 8000
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
-  const signal = options?.signal
-    ? AbortSignal.any([options.signal, controller.signal])
-    : controller.signal;
+  const timeout = window.setTimeout(() => {
+    abortWithReason(controller, createTimeoutError(timeoutMs));
+  }, timeoutMs);
+  const signal = options?.signal ? combineSignals([options.signal, controller.signal]) : controller.signal;
 
   try {
     return await apiFetch(path, {

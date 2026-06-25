@@ -20,6 +20,7 @@
     "preview": "vite preview --host 0.0.0.0 --config apps/web/vite.config.ts",
     "typecheck": "tsc --noEmit",
     "db:backup-players": "node scripts/backup-supabase-players.mjs",
+    "db:cleanup-quotas": "node scripts/cleanup-supabase-quotas.mjs",
     "db:import-players": "node scripts/import-players-from-json.mjs",
     "db:merge-production-roster": "node scripts/merge-production-roster.mjs",
     "db:restore-club-state": "node scripts/restore-club-state.mjs data/production-players.json --prune-orphans --clear-sessions",
