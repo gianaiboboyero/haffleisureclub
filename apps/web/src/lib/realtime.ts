@@ -1,5 +1,5 @@
 import { useSupabaseData } from "./dataSource";
-import { markChatPushHealthy, markClubPushHealthy } from "./syncPolicy";
+import { markChatPushHealthy } from "./syncPolicy";
 import {
   subscribeSupabaseChat,
   subscribeSupabaseClubState,
@@ -39,11 +39,7 @@ export function subscribeToClubState(
 ) {
   if (!realtimeFlag("VITE_REALTIME_CLUB", true)) return () => undefined;
   const unsubscribe = subscribeSupabaseClubState(onSessionChanged);
-  markClubPushHealthy(true);
-  return () => {
-    markClubPushHealthy(false);
-    unsubscribe();
-  };
+  return unsubscribe;
 }
 
 export function subscribeToChannelNoop(
