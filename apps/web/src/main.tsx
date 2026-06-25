@@ -102,7 +102,7 @@ import type { Court, Match, Player, TvBroadcast } from "./lib/types";
 import "./styles/globals.css";
 import { Analytics } from "@vercel/analytics/react";
 import { SKIP_ADMIN_LOGIN } from "./lib/devFlags";
-import { apiFetch, apiFetchWithTimeout, apiJson, apiJsonWithTimeout, parseResponseJson } from "./lib/api";
+import { AUTH_REQUEST_TIMEOUT_MS, apiFetch, apiFetchWithTimeout, apiJson, apiJsonWithTimeout, parseResponseJson } from "./lib/api";
 
 const LandingView = React.lazy(() =>
   import("./components/LandingView").then((module) => ({ default: module.LandingView }))
@@ -4057,7 +4057,7 @@ function AuthModal({ onSuccess }: { onSuccess: (member: AuthMember) => void | Pr
       const data = await apiJsonWithTimeout<{ user: AuthMember }>(`/api/auth?action=${mode}`, {
         method: "POST",
         body: JSON.stringify(form)
-      }, 12000);
+      }, AUTH_REQUEST_TIMEOUT_MS);
       if (mode === "register") {
         setSuccessMsg("Welcome to HAFF Leisure Club! Your account has been created.");
       }

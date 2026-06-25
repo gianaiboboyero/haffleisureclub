@@ -22,7 +22,7 @@ type CalReservation = Reservation & { publicLabel?: string };
 type Member = { id: string; role: "ADMIN" | "MEMBER"; playerId?: string; displayName: string } | null;
 
 import { getCourtSetting } from "../lib/courtSettings";
-import { apiFetch, apiJsonWithTimeout, parseResponseJson } from "../lib/api";
+import { AUTH_REQUEST_TIMEOUT_MS, apiFetch, apiJsonWithTimeout, parseResponseJson } from "../lib/api";
 import { useSupabaseData } from "../lib/dataSource";
 import { subscribeSupabaseReservations } from "../lib/supabase/realtime";
 import { COURT_HOURLY_FEE, estimateCourtFee, formatPeso } from "../lib/pricing";
@@ -798,7 +798,7 @@ function ReservationDrawer({
       const data = await apiJsonWithTimeout<{ user: Member }>(`/api/auth?action=${authMode}`, {
         method: "POST",
         body: JSON.stringify(authForm)
-      }, 12000);
+      }, AUTH_REQUEST_TIMEOUT_MS);
       if (authMode === "register") setAuthSuccessMsg("Account created! You can now book courts.");
       window.dispatchEvent(new Event("haff-auth-change"));
       onMemberUpdate(data.user);

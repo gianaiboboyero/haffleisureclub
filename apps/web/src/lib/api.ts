@@ -1,5 +1,6 @@
 /** API base URL for split deploy (static frontend + remote API). Empty = same origin on Vercel. */
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
+export const AUTH_REQUEST_TIMEOUT_MS = 25000;
 
 export function apiUrl(path: string): string {
   const normalized = path.startsWith("/") ? path : `/${path}`;
