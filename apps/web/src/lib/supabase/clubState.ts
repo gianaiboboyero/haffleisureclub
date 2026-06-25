@@ -210,7 +210,23 @@ export async function publishClubState(
         updatedAt: new Date().toISOString()
       }).eq("id", input.sessionId).select("id, updatedAt").maybeSingle();
 
-      const result = data ? { sessionId: data.id, updatedAt: data.updatedAt } : null;
+      let result = data ? { sessionId: data.id, updatedAt: data.updatedAt } : null;
+      if (!result && input.adminWriteToken) {
+        const { data: inserted } = await supabase.from("Session").insert({
+          id: input.sessionId,
+          name: "Open Play Session",
+          date: new Date().toISOString().slice(0, 10),
+          mode: "Open Play",
+          status: "Active",
+          courtIds: input.courts
+            .map((court) => (typeof court === "object" && court && "id" in court ? String((court as { id: unknown }).id) : null))
+            .filter((id): id is string => Boolean(id)),
+          checkedInPlayerIds: input.checkedInPlayerIds,
+          settings,
+          updatedAt: new Date().toISOString()
+        }).select("id, updatedAt").maybeSingle();
+        result = inserted ? { sessionId: inserted.id, updatedAt: inserted.updatedAt } : null;
+      }
       resolve(result);
       return result;
     }).catch(() => {

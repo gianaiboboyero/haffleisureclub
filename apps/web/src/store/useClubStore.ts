@@ -1463,6 +1463,11 @@ export const useClubStore = create<ClubState>((set, get) => ({
           markSyncHealthy(set, result.updatedAt);
           // PendingSync is no longer cleared here to defeat read-replica lag.
           // It is cleared in refreshSharedState when the replica confirms the match.
+        } else {
+          markSyncDegraded(set);
+          if (options?.force) {
+            pushToast(set, "TV sync delayed", "The admin view updated locally, but the TV has not confirmed the latest state yet.", "system");
+          }
         }
         clubStateBroadcast?.postMessage({
           type: "state-published",
@@ -1472,6 +1477,10 @@ export const useClubStore = create<ClubState>((set, get) => ({
         });
         if (suppressSharedRefreshUntil < Date.now() + 4000) suppressSharedRefreshUntil = Date.now() + 4000;
       } catch {
+        markSyncDegraded(set);
+        if (options?.force) {
+          pushToast(set, "TV sync delayed", "The admin view updated locally, but the TV has not confirmed the latest state yet.", "system");
+        }
         // Local state remains authoritative until the next successful sync.
       }
       return;
