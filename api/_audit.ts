@@ -1,4 +1,5 @@
-import { getSupabaseAdmin } from "./_supabaseAdmin.js";
+import { randomUUID } from "node:crypto";
+import { dbQuery } from "./_db.js";
 
 export async function audit(
   userId: string | null,
@@ -7,13 +8,13 @@ export async function audit(
   entityId?: string | null,
   metadata?: any
 ) {
-  const supabase = getSupabaseAdmin();
-  if (!supabase) return;
-  await supabase.from("AuditLog").insert({
-    userId,
-    action,
-    entityType,
-    entityId: entityId ?? null,
-    metadata
-  });
+  try {
+    await dbQuery(
+      `INSERT INTO "AuditLog" (id, "userId", action, "entityType", "entityId", metadata, "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+      [randomUUID(), userId ?? null, action, entityType, entityId ?? null, metadata ? JSON.stringify(metadata) : null]
+    );
+  } catch {
+    // Audit log failures should never break the main flow
+  }
 }

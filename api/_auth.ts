@@ -1,6 +1,6 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual, randomUUID } from "node:crypto";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getSupabaseAdmin } from "./_supabaseAdmin.js";
+import { dbQuery } from "./_db.js";
 
 const COOKIE_NAME = "__Secure-haff_session";
 const LEGACY_COOKIE_NAME = "haff_session";
@@ -54,14 +54,11 @@ function cookieValue(req: VercelRequest) {
 export async function createSession(req: VercelRequest, userId: string, res: VercelResponse) {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400_000);
-  const supabase = getSupabaseAdmin();
-  if (!supabase) throw new Error("Supabase is not configured");
-  await supabase.from("AuthSession").insert({
-    id: randomUUID(),
-    userId,
-    tokenHash: hashToken(token),
-    expiresAt: expiresAt.toISOString()
-  });
+  await dbQuery(
+    `INSERT INTO "AuthSession" (id, "userId", "tokenHash", "expiresAt", "createdAt")
+     VALUES ($1, $2, $3, $4, NOW())`,
+    [randomUUID(), userId, hashToken(token), expiresAt.toISOString()]
+  );
   res.setHeader("Set-Cookie", [
     sessionCookie(req, token, SESSION_DAYS * 86400),
     legacySessionCookie(req, token, SESSION_DAYS * 86400)
@@ -71,10 +68,7 @@ export async function createSession(req: VercelRequest, userId: string, res: Ver
 export async function clearSession(req: VercelRequest, res: VercelResponse) {
   const token = cookieValue(req);
   if (token) {
-    const supabase = getSupabaseAdmin();
-    if (supabase) {
-      await supabase.from("AuthSession").delete().eq("tokenHash", hashToken(token));
-    }
+    await dbQuery(`DELETE FROM "AuthSession" WHERE "tokenHash" = $1`, [hashToken(token)]).catch(() => {});
   }
   res.setHeader("Set-Cookie", [
     sessionCookie(req, "", 0),
@@ -85,16 +79,41 @@ export async function clearSession(req: VercelRequest, res: VercelResponse) {
 export async function getUser(req: VercelRequest) {
   const token = cookieValue(req);
   if (!token) return null;
-  const supabase = getSupabaseAdmin();
-  if (!supabase) return null;
-  const { data: session } = await supabase
-    .from("AuthSession")
-    .select('*, user:User(*, player:Player(*))')
-    .eq("tokenHash", hashToken(token))
-    .single();
-
-  if (!session || new Date(session.expiresAt) <= new Date() || session.user?.status !== "ACTIVE") return null;
-  return session.user;
+  const { rows } = await dbQuery(
+    `SELECT
+       u.id, u.email, u.role, u.status, u."playerId", u."passwordHash", u."createdAt", u."updatedAt",
+       p.id as "_pid", p."displayName", p."fullName", p."avatarUrl", p."avatarVersion",
+       p."skillLevel", p.rating, p.tags, p.status as "_pstatus", p.email as "_pemail"
+     FROM "AuthSession" s
+     JOIN "User" u ON u.id = s."userId"
+     LEFT JOIN "Player" p ON p.id = u."playerId"
+     WHERE s."tokenHash" = $1 AND s."expiresAt" > NOW() AND u.status = 'ACTIVE'`,
+    [hashToken(token)]
+  );
+  if (!rows[0]) return null;
+  const r = rows[0];
+  return {
+    id: r.id,
+    email: r.email,
+    role: r.role,
+    status: r.status,
+    playerId: r.playerId,
+    passwordHash: r.passwordHash,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+    player: r._pid ? {
+      id: r._pid,
+      displayName: r.displayName,
+      fullName: r.fullName,
+      avatarUrl: r.avatarUrl,
+      avatarVersion: r.avatarVersion,
+      skillLevel: r.skillLevel,
+      rating: r.rating,
+      tags: r.tags,
+      status: r._pstatus,
+      email: r._pemail,
+    } : null,
+  };
 }
 
 export async function requireUser(req: VercelRequest, res: VercelResponse) {
@@ -106,25 +125,14 @@ export async function requireUser(req: VercelRequest, res: VercelResponse) {
   return user;
 }
 
-export async function requireAdmin(req: VercelRequest, res: VercelResponse) {
-  const user = await requireUser(req, res);
+export function publicUser(user: Awaited<ReturnType<typeof getUser>>) {
   if (!user) return null;
-  if (user.role !== "ADMIN") {
-    res.status(403).json({ error: "Administrator access required" });
-    return null;
-  }
-  return user;
+  return {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    status: user.status,
+    playerId: user.playerId,
+    player: user.player ?? null,
+  };
 }
-
-export const publicUser = (user: Awaited<ReturnType<typeof getUser>>) =>
-  user
-    ? {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        displayName: user.player?.displayName ?? user.email.split("@")[0],
-        playerId: user.playerId,
-        avatarUrl: user.player?.avatarUrl ?? null,
-        skillLevel: user.player?.skillLevel ?? null
-      }
-    : null;
