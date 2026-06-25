@@ -1,16 +1,16 @@
 /** Client sync intervals — tuned for Vercel + Supabase free tiers. */
 
 export const POLL_MS_PUSH_HEALTHY = 15 * 60_000;
-export const POLL_MS_PUSH_DOWN = 3 * 60_000;
+export const POLL_MS_PUSH_DOWN = 5 * 60_000;
 export const POLL_MS_IDLE_VIEW = 15 * 60_000;
 /** Realtime handles live ops — HTTP poll is only a fallback when push is down. */
 export const POLL_MS_ADMIN_TV_HEALTHY = 15 * 60_000;
-export const POLL_MS_ADMIN_TV_DOWN = 2 * 60_000;
+export const POLL_MS_ADMIN_TV_DOWN = 3 * 60_000;
 /** Safety ping when Realtime is healthy (should rarely run — see main.tsx poll gate). */
 export const POLL_MS_REALTIME_HEALTHY = 60 * 60_000;
 export const ROSTER_SYNC_TTL_MS = 4 * 60 * 60_000; // was 1 hr, raised to 4 hr
-export const REALTIME_REFRESH_DEBOUNCE_MS = 1200;
-export const PUBLISH_DEBOUNCE_MS = 1200;
+export const REALTIME_REFRESH_DEBOUNCE_MS = 2500;
+export const PUBLISH_DEBOUNCE_MS = 2000;
 
 // Views that have no operational session UI — polling is worthless here.
 const NO_POLL_VIEWS = new Set(["landing"]);

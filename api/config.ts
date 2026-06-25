@@ -4,11 +4,11 @@ import { getUser } from "./_auth.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "GET") {
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-    res.setHeader("Pragma", "no-cache");
-    res.setHeader("Expires", "0");
+    res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
     const { rows } = await dbQuery<{ key: string; value: string }>(
-      `SELECT key, value FROM "AdminConfig"`
+      `SELECT key, value FROM "AdminConfig"
+       WHERE key = ANY($1::text[])`,
+      [["clubStatus", "matchDurationMinutes"]]
     );
     const config: Record<string, string> = {};
     for (const row of rows) {

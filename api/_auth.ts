@@ -150,6 +150,16 @@ export async function requireUser(req: VercelRequest, res: VercelResponse) {
   return user;
 }
 
+export async function requireAdmin(req: VercelRequest, res: VercelResponse) {
+  const user = await requireUser(req, res);
+  if (!user) return null;
+  if (user.role !== "ADMIN") {
+    res.status(403).json({ error: "Admin access required" });
+    return null;
+  }
+  return user;
+}
+
 export function publicUser(user: Awaited<ReturnType<typeof getUser>>) {
   if (!user) return null;
   return {

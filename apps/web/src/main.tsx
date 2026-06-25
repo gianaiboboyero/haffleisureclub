@@ -100,7 +100,6 @@ import { getVoiceStyle, isSoundEnabled, playSound, setSoundEnabled, setVoiceStyl
 import type { VoiceStyle } from "./lib/sound";
 import type { Court, Match, Player, TvBroadcast } from "./lib/types";
 import "./styles/globals.css";
-import { Analytics } from "@vercel/analytics/react";
 import { SKIP_ADMIN_LOGIN } from "./lib/devFlags";
 import { AUTH_REQUEST_TIMEOUT_MS, apiFetch, apiFetchWithTimeout, apiJson, apiJsonWithTimeout, parseResponseJson } from "./lib/api";
 
@@ -458,7 +457,7 @@ export default function App() {
       }
     });
 
-    const syncQueuePollMs = useSupabaseData() ? 10 * 60_000 : 120_000;
+    const syncQueuePollMs = useSupabaseData() ? 30 * 60_000 : 5 * 60_000;
     const timer = window.setInterval(refreshPendingSyncCount, syncQueuePollMs);
 
     let pollTimer: number | undefined;
@@ -5326,7 +5325,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
 
   React.useEffect(() => {
     void refreshSharedState({ context: "tv" });
-    // 120 s fallback interval when Realtime is degraded. The app-level Realtime
+    // 5 min fallback interval when Realtime is degraded. The app-level Realtime
     // subscriber (in the root useEffect) already handles TV context and fires a
     // debounced refresh on every Session change, so we don't need a second
     // subscribeToClubState here. That avoids a duplicate full-fetch per event.
@@ -5334,7 +5333,7 @@ function DisplayView({ setView: _setView }: { setView: (view: ViewMode) => void 
       if (!isClubPushHealthy()) {
         void refreshSharedState({ allowUnchanged: true, context: "tv" });
       }
-    }, 120_000);
+    }, 5 * 60_000);
     const onTvRefresh = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === "haff-tv-refresh") {
@@ -6931,8 +6930,5 @@ function ReservedStack({ courtId }: { courtId: string }) {
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <>
-    <App />
-    <Analytics />
-  </>
+  <App />
 );
