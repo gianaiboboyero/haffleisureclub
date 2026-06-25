@@ -762,7 +762,16 @@ async function hydrateFromServer(set: ClubStoreSet, get: ClubStoreGet) {
 
 export const useClubStore = create<ClubState>((set, get) => ({
   players: [],
-  courts: [],
+  courts: seedCourts.map((court, index) => {
+    const number = court.number ?? index + 1;
+    return {
+      ...court,
+      number,
+      priority: number,
+      reservable: court.reservable ?? true,
+      status: "Available" as const
+    };
+  }),
   matches: [],
   sessions: [],
   reservations: [],
@@ -1182,7 +1191,16 @@ export const useClubStore = create<ClubState>((set, get) => ({
       get().courts.length > 0
         ? get().courts
         : serverAuthoritativeLiveState()
-          ? []
+          ? seedCourts.map((court, index) => {
+              const number = court.number ?? index + 1;
+              return {
+                ...court,
+                number,
+                priority: number,
+                reservable: court.reservable ?? true,
+                status: "Available" as const
+              };
+            })
           : await db.courts.toArray();
     const rawCourts =
       Array.isArray(shared.courts) && shared.courts.length > 0
