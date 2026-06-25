@@ -1,6 +1,6 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual, randomUUID } from "node:crypto";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getSupabaseAdmin } from "./_supabaseAdmin.js";
+import { dbQuery } from "./_db.js";
 
 const COOKIE_NAME = "__Secure-haff_session";
 const LEGACY_COOKIE_NAME = "haff_session";
@@ -54,15 +54,11 @@ function cookieValue(req: VercelRequest) {
 export async function createSession(req: VercelRequest, userId: string, res: VercelResponse) {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400_000);
-  const supabase = getSupabaseAdmin();
-  if (supabase) {
-    await supabase.from("AuthSession").insert({
-      id: randomUUID(),
-      userId,
-      tokenHash: hashToken(token),
-      expiresAt: expiresAt.toISOString()
-    });
-  }
+  await dbQuery(
+    `INSERT INTO "AuthSession" (id, "userId", "tokenHash", "expiresAt", "createdAt")
+     VALUES ($1, $2, $3, $4, NOW())`,
+    [randomUUID(), userId, hashToken(token), expiresAt.toISOString()]
+  );
   res.setHeader("Set-Cookie", [
     sessionCookie(req, token, SESSION_DAYS * 86400),
     legacySessionCookie(req, token, SESSION_DAYS * 86400)
@@ -71,9 +67,8 @@ export async function createSession(req: VercelRequest, userId: string, res: Ver
 
 export async function clearSession(req: VercelRequest, res?: VercelResponse) {
   const token = cookieValue(req);
-  const supabase = getSupabaseAdmin();
-  if (token && supabase) {
-    await supabase.from("AuthSession").delete().eq("tokenHash", hashToken(token)).catch(() => {});
+  if (token) {
+    await dbQuery(`DELETE FROM "AuthSession" WHERE "tokenHash" = $1`, [hashToken(token)]).catch(() => {});
   }
   if (res) {
     res.setHeader("Set-Cookie", [
@@ -86,22 +81,41 @@ export async function clearSession(req: VercelRequest, res?: VercelResponse) {
 export async function getUser(req: VercelRequest) {
   const token = cookieValue(req);
   if (!token) return null;
-  const supabase = getSupabaseAdmin();
-  if (!supabase) return null;
-  
-  const { data: session } = await supabase.from("AuthSession").select(`
-    userId,
-    User (
-      id, email, role, status, playerId, passwordHash, createdAt, updatedAt,
-      Player:playerId ( id, displayName, fullName, avatarUrl, avatarVersion, skillLevel, rating, tags, status, email )
-    )
-  `).eq("tokenHash", hashToken(token)).gt("expiresAt", new Date().toISOString()).maybeSingle();
-  
-  if (!session || !session.User) return null;
-  const userRow = Array.isArray(session.User) ? session.User[0] : session.User;
+
+  const { rows } = await dbQuery<{
+    id: string;
+    email: string;
+    role: "ADMIN" | "MEMBER";
+    status: string;
+    playerId: string | null;
+    passwordHash: string;
+    createdAt: Date;
+    updatedAt: Date;
+    displayName: string | null;
+    fullName: string | null;
+    avatarUrl: string | null;
+    avatarVersion: number | null;
+    skillLevel: string | null;
+    rating: number | null;
+    tags: string[] | null;
+    playerStatus: string | null;
+    playerEmail: string | null;
+  }>(
+    `SELECT u.id, u.email, u.role, u.status, u."playerId", u."passwordHash", u."createdAt", u."updatedAt",
+            p."displayName", p."fullName", p."avatarUrl", p."avatarVersion", p."skillLevel",
+            p.rating, p.tags, p.status AS "playerStatus", p.email AS "playerEmail"
+     FROM "AuthSession" s
+     JOIN "User" u ON u.id = s."userId"
+     LEFT JOIN "Player" p ON p.id = u."playerId"
+     WHERE s."tokenHash" = $1
+       AND s."expiresAt" > NOW()
+     LIMIT 1`,
+    [hashToken(token)]
+  );
+
+  const userRow = rows[0];
   if (!userRow || userRow.status !== 'ACTIVE') return null;
-  
-  const p = Array.isArray(userRow.Player) ? userRow.Player[0] : userRow.Player;
+  const hasPlayer = Boolean(userRow.playerId && userRow.displayName);
   
   return {
     id: userRow.id,
@@ -112,17 +126,17 @@ export async function getUser(req: VercelRequest) {
     passwordHash: userRow.passwordHash,
     createdAt: userRow.createdAt,
     updatedAt: userRow.updatedAt,
-    player: p ? {
-      id: p.id,
-      displayName: p.displayName,
-      fullName: p.fullName,
-      avatarUrl: p.avatarUrl,
-      avatarVersion: p.avatarVersion,
-      skillLevel: p.skillLevel,
-      rating: p.rating,
-      tags: p.tags,
-      status: p.status,
-      email: p.email
+    player: hasPlayer ? {
+      id: userRow.playerId!,
+      displayName: userRow.displayName!,
+      fullName: userRow.fullName,
+      avatarUrl: userRow.avatarUrl,
+      avatarVersion: userRow.avatarVersion,
+      skillLevel: userRow.skillLevel,
+      rating: userRow.rating,
+      tags: userRow.tags,
+      status: userRow.playerStatus,
+      email: userRow.playerEmail
     } : undefined
   };
 }

@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { randomUUID } from "node:crypto";
 import { getSupabaseAdmin } from "./_supabaseAdmin.js";
+import { dbQuery } from "./_db.js";
 import {
   clearSession,
   createSession,
@@ -48,6 +49,34 @@ async function recentLoginFailureCount(bucket: string): Promise<number | null> {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function findUserForLogin(email: string) {
+  const { rows } = await dbQuery<{
+    id: string;
+    email: string;
+    role: "ADMIN" | "MEMBER";
+    status: string;
+    playerId: string | null;
+    passwordHash: string;
+    displayName: string | null;
+    avatarUrl: string | null;
+    avatarVersion: number | null;
+    skillLevel: string | null;
+    rating: number | null;
+    tags: string[] | null;
+    playerStatus: string | null;
+  }>(
+    `SELECT u.id, u.email, u.role, u.status, u."playerId", u."passwordHash",
+            p."displayName", p."avatarUrl", p."avatarVersion", p."skillLevel",
+            p.rating, p.tags, p.status AS "playerStatus"
+     FROM "User" u
+     LEFT JOIN "Player" p ON p.id = u."playerId"
+     WHERE u.email = $1
+     LIMIT 1`,
+    [email]
+  );
+  return rows[0] ?? null;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -131,10 +160,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(429).json({ error: "Too many login attempts. Please try again later." });
     }
 
-    const { data: row } = await supabase.from("User").select(`
-      id, email, role, status, playerId, passwordHash,
-      Player:playerId ( id, displayName, avatarUrl, avatarVersion, skillLevel, rating, tags, status )
-    `).eq("email", email).limit(1).maybeSingle();
+    const row = await findUserForLogin(email);
 
     if (!row || !verifyPassword(password, row.passwordHash)) {
       return res.status(401).json({ error: "Invalid email or password." });
@@ -143,8 +169,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(403).json({ error: "This account has been suspended or deactivated." });
     }
     
-    const p = Array.isArray(row.Player) ? row.Player[0] : row.Player;
-    if (p && p.status !== "ACTIVE") {
+    if (row.playerId && String(row.playerStatus ?? "").toUpperCase() !== "ACTIVE") {
       return res.status(403).json({ error: "The associated player profile is not active." });
     }
 
@@ -154,15 +179,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       role: row.role,
       status: row.status,
       playerId: row.playerId,
-      player: p ? {
-        id: p.id,
-        displayName: p.displayName,
-        avatarUrl: p.avatarUrl,
-        avatarVersion: p.avatarVersion,
-        skillLevel: p.skillLevel,
-        rating: p.rating,
-        tags: p.tags,
-        status: p.status
+      player: row.playerId ? {
+        id: row.playerId,
+        displayName: row.displayName,
+        avatarUrl: row.avatarUrl,
+        avatarVersion: row.avatarVersion,
+        skillLevel: row.skillLevel,
+        rating: row.rating,
+        tags: row.tags,
+        status: row.playerStatus
       } : undefined
     };
 
