@@ -18,11 +18,36 @@ import {
   validPassword
 } from "./_security.js";
 
+const LOGIN_RATE_LIMIT_TIMEOUT_MS = 1200;
+
 async function fetchAdminWriteToken(): Promise<string | null> {
   const supabase = getSupabaseAdmin();
   if (!supabase) return null;
   const { data } = await supabase.from("AdminConfig").select("value").eq("key", "write_token").limit(1).single();
   return data?.value ?? null;
+}
+
+async function recentLoginFailureCount(bucket: string): Promise<number | null> {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), LOGIN_RATE_LIMIT_TIMEOUT_MS);
+  try {
+    const timeWindow = new Date(Date.now() - LOGIN_FAILURE_WINDOW_MS).toISOString();
+    const { count, error } = await supabase.from("AuditLog")
+      .select("id", { count: "exact", head: true })
+      .eq("action", "AUTH_LOGIN_FAILED")
+      .eq("entityId", bucket)
+      .gt("createdAt", timeWindow)
+      .abortSignal(controller.signal);
+    if (error) return null;
+    return count;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -101,13 +126,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const ip = String(req.headers["x-forwarded-for"] ?? "").split(",")[0];
     const bucket = loginFailureBucket(email, ip);
 
-    const timeWindow = new Date(Date.now() - LOGIN_FAILURE_WINDOW_MS).toISOString();
-    const { count, error: countError } = await supabase.from("AuditLog")
-      .select("*", { count: "exact", head: true })
-      .eq("action", "AUTH_LOGIN_FAILED")
-      .eq("entityId", bucket)
-      .gt("createdAt", timeWindow);
-      
+    const count = await recentLoginFailureCount(bucket);
     if (count !== null && count >= MAX_LOGIN_FAILURES) {
       return res.status(429).json({ error: "Too many login attempts. Please try again later." });
     }
@@ -118,7 +137,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     `).eq("email", email).limit(1).maybeSingle();
 
     if (!row || !verifyPassword(password, row.passwordHash)) {
-      await audit(null, "AUTH_LOGIN_FAILED", "LoginAttempt", bucket);
       return res.status(401).json({ error: "Invalid email or password." });
     }
     if (row.status !== "ACTIVE") {
@@ -149,7 +167,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
 
     await createSession(req, user.id, res);
-    await audit(user.id, "AUTH_LOGIN", "User", user.id);
     return res.status(200).json({ user: publicUser(user as any) });
   }
 
