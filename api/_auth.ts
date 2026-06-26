@@ -1,6 +1,7 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual, randomUUID } from "node:crypto";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { dbQuery } from "./_db.js";
+import { getSupabaseAdmin } from "./_supabaseAdmin.js";
 
 const COOKIE_NAME = "__Secure-haff_session";
 const LEGACY_COOKIE_NAME = "haff_session";
@@ -54,11 +55,24 @@ function cookieValue(req: VercelRequest) {
 export async function createSession(req: VercelRequest, userId: string, res: VercelResponse) {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400_000);
-  await dbQuery(
-    `INSERT INTO "AuthSession" (id, "userId", "tokenHash", "expiresAt", "createdAt")
-     VALUES ($1, $2, $3, $4, NOW())`,
-    [randomUUID(), userId, hashToken(token), expiresAt.toISOString()]
-  );
+  const tokenHash = hashToken(token);
+  try {
+    await dbQuery(
+      `INSERT INTO "AuthSession" (id, "userId", "tokenHash", "expiresAt", "createdAt")
+       VALUES ($1, $2, $3, $4, NOW())`,
+      [randomUUID(), userId, tokenHash, expiresAt.toISOString()]
+    );
+  } catch (error) {
+    const supabase = getSupabaseAdmin();
+    if (!supabase) throw error;
+    const { error: insertError } = await supabase.from("AuthSession").insert({
+      id: randomUUID(),
+      userId,
+      tokenHash,
+      expiresAt: expiresAt.toISOString()
+    });
+    if (insertError) throw insertError;
+  }
   res.setHeader("Set-Cookie", [
     sessionCookie(req, token, SESSION_DAYS * 86400),
     legacySessionCookie(req, token, SESSION_DAYS * 86400)
@@ -68,7 +82,10 @@ export async function createSession(req: VercelRequest, userId: string, res: Ver
 export async function clearSession(req: VercelRequest, res?: VercelResponse) {
   const token = cookieValue(req);
   if (token) {
-    await dbQuery(`DELETE FROM "AuthSession" WHERE "tokenHash" = $1`, [hashToken(token)]).catch(() => {});
+    await dbQuery(`DELETE FROM "AuthSession" WHERE "tokenHash" = $1`, [hashToken(token)]).catch(async () => {
+      const supabase = getSupabaseAdmin();
+      if (supabase) await supabase.from("AuthSession").delete().eq("tokenHash", hashToken(token));
+    });
   }
   if (res) {
     res.setHeader("Set-Cookie", [
@@ -82,7 +99,7 @@ export async function getUser(req: VercelRequest) {
   const token = cookieValue(req);
   if (!token) return null;
 
-  const { rows } = await dbQuery<{
+  type UserRow = {
     id: string;
     email: string;
     role: "ADMIN" | "MEMBER";
@@ -100,18 +117,64 @@ export async function getUser(req: VercelRequest) {
     tags: string[] | null;
     playerStatus: string | null;
     playerEmail: string | null;
-  }>(
-    `SELECT u.id, u.email, u.role, u.status, u."playerId", u."passwordHash", u."createdAt", u."updatedAt",
-            p."displayName", p."fullName", p."avatarUrl", p."avatarVersion", p."skillLevel",
-            p.rating, p.tags, p.status AS "playerStatus", p.email AS "playerEmail"
-     FROM "AuthSession" s
-     JOIN "User" u ON u.id = s."userId"
-     LEFT JOIN "Player" p ON p.id = u."playerId"
-     WHERE s."tokenHash" = $1
-       AND s."expiresAt" > NOW()
-     LIMIT 1`,
-    [hashToken(token)]
-  );
+  };
+
+  let rows: UserRow[] = [];
+  try {
+    const result = await dbQuery<UserRow>(
+      `SELECT u.id, u.email, u.role, u.status, u."playerId", u."passwordHash", u."createdAt", u."updatedAt",
+              p."displayName", p."fullName", p."avatarUrl", p."avatarVersion", p."skillLevel",
+              p.rating, p.tags, p.status AS "playerStatus", p.email AS "playerEmail"
+       FROM "AuthSession" s
+       JOIN "User" u ON u.id = s."userId"
+       LEFT JOIN "Player" p ON p.id = u."playerId"
+       WHERE s."tokenHash" = $1
+         AND s."expiresAt" > NOW()
+       LIMIT 1`,
+      [hashToken(token)]
+    );
+    rows = result.rows;
+  } catch {
+    const supabase = getSupabaseAdmin();
+    if (!supabase) return null;
+    const { data: session } = await supabase
+      .from("AuthSession")
+      .select("userId")
+      .eq("tokenHash", hashToken(token))
+      .gt("expiresAt", new Date().toISOString())
+      .limit(1)
+      .maybeSingle();
+    if (!session?.userId) return null;
+    const { data: user } = await supabase
+      .from("User")
+      .select("id, email, role, status, playerId, passwordHash, createdAt, updatedAt")
+      .eq("id", session.userId)
+      .limit(1)
+      .maybeSingle();
+    if (!user) return null;
+    let player: any = null;
+    if (user.playerId) {
+      const { data } = await supabase
+        .from("Player")
+        .select("displayName, fullName, avatarUrl, avatarVersion, skillLevel, rating, tags, status, email")
+        .eq("id", user.playerId)
+        .limit(1)
+        .maybeSingle();
+      player = data;
+    }
+    rows = [{
+      ...user,
+      displayName: player?.displayName ?? null,
+      fullName: player?.fullName ?? null,
+      avatarUrl: player?.avatarUrl ?? null,
+      avatarVersion: player?.avatarVersion ?? null,
+      skillLevel: player?.skillLevel ?? null,
+      rating: player?.rating ?? null,
+      tags: player?.tags ?? null,
+      playerStatus: player?.status ?? null,
+      playerEmail: player?.email ?? null
+    } as UserRow];
+  }
 
   const userRow = rows[0];
   if (!userRow || userRow.status !== 'ACTIVE') return null;

@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { dbQuery } from "./_db.js";
+import { getSupabaseAdmin } from "./_supabaseAdmin.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") {
@@ -8,12 +9,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     res.setHeader("Cache-Control", "public, max-age=15, stale-while-revalidate=60");
-    const { rows } = await dbQuery(
-      `SELECT id, name, number, status, "currentMatchId", "nextMatchId",
-              notes, version, "updatedAt"
-       FROM "Court"
-       ORDER BY number ASC`
-    );
+    let rows: unknown[] = [];
+    try {
+      const result = await dbQuery(
+        `SELECT id, name, number, status, "currentMatchId", "nextMatchId",
+                notes, version, "updatedAt"
+         FROM "Court"
+         ORDER BY number ASC`
+      );
+      rows = result.rows;
+    } catch (error) {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) throw error;
+      const { data, error: readError } = await supabase
+        .from("Court")
+        .select("id, name, number, status, currentMatchId, nextMatchId, notes, version, updatedAt")
+        .order("number", { ascending: true });
+      if (readError) throw readError;
+      rows = data ?? [];
+    }
     return res.status(200).json(rows);
   } catch (error) {
     console.error("/api/courts failed", error);

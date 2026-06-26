@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { dbQuery } from "./_db.js";
 import { getUser } from "./_auth.js";
+import { getSupabaseAdmin } from "./_supabaseAdmin.js";
 
 type SessionRow = {
   id: string;
@@ -110,25 +111,48 @@ function buildPayload(session: SessionRow, since?: string, lightView = false) {
 }
 
 async function findActiveSession(sessionId?: string) {
-  if (sessionId) {
+  try {
+    if (sessionId) {
+      const { rows } = await dbQuery<SessionRow>(
+        `SELECT id, "checkedInPlayerIds", settings, "updatedAt", status
+         FROM "Session"
+         WHERE id = $1
+         LIMIT 1`,
+        [sessionId]
+      );
+      if (rows[0]?.status === "Active") return rows[0];
+    }
+
     const { rows } = await dbQuery<SessionRow>(
       `SELECT id, "checkedInPlayerIds", settings, "updatedAt", status
        FROM "Session"
-       WHERE id = $1
-       LIMIT 1`,
-      [sessionId]
+       WHERE status = 'Active'
+       ORDER BY "updatedAt" DESC
+       LIMIT 1`
     );
-    if (rows[0]?.status === "Active") return rows[0];
+    return rows[0] ?? null;
+  } catch (error) {
+    const supabase = getSupabaseAdmin();
+    if (!supabase) throw error;
+    if (sessionId) {
+      const { data } = await supabase
+        .from("Session")
+        .select("id, checkedInPlayerIds, settings, updatedAt, status")
+        .eq("id", sessionId)
+        .limit(1)
+        .maybeSingle();
+      if (data?.status === "Active") return data as SessionRow;
+    }
+    const { data, error: readError } = await supabase
+      .from("Session")
+      .select("id, checkedInPlayerIds, settings, updatedAt, status")
+      .eq("status", "Active")
+      .order("updatedAt", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (readError) throw readError;
+    return (data as SessionRow | null) ?? null;
   }
-
-  const { rows } = await dbQuery<SessionRow>(
-    `SELECT id, "checkedInPlayerIds", settings, "updatedAt", status
-     FROM "Session"
-     WHERE status = 'Active'
-     ORDER BY "updatedAt" DESC
-     LIMIT 1`
-  );
-  return rows[0] ?? null;
 }
 
 function emptyPayload(sessionId: string) {
@@ -183,10 +207,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const body = req.body ?? {};
       const sessionId = String(body.sessionId ?? "default-active-session");
-      const { rows } = await dbQuery<SessionRow>(
-        `SELECT id, settings FROM "Session" WHERE id = $1 LIMIT 1`,
-        [sessionId]
-      );
+      let rows: SessionRow[] = [];
+      try {
+        const result = await dbQuery<SessionRow>(
+          `SELECT id, settings FROM "Session" WHERE id = $1 LIMIT 1`,
+          [sessionId]
+        );
+        rows = result.rows;
+      } catch {
+        const supabase = getSupabaseAdmin();
+        if (!supabase) throw new Error("Database not configured.");
+        const { data } = await supabase.from("Session").select("id, settings").eq("id", sessionId).limit(1).maybeSingle();
+        rows = data ? [data as SessionRow] : [];
+      }
       const currentSettings = rows[0]?.settings && typeof rows[0].settings === "object" ? rows[0].settings : {};
       const settings = body.broadcastOnly
         ? { ...currentSettings, tvBroadcast: body.tvBroadcast ?? null }
@@ -201,24 +234,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           };
 
       const checkedInPlayerIds = Array.isArray(body.checkedInPlayerIds) ? body.checkedInPlayerIds.map(String) : [];
-      const { rows: updated } = await dbQuery<{ id: string; updatedAt: Date }>(
-        `INSERT INTO "Session" (id, name, date, mode, status, "courtIds", "checkedInPlayerIds", settings, "updatedAt")
-         VALUES ($1, 'Open Play Session', NOW(), 'Open Play', 'Active', $2, $3, $4, NOW())
-         ON CONFLICT (id) DO UPDATE SET
-           "checkedInPlayerIds" = EXCLUDED."checkedInPlayerIds",
-           settings = EXCLUDED.settings,
-           "updatedAt" = NOW()
-         RETURNING id, "updatedAt"`,
-        [
-          sessionId,
-          Array.isArray(body.courts)
-            ? body.courts.map((court: Record<string, unknown>) => String(court?.id ?? "")).filter(Boolean)
-            : [],
-          checkedInPlayerIds,
-          settings
-        ]
-      );
-      return res.status(200).json({ sessionId: updated[0].id, updatedAt: updatedAtIso(updated[0].updatedAt) });
+      const courtIds = Array.isArray(body.courts)
+        ? body.courts.map((court: Record<string, unknown>) => String(court?.id ?? "")).filter(Boolean)
+        : [];
+      try {
+        const { rows: updated } = await dbQuery<{ id: string; updatedAt: Date }>(
+          `INSERT INTO "Session" (id, name, date, mode, status, "courtIds", "checkedInPlayerIds", settings, "updatedAt")
+           VALUES ($1, 'Open Play Session', NOW(), 'Open Play', 'Active', $2, $3, $4, NOW())
+           ON CONFLICT (id) DO UPDATE SET
+             "checkedInPlayerIds" = EXCLUDED."checkedInPlayerIds",
+             settings = EXCLUDED.settings,
+             "updatedAt" = NOW()
+           RETURNING id, "updatedAt"`,
+          [sessionId, courtIds, checkedInPlayerIds, settings]
+        );
+        return res.status(200).json({ sessionId: updated[0].id, updatedAt: updatedAtIso(updated[0].updatedAt) });
+      } catch (error) {
+        const supabase = getSupabaseAdmin();
+        if (!supabase) throw error;
+        const { data, error: upsertError } = await supabase
+          .from("Session")
+          .upsert({
+            id: sessionId,
+            name: "Open Play Session",
+            date: new Date().toISOString(),
+            mode: "Open Play",
+            status: "Active",
+            courtIds,
+            checkedInPlayerIds,
+            settings,
+            updatedAt: new Date().toISOString()
+          }, { onConflict: "id" })
+          .select("id, updatedAt")
+          .maybeSingle();
+        if (upsertError) throw upsertError;
+        return res.status(200).json({ sessionId: data?.id ?? sessionId, updatedAt: data?.updatedAt ?? new Date().toISOString() });
+      }
     }
 
     return res.status(405).json({ error: "Method not allowed" });

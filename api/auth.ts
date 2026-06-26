@@ -52,7 +52,7 @@ async function recentLoginFailureCount(bucket: string): Promise<number | null> {
 }
 
 async function findUserForLogin(email: string) {
-  const { rows } = await dbQuery<{
+  type LoginRow = {
     id: string;
     email: string;
     role: "ADMIN" | "MEMBER";
@@ -66,16 +66,52 @@ async function findUserForLogin(email: string) {
     rating: number | null;
     tags: string[] | null;
     playerStatus: string | null;
-  }>(
-    `SELECT u.id, u.email, u.role, u.status, u."playerId", u."passwordHash",
-            p."displayName", p."avatarUrl", p."avatarVersion", p."skillLevel",
-            p.rating, p.tags, p.status AS "playerStatus"
-     FROM "User" u
-     LEFT JOIN "Player" p ON p.id = u."playerId"
-     WHERE u.email = $1
-     LIMIT 1`,
-    [email]
-  );
+  };
+
+  let rows: LoginRow[] = [];
+  try {
+    const result = await dbQuery<LoginRow>(
+      `SELECT u.id, u.email, u.role, u.status, u."playerId", u."passwordHash",
+              p."displayName", p."avatarUrl", p."avatarVersion", p."skillLevel",
+              p.rating, p.tags, p.status AS "playerStatus"
+       FROM "User" u
+       LEFT JOIN "Player" p ON p.id = u."playerId"
+       WHERE u.email = $1
+       LIMIT 1`,
+      [email]
+    );
+    rows = result.rows;
+  } catch {
+    const supabase = getSupabaseAdmin();
+    if (!supabase) return null;
+    const { data: user } = await supabase
+      .from("User")
+      .select("id, email, role, status, playerId, passwordHash")
+      .eq("email", email)
+      .limit(1)
+      .maybeSingle();
+    if (!user) return null;
+    let player: any = null;
+    if (user.playerId) {
+      const { data } = await supabase
+        .from("Player")
+        .select("displayName, avatarUrl, avatarVersion, skillLevel, rating, tags, status")
+        .eq("id", user.playerId)
+        .limit(1)
+        .maybeSingle();
+      player = data;
+    }
+    rows = [{
+      ...user,
+      displayName: player?.displayName ?? null,
+      avatarUrl: player?.avatarUrl ?? null,
+      avatarVersion: player?.avatarVersion ?? null,
+      skillLevel: player?.skillLevel ?? null,
+      rating: player?.rating ?? null,
+      tags: player?.tags ?? null,
+      playerStatus: player?.status ?? null
+    } as LoginRow];
+  }
   return rows[0] ?? null;
 }
 
@@ -213,11 +249,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!validPassword(nextPassword)) {
       return res.status(400).json({ error: passwordValidationMessage() });
     }
-    await dbQuery(
-      `UPDATE "User" SET "passwordHash" = $1 WHERE id = $2`,
-      [hashPassword(nextPassword), user.id]
-    );
-    await dbQuery(`DELETE FROM "AuthSession" WHERE "userId" = $1`, [user.id]);
+    const nextHash = hashPassword(nextPassword);
+    try {
+      await dbQuery(
+        `UPDATE "User" SET "passwordHash" = $1 WHERE id = $2`,
+        [nextHash, user.id]
+      );
+      await dbQuery(`DELETE FROM "AuthSession" WHERE "userId" = $1`, [user.id]);
+    } catch {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) throw new Error("Database not configured.");
+      await supabase.from("User").update({ passwordHash: nextHash }).eq("id", user.id);
+      await supabase.from("AuthSession").delete().eq("userId", user.id);
+    }
     await createSession(req, user.id, res);
     await audit(user.id, "AUTH_PASSWORD_CHANGED", "User", user.id);
     return res.status(200).json({ success: true });
@@ -226,7 +270,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "POST" && action === "revoke-sessions") {
     const user = await getUser(req);
     if (!user) return res.status(401).json({ error: "Authentication required" });
-    await dbQuery(`DELETE FROM "AuthSession" WHERE "userId" = $1`, [user.id]);
+    await dbQuery(`DELETE FROM "AuthSession" WHERE "userId" = $1`, [user.id]).catch(async () => {
+      const supabase = getSupabaseAdmin();
+      if (supabase) await supabase.from("AuthSession").delete().eq("userId", user.id);
+    });
     await clearSession(req, res);
     await audit(user.id, "AUTH_SESSIONS_REVOKED", "User", user.id);
     return res.status(200).json({ success: true });
