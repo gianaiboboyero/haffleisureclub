@@ -2,13 +2,9 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 let adminClient: SupabaseClient | null = null;
 
-const LEGACY_SUPABASE_URL = "https://hmhhgmuuusknmucjlkth.supabase.co";
-const CURRENT_SUPABASE_URL = "https://chxzvugtdkohuciaqpxl.supabase.co";
-
 export function getSupabaseAdmin(): SupabaseClient | null {
   if (adminClient) return adminClient;
-  const configuredUrl = process.env.SUPABASE_URL?.trim() ?? process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const url = configuredUrl === LEGACY_SUPABASE_URL ? CURRENT_SUPABASE_URL : configuredUrl;
+  const url = process.env.SUPABASE_URL?.trim() ?? process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!url || !key) return null;
   adminClient = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
