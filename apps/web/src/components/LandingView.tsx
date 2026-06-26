@@ -444,7 +444,7 @@ export function LandingView({ setView, signedIn, isAdmin: isServerAdmin = false 
       </header>
 
       {/* MAIN CONTAINER */}
-      <main className="relative z-20 mx-auto max-w-7xl px-6 pb-36 pt-4">
+      <main className="relative z-20 mx-auto max-w-7xl px-6 pt-4">
         
         {/* HERO HERO SECTION */}
         <section className="grid grid-cols-1 gap-12 lg:grid-cols-12 lg:items-center">

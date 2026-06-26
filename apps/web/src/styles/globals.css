@@ -18,6 +18,11 @@
   --club-focus: #CBEF43;
   --club-radius: 14px;
   --club-shadow: 0 18px 46px rgba(2, 20, 15, 0.2);
+  --haff-bottom-dock-height: 5.25rem;
+  --haff-bottom-dock-offset: 1.5rem;
+  --haff-bottom-dock-clearance: calc(
+    var(--haff-bottom-dock-height) + var(--haff-bottom-dock-offset) + env(safe-area-inset-bottom, 0px)
+  );
 }
 
 * {
@@ -38,6 +43,12 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior-y: none;
+}
+
+.haff-bottom-dock-space {
+  padding-bottom: max(2rem, var(--haff-bottom-dock-clearance));
+  scroll-padding-bottom: max(2rem, var(--haff-bottom-dock-clearance));
 }
 
 /* Space Grotesk for all headings, matching MatchPoint exactly */
@@ -1470,4 +1481,3 @@ button:disabled {
 .tv-timer-digits {
   font-size: clamp(1.35rem, 2.8vw, 2.5rem);
 }
-

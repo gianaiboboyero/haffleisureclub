@@ -654,7 +654,7 @@ export function ReservationCalendar() {
     weekReservations.filter((r) => r.courtId === courtId && reservationDateKey(r.startTime) === dateKey(day));
 
   return (
-    <section className="mx-auto max-w-[1800px] px-3 py-5 pb-36 text-ivory sm:px-5">
+    <section className="mx-auto max-w-[1800px] px-3 py-5 text-ivory sm:px-5">
       <header className="rounded-3xl border border-ivory/10 bg-white/5 backdrop-blur-xl p-5 shadow-2xl sm:p-7">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
           <div>

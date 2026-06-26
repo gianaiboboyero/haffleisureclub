@@ -629,7 +629,7 @@ export default function App() {
   if (!hydrated) return <LoadingScreen />;
 
   return (
-    <main className="min-h-screen bg-forest text-ivory">
+    <main className="haff-bottom-dock-space min-h-screen bg-forest text-ivory">
       <div className="fixed inset-0 z-0 texture pointer-events-none" />
       {/* Global Background aesthetics */}
       <div className="fixed inset-0 z-0 bg-[linear-gradient(to_right,#fff8ea0c_1px,transparent_1px),linear-gradient(to_bottom,#fff8ea0c_1px,transparent_1px)] bg-[size:4rem_4rem] pointer-events-none" />
@@ -703,18 +703,18 @@ function AccountMenu({
         zIndex: 9999
       }}
     >
-      <button className="flex h-10 items-center gap-2 rounded-full border border-ivory/10 bg-forest/80 p-1.5 pr-2 text-ivory backdrop-blur-xl transition hover:bg-ivory/10 sm:pr-3" onClick={() => setOpen(!open)} aria-expanded={open} type="button">
+      <button className="flex h-10 items-center gap-2 rounded-full border border-ivory/10 bg-forest/90 p-1.5 pr-2 text-ivory shadow-lg backdrop-blur-xl transition hover:bg-forest sm:pr-3" onClick={() => setOpen(!open)} aria-expanded={open} type="button">
         <img className="h-7 w-7 rounded-full object-cover" src={avatar} alt="" />
         <span className="hidden max-w-28 truncate text-xs font-bold sm:block">{member.displayName}</span>
         <ChevronDown className={`hidden h-3.5 w-3.5 text-ivory/55 transition sm:block ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className="absolute right-0 mt-2 w-48 overflow-hidden rounded-2xl border border-ivory/10 bg-[#082d23]/98 p-1.5 text-ivory shadow-2xl backdrop-blur-xl">
-          <div className="border-b border-ivory/10 px-3 py-2">
+        <div className="absolute right-0 mt-2 w-56 overflow-hidden rounded-2xl border border-ivory/12 bg-[#082d23] p-1.5 text-ivory shadow-[0_24px_48px_rgba(0,0,0,0.45)] ring-1 ring-black/20">
+          <div className="border-b border-ivory/10 px-3 py-2.5">
             <p className="truncate text-xs font-black">{member.displayName}</p>
-            <p className="text-[10px] text-ivory/45">HAFF member account</p>
+            <p className="text-[10px] text-ivory/50">HAFF member account</p>
           </div>
-          <button className="mt-1 flex min-h-10 w-full items-center gap-2 rounded-xl px-3 text-left text-xs font-bold text-ivory/75 hover:bg-ivory/10 hover:text-ivory" onClick={async () => {
+          <button className="mt-1 flex min-h-11 w-full items-center gap-2 rounded-xl bg-white/[0.03] px-3 text-left text-xs font-bold text-ivory/85 transition hover:bg-ivory/10 hover:text-ivory" onClick={async () => {
             await apiFetch("/api/auth?action=logout", { method: "POST" });
             localStorage.removeItem("haff-player-account-id");
             onSignedOut();
@@ -935,7 +935,7 @@ function InlineAccountMenu({
   return (
     <div className="relative shrink-0">
       <button
-        className="flex h-10 max-w-44 items-center gap-2 rounded-full border border-ivory/10 bg-ivory/[0.07] p-1.5 text-ivory transition hover:bg-ivory/12 sm:pr-3"
+        className="flex h-10 max-w-44 items-center gap-2 rounded-full border border-ivory/10 bg-ivory/[0.09] p-1.5 text-ivory shadow-lg transition hover:bg-ivory/14 sm:pr-3"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
         aria-label={`${member.displayName} account menu`}
@@ -946,12 +946,12 @@ function InlineAccountMenu({
         <ChevronDown className={`hidden h-3.5 w-3.5 shrink-0 text-ivory/55 transition sm:block ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-52 overflow-hidden rounded-2xl border border-ivory/10 bg-[#082d23]/98 p-1.5 text-ivory shadow-2xl backdrop-blur-xl">
-          <div className="border-b border-ivory/10 px-3 py-2">
+        <div className="absolute right-0 top-full mt-2 w-56 overflow-hidden rounded-2xl border border-ivory/12 bg-[#082d23] p-1.5 text-ivory shadow-[0_24px_48px_rgba(0,0,0,0.45)] ring-1 ring-black/20">
+          <div className="border-b border-ivory/10 px-3 py-2.5">
             <p className="truncate text-xs font-black">{member.displayName}</p>
-            <p className="text-[10px] text-ivory/45">HAFF member account</p>
+            <p className="text-[10px] text-ivory/50">HAFF member account</p>
           </div>
-          <button className="mt-1 flex min-h-11 w-full items-center gap-2 rounded-xl px-3 text-left text-xs font-bold text-ivory/75 hover:bg-ivory/10 hover:text-ivory" onClick={signOut} type="button">
+          <button className="mt-1 flex min-h-11 w-full items-center gap-2 rounded-xl bg-white/[0.03] px-3 text-left text-xs font-bold text-ivory/85 transition hover:bg-ivory/10 hover:text-ivory" onClick={signOut} type="button">
             <LogOut size={15} /> Sign out
           </button>
         </div>
@@ -978,7 +978,10 @@ function FloatingDock({ view, setView, isAdmin }: { view: string; setView: (view
   const navItems = isAdmin ? adminItems : publicItems;
 
   return (
-    <nav className="fixed bottom-6 left-1/2 z-50 flex max-w-[calc(100vw-1rem)] -translate-x-1/2 items-center gap-1.5 overflow-x-auto rounded-full border border-white/10 bg-[#0B251C]/90 p-2 shadow-[0_24px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+    <nav
+      className="fixed left-1/2 z-50 flex max-w-[calc(100vw-1rem)] -translate-x-1/2 items-center gap-1.5 overflow-x-auto rounded-full border border-white/10 bg-[#0B251C]/90 p-2 shadow-[0_24px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl"
+      style={{ bottom: "max(1.5rem, calc(env(safe-area-inset-bottom, 0px) + 0.75rem))" }}
+    >
       {navItems.map((item) => {
         const Icon = item.icon;
         const isActive = view === item.key;
@@ -3111,7 +3114,7 @@ function CalendarView() {
   }
 
   return (
-    <section className="mx-auto max-w-7xl px-4 py-6 pb-32">
+    <section className="mx-auto max-w-7xl px-4 py-6">
       <div className="relative overflow-hidden rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10 p-5 text-ivory shadow-[0_18px_46px_rgba(0,0,0,0.2)] sm:p-6 mb-6">
         <div className="absolute -right-8 -top-12 opacity-[0.06]"><LogoMark size="large" /></div>
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-linen/80">HAFF Leisure Club</p>
@@ -3224,7 +3227,7 @@ function FinanceView() {
   }
 
   return (
-    <section className="mx-auto max-w-7xl px-4 py-6 pb-32">
+    <section className="mx-auto max-w-7xl px-4 py-6">
       <div className="relative overflow-hidden rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10 p-5 text-ivory shadow-[0_18px_46px_rgba(0,0,0,0.2)] sm:p-6 mb-6">
         <div className="absolute -right-8 -top-12 opacity-[0.06]"><LogoMark size="large" /></div>
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-linen/80">HAFF Leisure Club</p>
