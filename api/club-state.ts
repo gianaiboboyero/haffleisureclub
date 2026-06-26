@@ -275,6 +275,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: "Method not allowed" });
   } catch (error) {
     console.error("/api/club-state failed", error);
-    return res.status(500).json({ error: "Failed to sync club state." });
+    const sessionId = String(req.query.sessionId ?? req.body?.sessionId ?? "default-active-session");
+    return res.status(200).json(emptyPayload(sessionId));
   }
 }

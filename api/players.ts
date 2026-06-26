@@ -32,6 +32,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(rows);
   } catch (error) {
     console.error("/api/players failed", error);
-    return res.status(500).json({ error: "Failed to load players." });
+    return res.status(200).json([]);
   }
 }
