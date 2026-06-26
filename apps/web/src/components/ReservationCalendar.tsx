@@ -780,7 +780,7 @@ function ReservationDrawer({
     const custom = customNames.find(c => c.id === id);
     if (custom) return { id, name: custom.name, isCustom: true };
     const p = players?.find(x => x.id === id);
-    return { id, name: p?.displayName ?? id, isCustom: false };
+    return { id, name: p?.displayName ?? id, isCustom: false, skillLevel: p?.skillLevel };
   });
 
   const [authMode, setAuthMode] = React.useState<"login" | "register">("login");
@@ -924,55 +924,63 @@ function ReservationDrawer({
             {isAdmin && (
               <label className="block text-xs font-black uppercase tracking-wider">Reservation title<input className="calendar-input" value={title} onChange={(e) => setTitle(e.target.value)} /></label>
             )}
-            <label className="block text-xs font-black uppercase tracking-wider">
-              Notes for admin
-              <textarea
-                className="calendar-input min-h-16"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="e.g. beginner group, need extra balls, celebrating a birthday..."
-              />
-            </label>
             {isAdmin && players && (
-              <div>
-                <p className="text-xs font-black uppercase tracking-wider text-forest/70 mb-1.5">Players on court</p>
-                {/* Selected participants */}
+              <div className="rounded-[28px] border border-forest/10 bg-forest/[0.04] p-4 shadow-inner">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.18em] text-clay">Players on court</p>
+                    <h3 className="mt-1 text-base font-black text-forest">Build the lineup</h3>
+                    <p className="mt-1 text-xs leading-5 text-forest/60">Search the roster, tap to add players, or create a guest if they are not in the system yet.</p>
+                  </div>
+                  <div className="rounded-full bg-forest px-3 py-1 text-[10px] font-black uppercase tracking-wider text-ivory">
+                    {allSelectedLabels.length} selected
+                  </div>
+                </div>
                 {allSelectedLabels.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mb-2">
-                    {allSelectedLabels.map(({id, name, isCustom}) => (
-                      <span key={id} className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold ${isCustom ? "bg-amber-100 text-amber-800" : "bg-forest/10 text-forest"}`}>
-                        {isCustom ? "👤" : "🏓"} {name}
-                        <button type="button" onClick={() => removeParticipant(id)} className="ml-0.5 text-forest/50 hover:text-red-600 font-black">×</button>
-                      </span>
+                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                    {allSelectedLabels.map(({id, name, isCustom, skillLevel}) => (
+                      <div key={id} className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${isCustom ? "border-amber-200 bg-amber-50 text-amber-900" : "border-forest/10 bg-white text-forest"}`}>
+                        <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-2xl text-sm font-black ${isCustom ? "bg-amber-200/70 text-amber-900" : "bg-forest/10 text-forest"}`}>
+                          {isCustom ? "G" : name.slice(0, 1).toUpperCase()}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-black">{name}</p>
+                          <p className="text-[11px] font-semibold uppercase tracking-wider opacity-65">{isCustom ? "Guest player" : skillLevel ?? "Club player"}</p>
+                        </div>
+                        <button type="button" onClick={() => removeParticipant(id)} className="grid h-8 w-8 place-items-center rounded-full bg-black/5 text-lg font-black text-forest/55 transition hover:bg-red-100 hover:text-red-700">
+                          ×
+                        </button>
+                      </div>
                     ))}
                   </div>
                 )}
-                {/* Search input */}
-                <div className="relative">
+                <div className="relative mt-4">
                   <input
-                    className="calendar-input pr-20"
+                    className="calendar-input pr-24"
                     value={participantSearch}
                     onChange={e => setParticipantSearch(e.target.value)}
-                    placeholder="Search roster or type a guest name…"
+                    placeholder="Search roster or type a guest name"
                     onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); if (searchResults.length === 0 && participantSearch.trim()) addCustomName(); }}}
                   />
                   {participantSearch.trim() && searchResults.length === 0 && (
-                    <button type="button" onClick={addCustomName} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-forest/10 px-2 py-1 text-[10px] font-black text-forest hover:bg-forest/20">Add guest</button>
+                    <button type="button" onClick={addCustomName} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl bg-brass px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-forest shadow-sm hover:bg-brass/90">Add guest</button>
                   )}
                 </div>
-                {/* Roster suggestions */}
                 {searchResults.length > 0 && (
-                  <div className="mt-1 rounded-xl border border-forest/10 bg-white shadow-lg overflow-hidden">
+                  <div className="mt-2 overflow-hidden rounded-2xl border border-forest/10 bg-white shadow-lg">
                     {searchResults.map(p => (
                       <button
                         key={p.id}
                         type="button"
-                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-forest/5 text-forest"
+                        className="flex w-full items-center gap-3 border-b border-forest/5 px-3 py-3 text-left text-sm text-forest transition last:border-b-0 hover:bg-forest/5"
                         onClick={() => { setSelectedPlayerIds(prev => [...prev, p.id]); setParticipantSearch(""); }}
                       >
-                        <span className="h-6 w-6 shrink-0 rounded-full bg-forest/10 text-center text-[10px] leading-6 font-bold">{p.displayName[0]}</span>
-                        <span className="font-semibold">{p.displayName}</span>
-                        <span className="ml-auto text-[10px] text-forest/40">{p.skillLevel}</span>
+                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-2xl bg-forest/10 text-xs font-black">{p.displayName[0]}</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-black">{p.displayName}</p>
+                          <p className="text-[11px] font-semibold uppercase tracking-wider text-forest/45">{p.skillLevel}</p>
+                        </div>
+                        <span className="rounded-full bg-forest/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-forest/70">Add</span>
                       </button>
                     ))}
                   </div>

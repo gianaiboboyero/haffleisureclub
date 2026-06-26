@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { randomUUID } from "node:crypto";
 import { dbQuery } from "./_db.js";
 import { requireAdmin, requireUser } from "./_auth.js";
 
@@ -194,6 +195,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const approvalStatus = toApprovalStatus(body.status, isAdmin);
       const paymentStatus = toPaymentStatus(body.paymentStatus, isAdmin);
+      const reservationId = randomUUID();
+      const updatedAt = new Date().toISOString();
       const requestedHostPlayerId = typeof body.hostPlayerId === "string" ? body.hostPlayerId : null;
       const hostPlayerId =
         requestedHostPlayerId && requestedHostPlayerId !== "admin"
@@ -202,17 +205,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const { rows } = await dbQuery<ReservationRow>(
         `INSERT INTO "CourtReservation" (
-           "courtId", "requesterUserId", "hostPlayerId", title, notes, "publicLabel",
+           id, "courtId", "requesterUserId", "hostPlayerId", title, notes, "publicLabel",
            "participantPlayerIds", "startTime", "endTime", "feeAmount",
-           "approvalStatus", "paymentStatus"
+           "approvalStatus", "paymentStatus", visibility, version, "updatedAt"
          ) VALUES (
-           $1, $2, $3, $4, $5, $6, $7::text[], $8::timestamptz, $9::timestamptz, $10,
-           $11::"ReservationApprovalStatus", $12::"ReservationPaymentStatus"
+           $1, $2, $3, $4, $5, $6, $7, $8::text[], $9::timestamptz, $10::timestamptz, $11,
+           $12::"ReservationApprovalStatus", $13::"ReservationPaymentStatus", 'PRIVATE', 1, $14::timestamptz
          )
          RETURNING id, "courtId", "requesterUserId", "hostPlayerId", NULL::text AS "hostDisplayName",
                    title, notes, "publicLabel", "participantPlayerIds", "startTime", "endTime",
                    "feeAmount", "approvalStatus", "paymentStatus", "cancellationReason", "seriesId"`,
         [
+          reservationId,
           courtId,
           user.id,
           hostPlayerId,
@@ -224,7 +228,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           endTime,
           Number.isFinite(feeAmount) ? feeAmount : 300,
           approvalStatus,
-          paymentStatus
+          paymentStatus,
+          updatedAt
         ]
       );
       const created = await getReservationById(rows[0].id);
