@@ -2868,6 +2868,36 @@ export const useClubStore = create<ClubState>((set, get) => ({
       id,
       status
     };
+    if (useSupabaseData()) {
+      const created = await apiJson<Reservation>("/api/reservations", {
+        method: "POST",
+        body: JSON.stringify(reservationData)
+      });
+      await db.reservations.put(created);
+      set((state) => ({
+        reservations: mergeReservations(state.reservations, [created])
+      }));
+      if (created.status === "Confirmed") {
+        await get().addTransaction({
+          playerId: created.hostPlayerId,
+          amount: created.feeAmount,
+          type: "CourtReservation",
+          paymentMethod: created.paymentStatus === "Paid" ? "Cash" : "GCash",
+          status: created.paymentStatus === "Paid" ? "Success" : "Pending",
+          reservationId: created.id,
+          sessionId: get().currentSessionId ?? undefined
+        });
+      }
+      playSound("checkin");
+      const createdCourt = get().courts.find((c) => c.id === created.courtId);
+      if (created.status === "Requested") {
+        speakAnnouncement(`Reservation request submitted for ${createdCourt?.name || "Court"}. Awaiting admin approval.`);
+        pushToast(set, "Request submitted", "Your reservation is pending admin approval.", "system");
+      } else {
+        speakAnnouncement(`Court reservation booked for ${createdCourt?.name || "Court"}.`);
+      }
+      return;
+    }
     await db.reservations.put(reservation);
     await queue("CREATE_RESERVATION", "Reservation", id, reservation);
     
@@ -2900,6 +2930,18 @@ export const useClubStore = create<ClubState>((set, get) => ({
   updateReservation: async (id, patch) => {
     const current = get().reservations.find((item) => item.id === id);
     if (!current) return;
+    if (useSupabaseData()) {
+      const updated = await apiJson<Reservation | null>(`/api/reservations?id=${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch)
+      });
+      if (!updated) return;
+      await db.reservations.put(updated);
+      set((state) => ({
+        reservations: state.reservations.map((item) => item.id === id ? updated : item)
+      }));
+      return;
+    }
     const updated = { ...current, ...patch };
     await db.reservations.put(updated);
     await queue("UPDATE_RESERVATION", "Reservation", id, updated);
@@ -2937,6 +2979,22 @@ export const useClubStore = create<ClubState>((set, get) => ({
   cancelReservation: async (id, reason) => {
     const reservation = get().reservations.find(r => r.id === id);
     if (!reservation) return;
+    if (useSupabaseData()) {
+      const updated = await apiJson<Reservation | null>(`/api/reservations?id=${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: "Cancelled",
+          cancellationReason: reason?.trim() || undefined
+        })
+      });
+      if (!updated) return;
+      await db.reservations.put(updated);
+      set((state) => ({
+        reservations: state.reservations.map((item) => item.id === id ? updated : item)
+      }));
+      playSound("complete");
+      return;
+    }
     const updated = { ...reservation, status: "Cancelled" as const, cancellationReason: reason?.trim() || undefined };
     await db.reservations.put(updated);
     await queue("UPDATE_RESERVATION", "Reservation", id, updated);
