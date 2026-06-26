@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { dbQuery } from "./_db.js";
 import { getUser } from "./_auth.js";
-import { getSupabaseAdmin } from "./_supabaseAdmin.js";
+import { getCurrentSupabasePublic, getSupabaseAdmin } from "./_supabaseAdmin.js";
 
 type SessionRow = {
   id: string;
@@ -111,6 +111,29 @@ function buildPayload(session: SessionRow, since?: string, lightView = false) {
 }
 
 async function findActiveSession(sessionId?: string) {
+  try {
+    if (sessionId) {
+      const { data } = await getCurrentSupabasePublic()
+        .from("Session")
+        .select("id, checkedInPlayerIds, settings, updatedAt, status")
+        .eq("id", sessionId)
+        .limit(1)
+        .maybeSingle();
+      if (data?.status === "Active") return data as SessionRow;
+    }
+    const { data, error: publicError } = await getCurrentSupabasePublic()
+      .from("Session")
+      .select("id, checkedInPlayerIds, settings, updatedAt, status")
+      .eq("status", "Active")
+      .order("updatedAt", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (publicError) throw publicError;
+    if (data) return data as SessionRow;
+  } catch {
+    // Fall through to server credentials/direct DB for private deployments.
+  }
+
   try {
     if (sessionId) {
       const { rows } = await dbQuery<SessionRow>(

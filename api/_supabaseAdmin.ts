@@ -1,6 +1,10 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 let adminClient: SupabaseClient | null = null;
+let currentPublicClient: SupabaseClient | null = null;
+
+const CURRENT_SUPABASE_URL = "https://chxzvugtdkohuciaqpxl.supabase.co";
+const CURRENT_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_7bt1RVMmGLRUdfUsBPWpiQ_ML0Fm6Au";
 
 export function getSupabaseAdmin(): SupabaseClient | null {
   if (adminClient) return adminClient;
@@ -9,6 +13,15 @@ export function getSupabaseAdmin(): SupabaseClient | null {
   if (!url || !key) return null;
   adminClient = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
   return adminClient;
+}
+
+export function getCurrentSupabasePublic(): SupabaseClient {
+  if (!currentPublicClient) {
+    currentPublicClient = createClient(CURRENT_SUPABASE_URL, CURRENT_SUPABASE_PUBLISHABLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+  }
+  return currentPublicClient;
 }
 
 const AVATAR_BUCKET = "avatars";
